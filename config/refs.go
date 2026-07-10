@@ -44,10 +44,18 @@ type Binding struct {
 
 // ParseBinding classifies a with: value. A string containing "${" must be
 // exactly one ${ref} with no surrounding text — there is no string templating
-// in v1; concatenation belongs in hooks.
+// in v1; concatenation belongs in hooks. Interpolation is legal only as a
+// whole scalar value: a "${" nested inside a compound (map/list) literal is
+// rejected rather than silently passed through as literal text.
 func ParseBinding(v any) (Binding, error) {
 	s, ok := v.(string)
-	if !ok || !strings.Contains(s, "${") {
+	if !ok {
+		if err := rejectNestedRefs(v); err != nil {
+			return Binding{}, err
+		}
+		return Binding{Literal: v}, nil
+	}
+	if !strings.Contains(s, "${") {
 		return Binding{Literal: v}, nil
 	}
 	if !strings.HasPrefix(s, "${") || !strings.HasSuffix(s, "}") ||
@@ -59,6 +67,37 @@ func ParseBinding(v any) (Binding, error) {
 		return Binding{}, err
 	}
 	return Binding{IsRef: true, Ref: ref}, nil
+}
+
+// rejectNestedRefs walks a compound literal value and rejects any nested
+// string containing "${": references do not interpolate inside object or list
+// literals, and silently treating one as literal text would mask the typo.
+func rejectNestedRefs(v any) error {
+	switch t := v.(type) {
+	case string:
+		if strings.Contains(t, "${") {
+			return fmt.Errorf("value %q: ${...} references are only legal as a whole scalar binding value, not nested inside a map or list literal", t)
+		}
+	case map[string]any:
+		for _, k := range sortedKeys(t) {
+			if err := rejectNestedRefs(t[k]); err != nil {
+				return err
+			}
+		}
+	case map[any]any:
+		for _, e := range t {
+			if err := rejectNestedRefs(e); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if err := rejectNestedRefs(e); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ParseRef parses the inside of a ${...} reference. It rejects unknown roots,

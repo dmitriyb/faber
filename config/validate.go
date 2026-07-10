@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // FieldError is one schema-level violation with a YAML field path, e.g.
@@ -81,14 +82,18 @@ func (v *validator) checkCredentials() {
 // checkNameDiscipline enforces non-empty names and the template/workflow name
 // disjointness that keeps use: unambiguous.
 func (v *validator) checkNameDiscipline() {
-	for section, keys := range map[string][]string{
-		"identities": sortedKeys(v.cfg.Identities),
-		"templates":  sortedKeys(v.cfg.Templates),
-		"workflows":  sortedKeys(v.cfg.Workflows),
-	} {
-		for _, k := range keys {
+	sections := []struct {
+		name string
+		keys []string
+	}{
+		{"identities", sortedKeys(v.cfg.Identities)},
+		{"templates", sortedKeys(v.cfg.Templates)},
+		{"workflows", sortedKeys(v.cfg.Workflows)},
+	}
+	for _, section := range sections {
+		for _, k := range section.keys {
 			if k == "" {
-				v.addf(section, "empty name")
+				v.addf(section.name, "empty name")
 			}
 		}
 	}
@@ -137,6 +142,15 @@ func (v *validator) checkParamDefs(path string, defs map[string]ParamDef) {
 		}
 		if len(d.Enum) > 0 && d.Type != "string" {
 			v.addf(path+"."+name+".enum", "enum is only valid on string fields")
+		}
+		if d.Default != nil {
+			if got := yamlTypeName(d.Default); got != d.Type {
+				v.addf(path+"."+name+".default", "default is %s, declared type is %s", got, d.Type)
+			} else if len(d.Enum) > 0 {
+				if s, ok := d.Default.(string); !ok || !contains(d.Enum, s) {
+					v.addf(path+"."+name+".default", "default %v not in enum [%s]", d.Default, strings.Join(d.Enum, ", "))
+				}
+			}
 		}
 	}
 }

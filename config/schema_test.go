@@ -327,3 +327,101 @@ func TestRepoIsAnOrdinaryParam(t *testing.T) {
 		t.Fatalf("override must pass wiring: %v", err)
 	}
 }
+
+// Verifies 23a6be447cc8: name-discipline diagnostics are emitted in a fixed
+// section order, deterministic across runs (fix pass finding 3).
+func TestSchemaNameDisciplineDeterministic(t *testing.T) {
+	build := func() *Config {
+		cfg := minimalConfig()
+		cfg.Identities[""] = IdentityDef{Key: "./keys/x"}
+		cfg.Templates[""] = TemplateDef{Build: BuildDef{Packages: []string{"git"}}, Skill: "act"}
+		cfg.Workflows[""] = WorkflowDef{Steps: []StepDef{{ID: "s", Use: "box"}}}
+		return cfg
+	}
+	first := Validate(build()).Error()
+	for i := 0; i < 50; i++ {
+		if got := Validate(build()).Error(); got != first {
+			t.Fatalf("error order changed across runs:\n%s\n---\n%s", first, got)
+		}
+	}
+	if !strings.Contains(first, "identities: empty name") || !strings.Contains(first, "templates: empty name") {
+		t.Fatalf("missing empty-name violations:\n%s", first)
+	}
+	idx := func(s string) int { return strings.Index(first, s) }
+	if !(idx("identities: empty name") < idx("templates: empty name") && idx("templates: empty name") < idx("workflows: empty name")) {
+		t.Fatalf("sections must be reported in fixed order:\n%s", first)
+	}
+}
+
+// Verifies 23a6be447cc8 and 8a79b4f5c699: a ${...} nested inside a compound
+// with: literal is rejected with a field-path error instead of silently
+// passing through as literal text (fix pass finding 4).
+func TestSchemaNestedInterpolationRejected(t *testing.T) {
+	t.Run("nested in a map literal", func(t *testing.T) {
+		cfg := minimalConfig()
+		tp := cfg.Templates["box"]
+		tp.Inputs = map[string]ParamDef{"input": {Type: "object", Required: true}}
+		cfg.Templates["box"] = tp
+		cfg.Workflows["flow"].Steps[0].With["input"] = map[string]any{"inner": "${params.subject}"}
+		err := Validate(cfg)
+		wantErrContaining(t, err, "workflows.flow.steps[0].with.input")
+		wantErrContaining(t, err, "only legal as a whole scalar binding value")
+	})
+
+	t.Run("nested in a list literal", func(t *testing.T) {
+		cfg := minimalConfig()
+		tp := cfg.Templates["box"]
+		tp.Inputs = map[string]ParamDef{"input": {Type: "object", Required: true}}
+		cfg.Templates["box"] = tp
+		cfg.Workflows["flow"].Steps[0].With["input"] = []any{"plain", []any{"${steps.first.result}"}}
+		err := Validate(cfg)
+		wantErrContaining(t, err, "workflows.flow.steps[0].with.input")
+		wantErrContaining(t, err, "only legal as a whole scalar binding value")
+	})
+
+	t.Run("compound literal without references passes", func(t *testing.T) {
+		cfg := minimalConfig()
+		tp := cfg.Templates["box"]
+		tp.Inputs = map[string]ParamDef{"input": {Type: "object", Required: true}}
+		cfg.Templates["box"] = tp
+		cfg.Workflows["flow"].Steps[0].With["input"] = map[string]any{"inner": []any{"plain", 1}}
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("plain compound literal must pass: %v", err)
+		}
+	})
+}
+
+// Verifies 255893ae16eb: param and field defaults are type-checked against the
+// declaration, including enum membership (fix pass finding 5).
+func TestSchemaParamDefaultTyping(t *testing.T) {
+	tests := []struct {
+		name    string
+		def     ParamDef
+		wantErr string
+	}{
+		{"int default on a string param", ParamDef{Type: "string", Default: 5}, "workflows.flow.params.p.default: default is int, declared type is string"},
+		{"string default on a bool param", ParamDef{Type: "bool", Default: "yes"}, "workflows.flow.params.p.default: default is string, declared type is bool"},
+		{"default outside the enum", ParamDef{Type: "string", Enum: []string{"fast", "safe"}, Default: "wild"}, "workflows.flow.params.p.default: default wild not in enum [fast, safe]"},
+		{"well-typed default", ParamDef{Type: "int", Default: 5}, ""},
+		{"enum member default", ParamDef{Type: "string", Enum: []string{"fast", "safe"}, Default: "safe"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			wf := cfg.Workflows["flow"]
+			wf.Params = map[string]ParamDef{
+				"subject": {Type: "string", Required: true},
+				"p":       tt.def,
+			}
+			cfg.Workflows["flow"] = wf
+			err := Validate(cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			wantErrContaining(t, err, tt.wantErr)
+		})
+	}
+}

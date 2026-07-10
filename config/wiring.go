@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -155,7 +156,7 @@ func (c *wiringChecker) checkGraph(g *IR) {
 	c.passSlots(g, inputs, inbound)
 	c.passTypes(g, outputs, inputs)
 	c.passAcyclic(g, byID)
-	c.passConditions(g, byID)
+	c.passConditions(g, byID, outputs)
 	c.passTools(g)
 
 	for i := range g.Nodes {
@@ -355,17 +356,46 @@ func typeSatisfies(src, dst ParamDef) string {
 	return ""
 }
 
-// passAcyclic: Kahn's algorithm over data + ordering edges; on failure one
-// concrete cycle is extracted and reported node-by-node. The IR must already
-// be acyclic if the Desugarer is correct — this is defense in depth for
-// hand-authored IR.
+// condDepEdges returns virtual dep -> node edges for every condition
+// dependency (when: and the selector exhaustion rule): a condition reads a
+// completed result, so its deps order the node exactly like data edges do, and
+// a mutual condition cycle must fail validation rather than deadlock the
+// scheduler.
+func condDepEdges(g *IR, byID map[string]*Node) []Edge {
+	var out []Edge
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		conds := []*CondSpec{n.When}
+		if n.Sel != nil {
+			conds = append(conds, n.Sel.Exhausted)
+		}
+		for _, cond := range conds {
+			if cond == nil {
+				continue
+			}
+			for _, dep := range cond.Deps {
+				if _, ok := byID[dep]; ok {
+					out = append(out, Edge{From: dep, To: n.ID})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// passAcyclic: Kahn's algorithm over data + ordering edges plus virtual
+// condition-dependency edges; on failure one concrete cycle is extracted and
+// reported node-by-node. The IR must already be acyclic if the Desugarer is
+// correct — this is defense in depth for hand-authored IR and for condition
+// reference cycles the frontend can legally express.
 func (c *wiringChecker) passAcyclic(g *IR, byID map[string]*Node) {
 	indeg := map[string]int{}
 	succ := map[string][]string{}
 	for i := range g.Nodes {
 		indeg[g.Nodes[i].ID] = 0
 	}
-	for _, e := range g.Edges {
+	edges := append(append([]Edge(nil), g.Edges...), condDepEdges(g, byID)...)
+	for _, e := range edges {
 		if _, ok := byID[e.From]; !ok {
 			continue
 		}
@@ -454,9 +484,10 @@ func findCycle(start string, succ map[string][]string, members map[string]bool) 
 }
 
 // passConditions: every condition's deps exist and are not descendants of the
-// condition's own node (a condition may only read completed predecessors), and
+// condition's own node (a condition may only read completed predecessors),
+// every field the condition reads is declared in the dep's output schema, and
 // the CEL source compiles in the standard condition environment.
-func (c *wiringChecker) passConditions(g *IR, byID map[string]*Node) {
+func (c *wiringChecker) passConditions(g *IR, byID map[string]*Node, outputs map[string]map[string]FieldDef) {
 	succ := map[string][]string{}
 	for _, e := range g.Edges {
 		succ[e.From] = append(succ[e.From], e.To)
@@ -485,11 +516,40 @@ func (c *wiringChecker) passConditions(g *IR, byID map[string]*Node) {
 					c.add(n.ID, nc.path, "condition reads %q, which does not precede this node (it is a descendant)", dep)
 				}
 			}
+			for _, ref := range condFieldRefs(nc.cond.CEL) {
+				fields, ok := outputs[ref.node]
+				if !ok {
+					continue // unknown node already reported above
+				}
+				if _, ok := fields[ref.field]; !ok {
+					c.add(n.ID, nc.path, "references %s.%s — output field does not exist%s",
+						ref.node, ref.field, didYouMean(ref.field, sortedKeys(fields)))
+				}
+			}
 			if err := compileIn(c.env, nc.cond.CEL); err != nil {
 				c.add(n.ID, nc.path, "condition does not compile: %v", err)
 			}
 		}
 	}
+}
+
+type condFieldRef struct {
+	node  string
+	field string
+}
+
+// condFieldRefPattern matches the desugarer's canonical rewritten form
+// steps["<node-id>"].<field>. The desugarer is the only author of this form
+// (user source is rewritten before it reaches the IR), so a pattern match over
+// the CEL source recovers exactly the (node, field) pairs the condition reads.
+var condFieldRefPattern = regexp.MustCompile(`steps\["([^"]+)"\]\.([A-Za-z_][A-Za-z0-9_]*)`)
+
+func condFieldRefs(cel string) []condFieldRef {
+	var out []condFieldRef
+	for _, m := range condFieldRefPattern.FindAllStringSubmatch(cel, -1) {
+		out = append(out, condFieldRef{node: m[1], field: m[2]})
+	}
+	return out
 }
 
 func descendants(id string, succ map[string][]string) map[string]bool {

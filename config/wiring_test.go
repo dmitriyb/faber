@@ -265,3 +265,52 @@ func TestWiringManyViolationsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// Verifies 72d49cc06ac6: condition dependencies participate in cycle detection
+// — a mutual when-cycle with no data edges must fail validate rather than
+// deadlock the scheduler (fix pass finding 1).
+func TestWiringConditionDependencyCycle(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.Workflows["flow"] = WorkflowDef{
+		Params: map[string]ParamDef{"subject": {Type: "string", Required: true}},
+		Steps: []StepDef{
+			{ID: "a", Use: "box", When: `steps.b.result == "x"`, With: map[string]any{"input": "${params.subject}"}},
+			{ID: "b", Use: "box", When: `steps.a.result == "x"`, With: map[string]any{"input": "${params.subject}"}},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	err := checkRef(t, cfg, "flow")
+	wantErrContaining(t, err, "reference cycle: flow/a -> flow/b -> flow/a")
+}
+
+// Verifies 72d49cc06ac6: fields a condition reads are validated against the
+// dep's declared output schema — an undeclared field fails validate with a
+// field-path error and near-miss suggestion, for when:, gates, and until:
+// alike (fix pass finding 2).
+func TestWiringConditionFieldRefs(t *testing.T) {
+	t.Run("when reads an undeclared output field", func(t *testing.T) {
+		cfg := loadRef(t)
+		cfg.Workflows["task"].Steps[2].When = `steps.review.verdicts == "approved"`
+		err := checkRef(t, cfg, "task")
+		wantErrContaining(t, err, "task/merge.when: references task/review.verdicts — output field does not exist (did you mean verdict?)")
+	})
+
+	t.Run("until reads an undeclared output field", func(t *testing.T) {
+		cfg := loadRef(t)
+		cfg.Workflows["task"].Steps[1].Loop.Until = `steps.review.blessing == "granted"`
+		err := checkRef(t, cfg, "task")
+		// The selector's exhaustion rule and the iteration gates all carry the
+		// rewritten until, so the violation surfaces with IR node paths.
+		wantErrContaining(t, err, "task/review.until: references task/review-cycle@3/review.blessing — output field does not exist")
+		wantErrContaining(t, err, "task/review-cycle@2/review.when: references task/review-cycle@1/review.blessing — output field does not exist")
+	})
+
+	t.Run("declared fields pass", func(t *testing.T) {
+		cfg := loadRef(t)
+		if err := checkRef(t, cfg, "task"); err != nil {
+			t.Fatalf("pristine reference must pass: %v", err)
+		}
+	})
+}
