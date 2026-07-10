@@ -1,0 +1,103 @@
+{
+  "name": "infra",
+  "description": "Typed subprocess actuation: wraps the docker, git, and nix CLIs behind clean Go interfaces with structured I/O, builds immutable images from pinned Nix package sets, and provides the container-run primitive that assembles a docker run argv from binding contributions.",
+  "requirements": [
+    {
+      "id": "b8db21752444",
+      "preq_id": "d2d2116639cc",
+      "type": "functional",
+      "title": "Typed subprocess interfaces",
+      "description": "All external tool invocations (docker, git, nix, user-supplied resolver and data-source commands) go through typed Go interfaces backed by os/exec, using the tools' structured output modes (docker --format json, git plumbing, nix --json) — never free-text stdout scraping. Every interface accepts a context.Context and is fakeable in tests."
+    },
+    {
+      "id": "0acac696dcf1",
+      "preq_id": "67c87e1854ba",
+      "type": "functional",
+      "title": "Nix image build",
+      "description": "Build a template's image with Nix dockerTools.buildLayeredImage from its pinned package list; load the result into the docker daemon with a deterministic tag derived from the template name and toolset hash. Custom binaries enter via a user-supplied overlay of derivations. No Dockerfile; no repository content in the image; packages are root-owned and immutable at runtime."
+    },
+    {
+      "id": "b329adcbbfe4",
+      "preq_id": "2d9d219e22c6",
+      "type": "functional",
+      "title": "Package resolution proof",
+      "description": "At validate time, prove every name in a template's package list resolves in the pinned nixpkgs (nix eval), without building. Unresolvable names are validate-time errors carrying the template and package name."
+    },
+    {
+      "id": "0c82c6478856",
+      "preq_id": "299d74b42425",
+      "type": "functional",
+      "title": "Container run primitive",
+      "description": "Run one step container: assemble the docker run argv from the image, resource limits, the ordered binding contributions supplied by the security module, mounts (result dir, hook scripts), and environment; start, stream logs, wait, and return exit code plus captured output. Supports kill on context cancellation. --rm by default; one container per step invocation, no reuse."
+    },
+    {
+      "id": "7b7ad52d9123",
+      "preq_id": "67c87e1854ba",
+      "type": "functional",
+      "title": "Deferred: image GC and cache eviction",
+      "description": "Backlog (design edge case 11): garbage-collect Nix store paths and docker images left behind by superseded toolsets; define retention policy and a faber-owned cleanup command. First pass relies on manual docker/nix GC."
+    }
+  ],
+  "components": [
+    {
+      "id": "136258cbf6a9",
+      "name": "ExecAdapters",
+      "description": "The typed CLI adapters: DockerClient, GitClient, NixClient, and CommandRunner (for opaque user commands). Each adapter maps a small set of verbs to argv, parses structured output into Go types, wraps errors with the invoked command context, and honors context deadlines.",
+      "content": "arch_exec_adapters.md",
+      "implements": ["b8db21752444"]
+    },
+    {
+      "id": "8ecba60614b3",
+      "name": "ImageBuilder",
+      "description": "The Nix build pipeline: renders the buildLayeredImage expression from a template's package list and overlay, evaluates package resolution at validate time, builds and loads the image, and computes the deterministic tag. Owns the deferred GC/retention seam.",
+      "content": "arch_image_builder.md",
+      "implements": ["0acac696dcf1", "b329adcbbfe4", "7b7ad52d9123"],
+      "uses": ["136258cbf6a9"]
+    },
+    {
+      "id": "965b42338998",
+      "name": "ContainerRunner",
+      "description": "The single-step container lifecycle: argv assembly from image, limits, binding contributions, mounts, and env; run, wait, capture, kill-on-cancel. The only place a docker run is ever constructed.",
+      "content": "arch_container_runner.md",
+      "implements": ["0c82c6478856"],
+      "uses": ["136258cbf6a9"]
+    }
+  ],
+  "impl_sections": [
+    {
+      "id": "b5befa91520b",
+      "name": "Exec adapter contracts",
+      "content": "impl_exec_adapters.md",
+      "describes": ["136258cbf6a9"]
+    },
+    {
+      "id": "5799194c5edf",
+      "name": "Nix build pipeline",
+      "content": "impl_nix_build.md",
+      "describes": ["8ecba60614b3"]
+    },
+    {
+      "id": "8f0d4d36b354",
+      "name": "Run argv assembly",
+      "content": "impl_run_argv.md",
+      "describes": ["965b42338998"]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "b350a11162f1",
+      "name": "Template to image to container",
+      "description": "TemplateDef packages -> nix eval proof -> buildLayeredImage -> docker load (tagged image) -> ContainerRunner argv (image + bindings + mounts) -> running step container -> exit code and captured output.",
+      "content": "flow_build_run.md",
+      "uses": ["136258cbf6a9", "8ecba60614b3", "965b42338998"]
+    }
+  ],
+  "test_sections": [
+    {
+      "id": "95b2343d0234",
+      "name": "Infra integration tests",
+      "content": "test_infra.md",
+      "describes": ["136258cbf6a9", "8ecba60614b3", "965b42338998"]
+    }
+  ]
+}

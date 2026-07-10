@@ -1,0 +1,121 @@
+{
+  "name": "failure",
+  "description": "Failure semantics and durability: the structured step-result contract shared by every consumer (threading, journal, metering, reporting), fail-stop with declared on_failure cleanup hooks, opt-in retry with between-attempt cleanup, the run journal keyed (step-id, input-hash), and the resume/fresh/interactive recovery modes.",
+  "requirements": [
+    {
+      "id": "3b7d2586b5ae",
+      "preq_id": "0186891639d3",
+      "type": "functional",
+      "title": "Structured step result",
+      "description": "Every step emits exactly one result record: {status: ok|failed, payload (schema-typed) | error {reason, detail, handoff}, timing, attempt}. Failure is a record, not an absence. An unfavorable-but-valid payload (a review verdict of 'changes') is status ok — workflow conditions, not failure semantics, react to it."
+    },
+    {
+      "id": "9796e2bddf7a",
+      "preq_id": "0186891639d3",
+      "type": "functional",
+      "title": "Fail-stop and cleanup hooks",
+      "description": "A failed step halts its dependency chain (fail-stop); independent branches continue. A template or step may declare an on_failure hook — an opaque user script faber runs host-side (or in a fresh box) with the failed step's inputs and error record, to undo external side-effects (delete an orphan branch, release a claimed item). Cleanup failure is reported but does not mask the original failure."
+    },
+    {
+      "id": "9cb70f998931",
+      "preq_id": "0186891639d3",
+      "type": "functional",
+      "title": "Opt-in retry with cleanup",
+      "description": "retry: N on a step re-runs the whole step (a step is atomic — never resume into an agent's chain of thought). on_failure cleanup runs between attempts, which is what guarantees each attempt starts from a clean slate. Exhausted retries yield the final failure record with attempt history.",
+      "depends_on": ["9796e2bddf7a"]
+    },
+    {
+      "id": "bff0f92afc29",
+      "preq_id": "0186891639d3",
+      "type": "functional",
+      "title": "Run journal",
+      "description": "Every completed step's result is journaled under the key (step-id, input-hash), where input-hash covers the step's resolved inputs, template identity, and image tag. The journal is the run's durable state: append-only records sufficient to reconstruct scheduler state and reuse prior outputs."
+    },
+    {
+      "id": "87f006277d2c",
+      "preq_id": "0186891639d3",
+      "type": "functional",
+      "title": "Recovery modes",
+      "description": "Three ways to re-enter a failed run: resume (journal hits with matching input-hash are skipped, execution restarts at the first failed or absent step), fresh (--no-cache: ignore the journal, run everything), and interactive (drop the operator into the failed step's box — same image, bindings, and inputs — for manual diagnosis). A failed generate item is a normal failure plus journal entry, not a special partial-run state.",
+      "depends_on": ["bff0f92afc29"]
+    },
+    {
+      "id": "690a06d8a44b",
+      "preq_id": "0186891639d3",
+      "type": "functional",
+      "title": "Deferred: timeouts and cancellation",
+      "description": "Backlog (design edge case 6): per-step wall-clock timeouts and user-initiated abort with in-flight container cleanup (kill, teardown of bindings, journal record of the interruption). First pass has no step timeout; abort is process-level."
+    },
+    {
+      "id": "fca4912f1bbe",
+      "preq_id": "0186891639d3",
+      "type": "functional",
+      "title": "Deferred: journal store concurrency",
+      "description": "Backlog (design edge case 10): the journal store's canonical location and multi-run concurrency — two runs claiming the same generate item need dedup or locking. First pass: one journal directory per run, no cross-run coordination."
+    }
+  ],
+  "components": [
+    {
+      "id": "dcfa188fa679",
+      "name": "ResultContract",
+      "description": "The step-result record type and its invariants: status vocabulary, schema-typed payload, error record with handoff pointer, timing and attempt metadata. The single contract consumed by threading, journal, metering, and reporting.",
+      "content": "arch_result_contract.md",
+      "implements": ["3b7d2586b5ae"]
+    },
+    {
+      "id": "e8bdb768191e",
+      "name": "FailurePolicy",
+      "description": "Fail-stop semantics, on_failure hook execution (host-side opaque script with the error record), retry orchestration with between-attempt cleanup, and attempt accounting. Owns the deferred timeout/cancellation seam.",
+      "content": "arch_failure_policy.md",
+      "implements": ["9796e2bddf7a", "9cb70f998931", "690a06d8a44b"],
+      "uses": ["dcfa188fa679"]
+    },
+    {
+      "id": "ec44f9c7b403",
+      "name": "Journal",
+      "description": "The append-only run journal: (step-id, input-hash) keying, input-hash computation, record encoding, lookup for resume decisions, and per-step actual-cost records. Owns the deferred store-location/concurrency seam.",
+      "content": "arch_journal.md",
+      "implements": ["bff0f92afc29", "fca4912f1bbe"],
+      "uses": ["dcfa188fa679"]
+    },
+    {
+      "id": "351e41becee4",
+      "name": "RecoveryModes",
+      "description": "The resume/fresh/interactive entry points: journal replay into scheduler state, cache-bypass, and the interactive re-entry that reconstructs the failed step's box (image, bindings, inputs) for an operator shell.",
+      "content": "arch_recovery_modes.md",
+      "implements": ["87f006277d2c"],
+      "uses": ["ec44f9c7b403"]
+    }
+  ],
+  "impl_sections": [
+    {
+      "id": "bc5993cf9a4a",
+      "name": "Result and journal encoding",
+      "content": "impl_result_journal.md",
+      "describes": ["dcfa188fa679", "ec44f9c7b403"]
+    },
+    {
+      "id": "bfa80248d44f",
+      "name": "Retry and recovery algorithms",
+      "content": "impl_retry_recovery.md",
+      "describes": ["e8bdb768191e", "351e41becee4"]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "40b30dff53f2",
+      "name": "Failure and resume flow",
+      "description": "Step failure record -> on_failure cleanup -> retry decision (attempts left?) -> journal append -> fail-stop propagation; on re-entry: journal lookup by (step-id, input-hash) -> skip / re-run / interactive shell.",
+      "content": "flow_failure_resume.md",
+      "uses": ["dcfa188fa679", "e8bdb768191e", "ec44f9c7b403", "351e41becee4"]
+    }
+  ],
+  "test_sections": [
+    {
+      "id": "7b68e2625054",
+      "name": "Failure semantics tests",
+      "content": "test_failure_semantics.md",
+      "describes": ["dcfa188fa679", "e8bdb768191e", "ec44f9c7b403", "351e41becee4"]
+    }
+  ]
+}
