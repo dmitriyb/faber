@@ -1,0 +1,162 @@
+{
+  "name": "config",
+  "description": "The foundation module: defines the orchestrator.yaml schema and its Go struct tree, loads and validates configuration, desugars the YAML frontend into the acyclic JSON IR, validates typed reference wiring over the IR, and provides the CLI entry points and structured logging.",
+  "requirements": [
+    {
+      "id": "23a6be447cc8",
+      "preq_id": "4267f6b0c531",
+      "type": "functional",
+      "title": "Workflow schema definition",
+      "description": "Define the orchestrator.yaml schema: templates (name, packages, identity, network, skill, context/prelude hook paths, inputs, output schema), workflows (typed params, steps, sources), and steps (use: template or workflow, with: slot bindings, when: condition, loop sugar, depends_on for pure ordering). Go structs map 1:1 to YAML sections with yaml tags. The schema contains no domain-specific field names."
+    },
+    {
+      "id": "255893ae16eb",
+      "preq_id": "4267f6b0c531",
+      "type": "functional",
+      "title": "Typed params interface",
+      "description": "A workflow declares a typed params interface: name, type (string/int/bool/object), required, default. Params are validated against the declaration before anything runs; a missing required param is a hard error with no implicit fallback. repo is an ordinary optional param — never baked into an image, overridable per step for multi-repo runs."
+    },
+    {
+      "id": "8a79b4f5c699",
+      "preq_id": "78296a64cc3c",
+      "type": "functional",
+      "title": "Opaque policy seams",
+      "description": "All domain behavior enters through opaque, engine-agnostic config values: hook script paths (context, prelude, on_failure), data-source commands for generate, resolver commands for credentials, and free-form param names. The schema never names a tracker, gate service, or spec tool; faber passes these values through without interpreting their contents."
+    },
+    {
+      "id": "014aaac22619",
+      "preq_id": "885a56cfa694",
+      "type": "functional",
+      "title": "Desugaring to JSON IR",
+      "description": "Compile the validated YAML into the JSON IR: a uniform acyclic graph of agent, sub-workflow, and generate nodes. Bounded loop sugar (loop {until, max: N}) unrolls into a linear chain of N conditional iterations; named sub-workflows are resolved by reference; sub-workflow composition is flattened or nested per the IR model. The executed IR never contains a Loop op.",
+      "depends_on": ["23a6be447cc8"]
+    },
+    {
+      "id": "72d49cc06ac6",
+      "preq_id": "84225a4ae7ed",
+      "type": "functional",
+      "title": "Reference wiring validation",
+      "description": "Validate the typed dataflow over the IR: every ${steps.X.field} reference resolves to a declared output field of step X with a compatible type; every template input slot is bound exactly once from a legal source (param, item, literal, step output); the reference graph plus depends_on edges is acyclic; a step's declared tool needs are a subset of its template's package list. All violations are collected with field paths and reported together.",
+      "depends_on": ["014aaac22619"]
+    },
+    {
+      "id": "0ebbdd8f836b",
+      "preq_id": "3876114fb7a3",
+      "type": "functional",
+      "title": "Deterministic IR emission",
+      "description": "Desugaring is a pure, deterministic function: the same YAML bytes always produce the same IR bytes (stable node ordering, stable JSON key order). faber validate --emit-ir prints the IR for inspection and golden-file testing.",
+      "depends_on": ["014aaac22619"]
+    },
+    {
+      "id": "67c77533453d",
+      "preq_id": "4267f6b0c531",
+      "type": "functional",
+      "title": "CLI commands",
+      "description": "Expose the engine as subcommands: faber validate (load, desugar, check wiring, prove package resolution, print all errors), faber build (build template images), faber run (execute a workflow with --param bindings and recovery-mode flags), faber resume (re-enter a journaled run). Structured slog logging: JSON handler for non-TTY, text for TTY, per-component child loggers, --log-level flag."
+    },
+    {
+      "id": "83bbad3814ba",
+      "preq_id": "885a56cfa694",
+      "type": "functional",
+      "title": "Deferred: non-agent step kinds",
+      "description": "Backlog (design edge case 1): additional IR node kinds that run no agent — human-approval gates, wait/poll steps, and pure-command steps. The IR's node-kind discriminator reserves the extension point; no such kinds ship in the first pass."
+    }
+  ],
+  "components": [
+    {
+      "id": "36547319009b",
+      "name": "SchemaTypes",
+      "description": "The Go struct tree mirroring orchestrator.yaml: Config, TemplateDef, WorkflowDef, StepDef, ParamDef, SourceDef, binding references. Owns the params typing vocabulary and the closed set of slot-binding source forms.",
+      "content": "arch_schema_types.md",
+      "implements": ["23a6be447cc8", "255893ae16eb", "8a79b4f5c699"]
+    },
+    {
+      "id": "c21cc21b5668",
+      "name": "Loader",
+      "description": "Reads orchestrator.yaml, unmarshals into SchemaTypes, and runs schema-level validation (required fields, enum values, name uniqueness, cross-references between steps/templates/workflows) with multi-error field-path reporting.",
+      "content": "arch_loader.md",
+      "implements": ["23a6be447cc8"],
+      "uses": ["36547319009b"]
+    },
+    {
+      "id": "080a536721ed",
+      "name": "Desugarer",
+      "description": "The frontend-to-IR compiler: unrolls bounded loops into conditional chains, resolves named sub-workflow references, expands compact with: bindings into explicit typed edges, and emits the deterministic JSON IR.",
+      "content": "arch_desugarer.md",
+      "implements": ["014aaac22619", "0ebbdd8f836b"],
+      "uses": ["36547319009b", "0dd11f0c10bb"]
+    },
+    {
+      "id": "0dd11f0c10bb",
+      "name": "IRModel",
+      "description": "The JSON IR type definitions and invariants: node kinds (agent, sub-workflow, generate), typed input/output ports, edge encoding, acyclicity, and the serialization contract the executor consumes. Reserves the node-kind extension point for deferred non-agent steps.",
+      "content": "arch_ir_model.md",
+      "implements": ["014aaac22619", "83bbad3814ba"]
+    },
+    {
+      "id": "4b337a09e469",
+      "name": "WiringChecker",
+      "description": "Validates the typed dataflow over the IR: reference resolution, slot/type compatibility, single-binding rule, cycle detection over reference plus ordering edges, and tool-subset checks. Collects all violations with field paths.",
+      "content": "arch_wiring_checker.md",
+      "implements": ["72d49cc06ac6"],
+      "uses": ["0dd11f0c10bb"]
+    },
+    {
+      "id": "913ceeaf4730",
+      "name": "CLI",
+      "description": "The faber entry point: flag parsing, subcommand dispatch (validate, build, run, resume), exit-code contract, and slog initialization with TTY detection and per-component child loggers.",
+      "content": "arch_cli.md",
+      "implements": ["67c77533453d"],
+      "uses": ["c21cc21b5668", "080a536721ed", "4b337a09e469"]
+    }
+  ],
+  "impl_sections": [
+    {
+      "id": "186acc51f5d7",
+      "name": "Schema structs and params typing",
+      "content": "impl_schema_structs.md",
+      "describes": ["36547319009b", "c21cc21b5668"]
+    },
+    {
+      "id": "fa4db9f97849",
+      "name": "Desugaring algorithm",
+      "content": "impl_desugaring.md",
+      "describes": ["080a536721ed", "0dd11f0c10bb"]
+    },
+    {
+      "id": "03bee9f891ca",
+      "name": "Wiring validation algorithm",
+      "content": "impl_wiring_validation.md",
+      "describes": ["4b337a09e469"]
+    },
+    {
+      "id": "b79f83a5b912",
+      "name": "CLI dispatch and logging",
+      "content": "impl_cli.md",
+      "describes": ["913ceeaf4730"]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "1356eb235eec",
+      "name": "YAML to IR pipeline",
+      "description": "orchestrator.yaml bytes -> Loader (typed, schema-valid Config) -> Desugarer (deterministic JSON IR) -> WiringChecker (typed, acyclic, fully wired IR) -> executor input.",
+      "content": "flow_yaml_to_ir.md",
+      "uses": ["c21cc21b5668", "080a536721ed", "0dd11f0c10bb", "4b337a09e469"]
+    }
+  ],
+  "test_sections": [
+    {
+      "id": "a20fcd82cb50",
+      "name": "Schema and desugaring tests",
+      "content": "test_schema_desugaring.md",
+      "describes": ["36547319009b", "c21cc21b5668", "080a536721ed", "0dd11f0c10bb"]
+    },
+    {
+      "id": "e56cd0f62919",
+      "name": "Wiring and CLI tests",
+      "content": "test_wiring_cli.md",
+      "describes": ["4b337a09e469", "913ceeaf4730"]
+    }
+  ]
+}

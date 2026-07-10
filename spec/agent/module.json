@@ -1,0 +1,110 @@
+{
+  "name": "agent",
+  "description": "The box: the fixed in-container phase order context -> prelude -> agent -> result. Deterministic, engine-owned sequencing around user-filled phases — opaque context/prelude hooks, unrestricted agent invocation inside the sealed environment, and structured result extraction and validation at the container boundary.",
+  "requirements": [
+    {
+      "id": "93ba0858d75f",
+      "preq_id": "299d74b42425",
+      "type": "functional",
+      "title": "Fixed box phase order",
+      "description": "Every agent step executes the same internal sequence: environment setup (delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent, then result emission and verification. The order is engine-owned and not configurable; there is no in-container DAG."
+    },
+    {
+      "id": "b880aa49b3b9",
+      "preq_id": "299d74b42425",
+      "type": "functional",
+      "title": "Deterministic prelude contract",
+      "description": "context and prelude are opaque user scripts run deterministically (no agent, no credentials beyond the delegated handles) before the agent starts. Contract: they receive the step's typed inputs as environment, must produce the context bundle (a prompt-body document plus optional machine-readable sidecars) in a well-known directory, and must exit 0. A failed or bundle-less prelude aborts the step with a structured handoff record — the agent never starts."
+    },
+    {
+      "id": "ae434449cac9",
+      "preq_id": "299d74b42425",
+      "type": "functional",
+      "title": "Unrestricted agent invocation",
+      "description": "The agent phase invokes the configured agent skill headlessly with full permission bypass inside the box; the sealed environment (pinned toolset, egress lock, single-role key, gateway-only remote) is the restriction — there is no second in-container permission gate. The invocation passes the skill name, the context bundle as prompt body, optional extra instruction, effort level, and optional budget bound from config."
+    },
+    {
+      "id": "ff8e85704b0a",
+      "preq_id": "84225a4ae7ed",
+      "type": "functional",
+      "title": "Structured result extraction",
+      "description": "The step's result is a typed record read from a well-known result file in the mounted result directory, schema-validated against the template's declared output before it is threaded to any downstream step. A missing result file after an otherwise-successful agent phase yields a minimal engine-written fallback record; verification hooks (e.g. confirming a declared side-effect exists) run after extraction."
+    },
+    {
+      "id": "f1ce19e94daa",
+      "preq_id": "84225a4ae7ed",
+      "type": "functional",
+      "title": "Deferred: non-JSON artifacts",
+      "description": "Backlog (design edge case 3): inter-step artifacts beyond typed JSON — large files, research outputs, deliverables that belong to no git repo. Needs an artifact store or pass-by-reference convention in the result contract. First pass supports only typed JSON outputs plus repo state behind the gateway."
+    },
+    {
+      "id": "db9815889696",
+      "preq_id": "78296a64cc3c",
+      "type": "functional",
+      "title": "Deferred: generic context resolvers",
+      "description": "Backlog (design edge case 4): richer context gathering (resolve a work item to its authoritative documents) without faber learning the user's spec or tracker tooling — likely a declared resolve_context command contract mirroring the data-source contract. First pass: the context hook is a single opaque script."
+    }
+  ],
+  "components": [
+    {
+      "id": "7290820d380e",
+      "name": "PhaseSequencer",
+      "description": "The in-container entry program that owns the fixed phase order: validates the step's env contract, applies delegated credentials and host-key policy, clones from the gateway remote, configures commit signing from the forwarded agent, then drives context -> prelude -> agent -> result with fail-stop between phases.",
+      "content": "arch_phase_sequencer.md",
+      "implements": ["93ba0858d75f"],
+      "uses": ["c7c205f95b84", "53965d3ef136", "17c51bae5f80"]
+    },
+    {
+      "id": "c7c205f95b84",
+      "name": "PreludeHooks",
+      "description": "The context/prelude hook contract: input environment, the context-bundle output convention, exit-code semantics, and the structured handoff record written when a hook fails. Owns the deferred context-resolver seam.",
+      "content": "arch_prelude_hooks.md",
+      "implements": ["b880aa49b3b9", "db9815889696"]
+    },
+    {
+      "id": "53965d3ef136",
+      "name": "AgentInvoker",
+      "description": "The agent phase: assembles the headless invocation (skill, context bundle, effort, extra instruction, budget bound) with permission bypass, executes it, and maps its exit status into the phase flow.",
+      "content": "arch_agent_invoker.md",
+      "implements": ["ae434449cac9"]
+    },
+    {
+      "id": "17c51bae5f80",
+      "name": "ResultExtractor",
+      "description": "Reads the result file from the result directory, validates it against the template's output schema, writes the fallback record when absent, and runs post-result verification. Owns the deferred non-JSON artifact seam.",
+      "content": "arch_result_extractor.md",
+      "implements": ["ff8e85704b0a", "f1ce19e94daa"]
+    }
+  ],
+  "impl_sections": [
+    {
+      "id": "df8c5e0128e7",
+      "name": "Phase sequencing",
+      "content": "impl_phase_sequencing.md",
+      "describes": ["7290820d380e", "53965d3ef136"]
+    },
+    {
+      "id": "639ae791aa64",
+      "name": "Hook and result contracts",
+      "content": "impl_hook_result_contracts.md",
+      "describes": ["c7c205f95b84", "17c51bae5f80"]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "3e918f0e0199",
+      "name": "Box execution flow",
+      "description": "Step env contract (inputs, bindings, handles) -> deterministic setup -> context/prelude hooks (context bundle) -> agent invocation (repo mutations via gateway, result file) -> result extraction + schema validation -> typed result record to the host.",
+      "content": "flow_box_execution.md",
+      "uses": ["7290820d380e", "c7c205f95b84", "53965d3ef136", "17c51bae5f80"]
+    }
+  ],
+  "test_sections": [
+    {
+      "id": "6e1e7a063860",
+      "name": "Box lifecycle tests",
+      "content": "test_box_lifecycle.md",
+      "describes": ["7290820d380e", "c7c205f95b84", "53965d3ef136", "17c51bae5f80"]
+    }
+  ]
+}

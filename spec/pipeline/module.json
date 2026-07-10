@@ -1,0 +1,137 @@
+{
+  "name": "pipeline",
+  "description": "The IR executor: topological parallel scheduling over the desugared DAG, CEL condition evaluation on unrolled conditional chains, run-time generate expansion over user data-source items, failure propagation with skip semantics, and run reporting. The module that runs the reference workflows.",
+  "requirements": [
+    {
+      "id": "8879dc1597d6",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Topological parallel execution",
+      "description": "Execute the IR with Kahn-style readiness scheduling: a node becomes eligible when all its edges (data references plus ordering) are satisfied; eligible nodes run concurrently in goroutines; tie-breaking is deterministic (stable name order). The executed graph is the desugared IR — the scheduler never sees loops or sugar."
+    },
+    {
+      "id": "595a2a6fcc5b",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Conditional steps via CEL",
+      "description": "A node's when: condition is a CEL expression over completed step results (steps.X.field) and params. Conditions are compiled at validate time and evaluated at readiness; false means skipped (a distinct terminal state, not failure), and skip propagates through the unrolled loop chains so a settled loop terminates early."
+    },
+    {
+      "id": "7c30f5aac83f",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Generate expansion",
+      "description": "A generate node invokes its declared data-source command (opaque user command emitting {items: [{id, deps, ...}]}), validates the item shape, and instantiates the named sub-workflow once per item — item fields bound into the instance's params, inter-instance edges derived from each item's deps (edges to items outside the set are ignored). Expansion happens at run time; the expanded subgraph joins the running DAG."
+    },
+    {
+      "id": "a0f44481f57b",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Failure propagation and skip semantics",
+      "description": "When a step fails (final, after retries), every transitive dependent is marked skipped with the failed ancestor recorded; independent branches continue to completion. Terminal step states are exactly: ok, failed, skipped (condition false), skipped (dependency failed); deferral is non-terminal — a deferred step later settles into one of the four, its record annotated with the defer history."
+    },
+    {
+      "id": "990c3d8a7888",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Run reporting",
+      "description": "After the run settles, aggregate the journal into a run report: per-step status, duration, attempts, key output fields, and per-generate-item rollups, printed human-readably in stable config order and emittable as JSON. The report is derived from the journal, never from in-memory state alone."
+    },
+    {
+      "id": "ae796d2a1503",
+      "preq_id": "eb9f40119b1b",
+      "type": "functional",
+      "title": "Reference workflow execution",
+      "description": "The executor runs the reference orchestrator.yaml end-to-end: the task workflow's unrolled review/fix chain settles on the approval condition and its merge step runs only when approved, and the epic workflow's generate node fans out task sub-workflows over the data-source items with dependency-respecting order, each instance settling through its own merge."
+    },
+    {
+      "id": "175c2f02a73d",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Deferred: generate edge cases",
+      "description": "Backlog (design edge case 2): generate with an empty item set (no-op vs error, policy flag), malformed data-source output (validation error contract), and dependency cascade policy when one item's sub-workflow fails (skip dependents only vs abort the fan-out). First pass: empty set is a no-op, malformed output fails the generate node, cascade follows standard skip semantics."
+    },
+    {
+      "id": "93d829b3f3d3",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Deferred: concurrency control",
+      "description": "Backlog (design edge case 5): a scheduler-level parallelism cap aware of host resources (CPU, local GPU) and API rate classes, replacing the first pass's simple max-parallel semaphore."
+    },
+    {
+      "id": "b8db39a923b7",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Deferred: observability",
+      "description": "Backlog (design edge case 8): live progress surfaces for a running workflow — step logs and traces, a status view over the journal, and inspection of an in-flight run. First pass: structured slog lines plus the post-run report."
+    }
+  ],
+  "components": [
+    {
+      "id": "d7f1415da14a",
+      "name": "Scheduler",
+      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure propagation via dependent traversal, and defer(until) re-queueing. Consults the journal for resume skips and the meter for admission.",
+      "content": "arch_scheduler.md",
+      "implements": ["8879dc1597d6", "a0f44481f57b", "ae796d2a1503", "93d829b3f3d3"],
+      "uses": ["072cf2b54377", "b3b271a87136"]
+    },
+    {
+      "id": "072cf2b54377",
+      "name": "ConditionEvaluator",
+      "description": "CEL environment and lifecycle: validate-time compilation of when: expressions, the steps/params activation built from completed results, and skip decisions at readiness time.",
+      "content": "arch_condition_evaluator.md",
+      "implements": ["595a2a6fcc5b"]
+    },
+    {
+      "id": "b3b271a87136",
+      "name": "GenerateExpander",
+      "description": "Run-time fan-out: invokes the data-source command, validates the items contract, instantiates the named sub-workflow per item with param binding and deps-derived edges, and splices the expansion into the running DAG. Owns the deferred empty-set/malformed-source/cascade policies.",
+      "content": "arch_generate_expander.md",
+      "implements": ["7c30f5aac83f", "ae796d2a1503", "175c2f02a73d"]
+    },
+    {
+      "id": "433118dc3ddb",
+      "name": "RunReporter",
+      "description": "Aggregates the settled run from the journal into the human summary and JSON report: stable ordering, per-step lines, generate-item rollups, failure diagnostics with handoff pointers. Owns the deferred live-observability seam.",
+      "content": "arch_run_reporter.md",
+      "implements": ["990c3d8a7888", "b8db39a923b7"]
+    }
+  ],
+  "impl_sections": [
+    {
+      "id": "e8fc4e937f4a",
+      "name": "Scheduling algorithm",
+      "content": "impl_scheduling.md",
+      "describes": ["d7f1415da14a"]
+    },
+    {
+      "id": "5e3cdfde8937",
+      "name": "Generate expansion algorithm",
+      "content": "impl_generate_expansion.md",
+      "describes": ["b3b271a87136"]
+    },
+    {
+      "id": "0506bbf59ede",
+      "name": "Conditions and reporting",
+      "content": "impl_conditions_reporting.md",
+      "describes": ["072cf2b54377", "433118dc3ddb"]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "c800c18b3df7",
+      "name": "IR execution flow",
+      "description": "Validated IR + params -> scheduler readiness loop -> (condition check -> journal lookup -> meter admission -> box run -> result record) per step -> generate expansion splices item subgraphs -> journal appends -> settled run -> report.",
+      "content": "flow_ir_execution.md",
+      "uses": ["d7f1415da14a", "072cf2b54377", "b3b271a87136", "433118dc3ddb"]
+    }
+  ],
+  "test_sections": [
+    {
+      "id": "bdfc93a84d5b",
+      "name": "Pipeline execution tests",
+      "content": "test_pipeline_execution.md",
+      "describes": ["d7f1415da14a", "072cf2b54377", "b3b271a87136", "433118dc3ddb"]
+    }
+  ]
+}

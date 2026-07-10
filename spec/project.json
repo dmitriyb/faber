@@ -1,0 +1,237 @@
+{
+  "name": "faber",
+  "description": "A generic containerized-agent workflow engine. Desugars a declarative orchestrator.yaml into an acyclic JSON IR, builds immutable agent images from pinned Nix toolsets, and executes workflows as a host-side DAG of single-purpose containers with externally enforced security bindings, pluggable metering, and journal-based resume. Mechanism, not policy: all domain behavior arrives as user config.",
+  "version": "0.1.0",
+  "requirements": [
+    {
+      "id": "4267f6b0c531",
+      "type": "functional",
+      "title": "Declarative workflow configuration",
+      "description": "One orchestrator.yaml declares lifecycle templates (build: Nix package set; run: bindings), workflows with typed params (name/type/required/default; repo is an optional param, never baked), and steps binding template input slots from a closed set of sources. The whole file is loaded and validated before anything runs.",
+      "priority": 1
+    },
+    {
+      "id": "885a56cfa694",
+      "type": "functional",
+      "title": "Desugared acyclic IR",
+      "description": "The YAML frontend compiles to a JSON IR: a uniform acyclic graph of node kinds agent (run a box), sub-workflow (compose), and generate (expand a named sub-workflow over a data-source's items). Bounded loops (until/max) are frontend sugar unrolled into linear conditional chains; the executed IR is always a pure DAG with no Loop op.",
+      "priority": 1,
+      "depends_on": ["4267f6b0c531"]
+    },
+    {
+      "id": "84225a4ae7ed",
+      "type": "functional",
+      "title": "Typed data threading",
+      "description": "Every step is a typed function: its template declares named, typed input slots and an output schema. A step's with: binds slots from a workflow param, a generate item field, a literal, or another step's output field (${steps.X.field}). A reference IS the DAG edge; explicit depends_on exists only for pure ordering. Outputs are schema-validated before threading.",
+      "priority": 1,
+      "depends_on": ["885a56cfa694"]
+    },
+    {
+      "id": "67c87e1854ba",
+      "type": "functional",
+      "title": "Immutable toolset images",
+      "description": "A template's tools: list is a pinned Nix package set built into an immutable image via dockerTools.buildLayeredImage; packages are root-owned and immutable at runtime. No repository content is ever baked into an image; one image serves any repo. Custom binaries arrive via a user-supplied overlay of derivations.",
+      "priority": 1
+    },
+    {
+      "id": "299d74b42425",
+      "type": "functional",
+      "title": "The box lifecycle",
+      "description": "Every agent step runs in a fresh container with the fixed internal phase order context -> prelude -> agent -> result. Phases are user-filled (opaque scripts and an agent skill); the sequence is engine-owned and not configurable. A step is a lambda: its only durable state is its typed output plus the repo reached via the user's gateway.",
+      "priority": 1,
+      "depends_on": ["67c87e1854ba"]
+    },
+    {
+      "id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Host-side DAG execution",
+      "description": "Faber coordinates the workflow DAG host-side: topological, parallel, CEL-conditional execution of the IR, including run-time generate expansion over items emitted by a user data-source command. The box/host boundary is the role-identity boundary: anything crossing a signing identity is a separate host-side step.",
+      "priority": 1,
+      "depends_on": ["885a56cfa694", "84225a4ae7ed"]
+    },
+    {
+      "id": "4ed3587b51f5",
+      "type": "functional",
+      "title": "Externally enforced security bindings",
+      "description": "Security is docker run bindings plus external companion services, never image content: a network binding (internal network with an allow-listing egress proxy as the only route out, or a baked-nftables alternative), a remote binding (gateway git URL with pinned host key), and an identity binding (ephemeral single-key ssh-agent per role, socket forwarded; one key per container).",
+      "priority": 1,
+      "depends_on": ["299d74b42425"]
+    },
+    {
+      "id": "eddb5adc5adb",
+      "type": "functional",
+      "title": "Credential delegation via handles",
+      "description": "No secret is ever materialized inside a container. Brokers are forwarded as handles: an ssh-agent socket for keys, an unauthenticated local endpoint backed by an auth-injecting proxy for API tokens. The get_token(service) resolver is user-supplied (keychain/rbw/env/static). Raw-token-in-RAM (read-only tmpfs file mount, chmod 600, --rm) is the explicit degraded opt-out.",
+      "priority": 1
+    },
+    {
+      "id": "d0a238fe521f",
+      "type": "functional",
+      "title": "Pluggable metering",
+      "description": "Budget and usage tracking is a pluggable pre/post-step hook: estimate(step) -> cost for admission, actual(result) -> cost for accounting, with fidelity tiers per endpoint class and a reactive 429-defer floor. The cost unit is pluggable (tokens, currency, GPU-seconds). Vendor-specific probes are user policy, never a faber default.",
+      "priority": 1
+    },
+    {
+      "id": "0186891639d3",
+      "type": "functional",
+      "title": "Structured failure and resume",
+      "description": "Every step emits a structured result record; failure is a record, not an absence, and an unfavorable-but-valid output is not a failure. Fail-stop plus declared on_failure cleanup hooks; opt-in retry with cleanup between attempts; a run journal keyed (step-id, input-hash) enabling resume, fresh, and interactive recovery modes.",
+      "priority": 1,
+      "depends_on": ["296f9fba2c0f"]
+    },
+    {
+      "id": "eb9f40119b1b",
+      "type": "functional",
+      "title": "Reference workflows acceptance",
+      "description": "The reference orchestrator.yaml is the completeness test: a task workflow (implement -> loop{until verdict == approved, max N}{review; fix when not approved}) and an epic workflow (generate: task over a data-source's items; merge after). The dogfooded shell harness must translate into this pure config with domain specifics reduced to opaque scripts and a data-source command emitting items with ids and deps.",
+      "priority": 1,
+      "depends_on": ["299d74b42425", "296f9fba2c0f"]
+    },
+    {
+      "id": "78296a64cc3c",
+      "type": "non_functional",
+      "title": "Mechanism, not policy",
+      "description": "Faber never learns a domain word: no issue tracker, no gate-service name, no spec tool. Every opinionated behavior enters through config seams: opaque script paths, typed params, data-source commands, and companion services on a named docker network that faber attaches to and otherwise treats as opaque.",
+      "priority": 2
+    },
+    {
+      "id": "932a73dcb170",
+      "type": "non_functional",
+      "title": "Untrusted box",
+      "description": "The thing inside the container is untrusted. Every real control is enforced from outside the container or is immutable relative to it. The image is a pure function of the toolset; trust lives in the run bindings and companion services. An optional isolation-runtime knob hardens the container boundary where desired.",
+      "priority": 2
+    },
+    {
+      "id": "2d9d219e22c6",
+      "type": "non_functional",
+      "title": "Validate before run",
+      "description": "All schema, wiring, type, cycle, and package-resolution errors surface at faber validate, never mid-run. Missing required params are a hard error with no implicit defaults.",
+      "priority": 2
+    },
+    {
+      "id": "d2d2116639cc",
+      "type": "non_functional",
+      "title": "Stdlib-first Go",
+      "description": "Go with standard library first; the only external dependencies are yaml.v3, cel-go, and x/term. docker, git, nix, and user resolver commands are invoked via os/exec behind clean typed interfaces with structured I/O (JSON output modes, never stdout-scraping).",
+      "priority": 2
+    },
+    {
+      "id": "3876114fb7a3",
+      "type": "non_functional",
+      "title": "Deterministic desugaring",
+      "description": "The same YAML input always produces the same JSON IR, byte for byte. The IR is inspectable via faber validate --emit-ir, making the frontend/backend contract testable and diffable.",
+      "priority": 2
+    }
+  ],
+  "modules": [
+    {
+      "id": "51be984560a5",
+      "name": "config",
+      "path": "config",
+      "description": "The foundation: orchestrator.yaml schema, typed params interface, desugaring to the JSON IR (loop unrolling, $ref resolution, reference-to-edge compilation), wiring validation, CLI entry points, structured logging."
+    },
+    {
+      "id": "5baa87e1c166",
+      "name": "infra",
+      "path": "infra",
+      "description": "Typed subprocess actuation: docker/git/nix CLI adapters with structured I/O, Nix image building from pinned package sets, and the container-run primitive that assembles a docker run argv from bindings.",
+      "requires_module": ["51be984560a5"]
+    },
+    {
+      "id": "7fad2a9e2f92",
+      "name": "security",
+      "path": "security",
+      "description": "Run-time security bindings (network egress lock, pinned remote gateway, ephemeral per-role identity agent) and the credential-delegation interface (broker handles, user-supplied resolver, degraded raw-token mode, isolation runtime knob).",
+      "requires_module": ["51be984560a5", "5baa87e1c166"]
+    },
+    {
+      "id": "38eac7b92e62",
+      "name": "agent",
+      "path": "agent",
+      "description": "The box: fixed in-container phase order context -> prelude -> agent -> result, deterministic hook contracts, unrestricted agent invocation inside the sealed environment, and structured result extraction at the container boundary.",
+      "requires_module": ["51be984560a5", "5baa87e1c166", "7fad2a9e2f92"]
+    },
+    {
+      "id": "03dc0699260f",
+      "name": "metering",
+      "path": "metering",
+      "description": "The pluggable budget hook: estimate/actual cost interfaces, endpoint fidelity tiers, the reactive 429-defer floor, and the pluggable cost unit.",
+      "requires_module": ["51be984560a5"]
+    },
+    {
+      "id": "6c710a720719",
+      "name": "failure",
+      "path": "failure",
+      "description": "Failure semantics: the structured step-result contract, fail-stop with on_failure cleanup hooks, opt-in retry with between-attempt cleanup, the run journal keyed (step-id, input-hash), and the resume/fresh/interactive recovery modes.",
+      "requires_module": ["51be984560a5"]
+    },
+    {
+      "id": "ac15b2db7263",
+      "name": "pipeline",
+      "path": "pipeline",
+      "description": "The IR executor: topological parallel scheduling, CEL condition evaluation, run-time generate expansion over data-source items, failure propagation, and run reporting.",
+      "requires_module": ["51be984560a5", "38eac7b92e62", "6c710a720719", "03dc0699260f"]
+    }
+  ],
+  "milestones": [
+    {
+      "id": "f03caf0458a4",
+      "title": "Frontend",
+      "description": "orchestrator.yaml loads, validates, and desugars to a deterministic JSON IR; faber validate catches wiring, type, and cycle errors; the reference workflows validate.",
+      "groups": ["51be984560a5"]
+    },
+    {
+      "id": "8892332604a0",
+      "title": "Actuation",
+      "description": "Nix-built images from pinned toolsets; typed docker/git/nix adapters; the container-run primitive assembles argv from security bindings (network, remote, identity, credentials).",
+      "groups": ["5baa87e1c166", "7fad2a9e2f92"]
+    },
+    {
+      "id": "011cabfde619",
+      "title": "The Box",
+      "description": "A single agent step runs end-to-end: context and prelude hooks, agent invocation, structured result extracted and schema-validated at the container boundary.",
+      "groups": ["38eac7b92e62"]
+    },
+    {
+      "id": "4519156aa73b",
+      "title": "Orchestration",
+      "description": "Full workflows execute: topological parallel scheduling, conditions, generate expansion, fail-stop with cleanup, journal-based resume. The reference task and epic workflows run.",
+      "groups": ["6c710a720719", "ac15b2db7263"]
+    },
+    {
+      "id": "63376cbc58f0",
+      "title": "Metering",
+      "description": "Budget hooks wired into the executor: admission estimates, actual accounting, 429-defer.",
+      "groups": ["03dc0699260f"]
+    }
+  ],
+  "test_plan": {
+    "scenarios": [
+      {
+        "id": "a88979017e44",
+        "name": "Reference workflows end-to-end",
+        "description": "The reference orchestrator.yaml (task workflow with the review/fix loop; epic workflow with generate fan-out and merge) validates, desugars to the expected IR, and runs end-to-end against companion services: box builds via Nix, clones from the gateway, signs with the forwarded role key, pushes, and the run report carries the structured results.",
+        "content": "test_reference_workflows.md",
+        "modules": ["51be984560a5", "5baa87e1c166", "7fad2a9e2f92", "38eac7b92e62", "03dc0699260f", "6c710a720719", "ac15b2db7263"]
+      },
+      {
+        "id": "cd8bd91e2ed6",
+        "name": "Broken wiring caught at validate",
+        "description": "A deliberately broken reference config (missing required param, reference to an undeclared output field, type mismatch on a slot binding, a reference cycle) fails faber validate with field-path errors; nothing is built or run.",
+        "modules": ["51be984560a5"]
+      },
+      {
+        "id": "6861de2ffb45",
+        "name": "Gate rejects unsigned and default-branch pushes",
+        "description": "Adversarial acceptance: a run instructed to push unsigned, push to the default branch, or perform a role-forbidden content change is rejected server-side by the user's gate; faber surfaces the rejection as a structured step failure and never held the upstream credential.",
+        "modules": ["7fad2a9e2f92", "38eac7b92e62", "6c710a720719"]
+      },
+      {
+        "id": "8b6e3b90ea30",
+        "name": "Mid-run kill and resume",
+        "description": "A workflow killed mid-run resumes from the journal: completed steps are skipped by (step-id, input-hash), execution restarts at the first failed or absent step, and the failed step's on_failure cleanup ran before any retry.",
+        "modules": ["6c710a720719", "ac15b2db7263"]
+      }
+    ]
+  }
+}

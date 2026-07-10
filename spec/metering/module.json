@@ -1,0 +1,97 @@
+{
+  "name": "metering",
+  "description": "The pluggable budget and usage layer: estimate(step) -> cost admission before each step, actual(result) -> cost accounting after, endpoint fidelity tiers for how cost is measured, a reactive 429-defer floor beneath all of them, and a pluggable cost unit.",
+  "requirements": [
+    {
+      "id": "58879b841ed4",
+      "preq_id": "d0a238fe521f",
+      "type": "functional",
+      "title": "Estimate and actual hooks",
+      "description": "A Meter interface with two hooks the executor calls around every step: estimate(step) -> cost before launch (admission: reject or defer when the budget would be exceeded) and actual(result) -> cost after completion (accounting against the run budget). The default meter is a no-op; users plug implementations per endpoint class."
+    },
+    {
+      "id": "e3dae1b52167",
+      "preq_id": "d0a238fe521f",
+      "type": "functional",
+      "title": "Endpoint fidelity tiers",
+      "description": "Cost measurement fidelity is declared per endpoint class: exact (local/OSS endpoints — tokenizer-exact hard-upper-bound admission assuming no cache reuse, fresh input, max output), reported (vendor usage blocks read from responses), and probe (subscription endpoints with no usage API — best-effort user-supplied probes, explicitly user policy and never a faber default)."
+    },
+    {
+      "id": "06e9d770841f",
+      "preq_id": "d0a238fe521f",
+      "type": "functional",
+      "title": "Reactive 429 defer",
+      "description": "The floor under every tier: when a step fails with a rate-limit signal carrying a reset time, the executor defers the step until the reset epoch rather than failing the run. Works with zero configuration and no estimation."
+    },
+    {
+      "id": "a9a5faefadd6",
+      "preq_id": "d0a238fe521f",
+      "type": "functional",
+      "title": "Pluggable cost unit",
+      "description": "The cost type is an opaque unit-tagged quantity (tokens, currency, GPU-seconds) compared and summed only within the same unit; budgets are declared in a unit and only meters reporting that unit participate in admission against them."
+    },
+    {
+      "id": "137f66b2ef3c",
+      "preq_id": "d0a238fe521f",
+      "type": "functional",
+      "title": "Deferred: run cost aggregation",
+      "description": "Backlog (design edge case 9): roll per-step actuals into run-level and generate-item-level totals with a reporting surface (run summary, machine-readable export). First pass records per-step actuals in the journal without aggregation."
+    }
+  ],
+  "components": [
+    {
+      "id": "3facb0dde740",
+      "name": "MeterInterface",
+      "description": "The Meter interface, the unit-tagged Cost type, the Budget declaration, and the admission decision vocabulary (admit, defer(until), reject). Owns the deferred aggregation seam via the journal's per-step actual records.",
+      "content": "arch_meter_interface.md",
+      "implements": ["58879b841ed4", "a9a5faefadd6", "137f66b2ef3c"]
+    },
+    {
+      "id": "18933d297d21",
+      "name": "EndpointTiers",
+      "description": "The fidelity-tier contracts and reference implementations: exact (tokenizer upper bound), reported (usage-block reader), probe (opaque user command). Tier selection is config per endpoint class.",
+      "content": "arch_endpoint_tiers.md",
+      "implements": ["e3dae1b52167"],
+      "uses": ["3facb0dde740"]
+    },
+    {
+      "id": "b7dd00c764f6",
+      "name": "RateLimitDefer",
+      "description": "Detects rate-limit signals in step failures, extracts the reset time, and converts the failure into a defer(until) decision for the scheduler. Independent of any meter configuration.",
+      "content": "arch_rate_limit_defer.md",
+      "implements": ["06e9d770841f"],
+      "uses": ["3facb0dde740"]
+    }
+  ],
+  "impl_sections": [
+    {
+      "id": "23b4f7de7a47",
+      "name": "Metering hook design",
+      "content": "impl_metering_hooks.md",
+      "describes": ["3facb0dde740", "18933d297d21"]
+    },
+    {
+      "id": "b8cb305f69fa",
+      "name": "Defer algorithm",
+      "content": "impl_defer.md",
+      "describes": ["b7dd00c764f6"]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "b9a3d04731b5",
+      "name": "Admission flow",
+      "description": "Ready step -> estimate(step) via the endpoint's tier -> admission decision (admit / defer(until) / reject) -> step runs -> actual(result) accounting -> budget state; rate-limit failures re-enter as defer(until reset).",
+      "content": "flow_admission.md",
+      "uses": ["3facb0dde740", "18933d297d21", "b7dd00c764f6"]
+    }
+  ],
+  "test_sections": [
+    {
+      "id": "cebbfe0afd4b",
+      "name": "Metering tests",
+      "content": "test_metering.md",
+      "describes": ["3facb0dde740", "18933d297d21", "b7dd00c764f6"]
+    }
+  ]
+}

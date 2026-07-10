@@ -1,0 +1,131 @@
+{
+  "name": "security",
+  "description": "The run-time security surface: binding contributions to the docker run argv (network egress lock, pinned remote gateway, ephemeral per-role identity agent), the credential-delegation interface (broker handles, user-supplied resolver, degraded raw-token mode), and the isolation runtime knob. Every control is enforced from outside the container or is immutable relative to it.",
+  "requirements": [
+    {
+      "id": "6e6d0bb46819",
+      "preq_id": "4ed3587b51f5",
+      "type": "functional",
+      "title": "Network binding egress lock",
+      "description": "A workflow-level network binding attaches each step container to a named internal docker network (no route out) and injects proxy environment (HTTPS_PROXY/HTTP_PROXY pointing at the user's allow-listing egress proxy, NO_PROXY for on-net companion services). The proxy and its allow-list are user-owned companion services faber treats as opaque. Alternative mode: baked nftables rules loaded by a root entrypoint (--cap-add NET_ADMIN) that drops to the non-root agent user."
+    },
+    {
+      "id": "14a0498eb362",
+      "preq_id": "4ed3587b51f5",
+      "type": "functional",
+      "title": "Remote binding pinned gateway",
+      "description": "A remote binding gives the box its only reachable git remote: a gateway URL (e.g. ssh://git@<host>/<path>/<repo>.git) with SSH host-key policy — pinned key (StrictHostKeyChecking=yes, fail closed), TOFU (accept-new, sandbox only, explicit opt-in), or abort when neither is configured. The gateway itself (push validation, credential holding, PR mediation) is a user companion service; faber only sees a git URL."
+    },
+    {
+      "id": "e47a00273f03",
+      "preq_id": "4ed3587b51f5",
+      "type": "functional",
+      "title": "Identity binding role keys",
+      "description": "Each template declares an identity; per step, faber spawns an ephemeral ssh-agent holding exactly one key for that identity, forwards only the socket into the container (-v sock:/ssh-agent, SSH_AUTH_SOCK), and tears the agent down when the step ends. One key per container gives role isolation by construction; the private key never enters the box. Key material acquisition (file key, hardware-resident key) is resolver-supplied; the in-box prelude derives the git signing key from the forwarded agent."
+    },
+    {
+      "id": "0c5bc0f678b7",
+      "preq_id": "eddb5adc5adb",
+      "type": "functional",
+      "title": "Credential broker handles",
+      "description": "API credentials are delegated as handles to out-of-container brokers, per-tool: an ssh-agent socket for keys, a base-URL rewrite to an auth-injecting local proxy for HTTP tokens, or a credential-helper endpoint. The get_token(service) resolver is an opaque user command faber invokes host-side. Degraded mode (explicit opt-in): resolve the raw token host-side and mount it read-only as a tmpfs-backed file (never env), shredded after the run."
+    },
+    {
+      "id": "41bb811a34e8",
+      "preq_id": "932a73dcb170",
+      "type": "functional",
+      "title": "Isolation runtime knob",
+      "description": "An optional per-template or workflow-level runtime setting maps to docker run --runtime (e.g. runsc/gVisor on Linux) for hardened container isolation. Default is the platform runtime; the knob changes only the argv, never the image."
+    },
+    {
+      "id": "0157d30de15f",
+      "preq_id": "eddb5adc5adb",
+      "type": "functional",
+      "title": "Deferred: secret expiry mid-run",
+      "description": "Backlog (design edge case 7): behavior when a delegated credential expires mid-run (OAuth token lapse, forwarded agent socket invalidation) — detection, refresh policy, and whether a step restarts or resumes. First pass treats expiry as ordinary step failure."
+    },
+    {
+      "id": "989ba0fa773c",
+      "preq_id": "4ed3587b51f5",
+      "type": "functional",
+      "title": "Deferred: egress allow-list ownership",
+      "description": "Backlog (design edge case 12): who declares egress allow-list contents per endpoint class (Anthropic vs OpenAI vs local) and where they live — today the allow-list is entirely inside the user's proxy config; the open question is whether templates should declare endpoint needs that faber cross-checks against the proxy."
+    },
+    {
+      "id": "18e9f712c810",
+      "preq_id": "932a73dcb170",
+      "type": "functional",
+      "title": "Deferred: gateless trust boundary",
+      "description": "Backlog (design edge case 13): workflows with no push target (research runs) have nothing for a gateway to validate — define the trust boundary and the durable home for terminal outputs when the remote binding is absent."
+    }
+  ],
+  "components": [
+    {
+      "id": "dae6b6a1caec",
+      "name": "NetworkBinding",
+      "description": "Produces the network portion of the run argv: --network <name>, proxy environment injection, NO_PROXY exemptions for companion services, and the alternative nftables entrypoint mode. Owns the deferred allow-list-ownership seam.",
+      "content": "arch_network_binding.md",
+      "implements": ["6e6d0bb46819", "989ba0fa773c"]
+    },
+    {
+      "id": "ff26f2559558",
+      "name": "RemoteBinding",
+      "description": "Produces the remote portion of the run contract: the gateway git URL exposed to the box and the host-key policy material (pinned key injection or TOFU flag). Owns the deferred gateless-workflow seam.",
+      "content": "arch_remote_binding.md",
+      "implements": ["14a0498eb362", "18e9f712c810"]
+    },
+    {
+      "id": "948717b7fe5b",
+      "name": "IdentityBinding",
+      "description": "The ephemeral ssh-agent lifecycle: spawn with a private socket, load exactly one key for the template's identity via the resolver, contribute the socket mount and SSH_AUTH_SOCK env, and guarantee teardown on step exit.",
+      "content": "arch_identity_binding.md",
+      "implements": ["e47a00273f03"]
+    },
+    {
+      "id": "8608d80a273e",
+      "name": "CredentialBroker",
+      "description": "The credential-delegation interface: handle shapes (socket, endpoint, credential-helper), the opaque get_token resolver invocation, and the degraded raw-token file mount with post-run shredding. Owns the deferred expiry/refresh seam.",
+      "content": "arch_credential_broker.md",
+      "implements": ["0c5bc0f678b7", "0157d30de15f"]
+    },
+    {
+      "id": "1c902a659dfe",
+      "name": "BindingSet",
+      "description": "Composes the per-step binding contributions (network, remote, identity, credentials, runtime knob) into the ordered argv fragment and lifecycle hooks (pre-run setup, post-run teardown) that infra's ContainerRunner consumes.",
+      "content": "arch_binding_set.md",
+      "implements": ["41bb811a34e8"],
+      "uses": ["dae6b6a1caec", "ff26f2559558", "948717b7fe5b", "8608d80a273e"]
+    }
+  ],
+  "impl_sections": [
+    {
+      "id": "7470d11ab96e",
+      "name": "Binding argv contributions",
+      "content": "impl_bindings.md",
+      "describes": ["dae6b6a1caec", "ff26f2559558", "948717b7fe5b", "1c902a659dfe"]
+    },
+    {
+      "id": "1a4b073f905e",
+      "name": "Resolver and handle shapes",
+      "content": "impl_credential_handles.md",
+      "describes": ["8608d80a273e"]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "fcc6a6b16019",
+      "name": "Binding assembly flow",
+      "description": "Config (workflow network + template identity + credential declarations) -> per-binding setup (agent spawn, resolver calls, host-key material) -> BindingSet composition -> ordered argv fragment + teardown hooks -> ContainerRunner.",
+      "content": "flow_binding_assembly.md",
+      "uses": ["dae6b6a1caec", "ff26f2559558", "948717b7fe5b", "8608d80a273e", "1c902a659dfe"]
+    }
+  ],
+  "test_sections": [
+    {
+      "id": "3f4341161bba",
+      "name": "Security binding tests",
+      "content": "test_security_bindings.md",
+      "describes": ["dae6b6a1caec", "ff26f2559558", "948717b7fe5b", "8608d80a273e", "1c902a659dfe"]
+    }
+  ]
+}
