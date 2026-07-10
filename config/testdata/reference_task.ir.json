@@ -1,0 +1,511 @@
+{
+  "ir_version": 1,
+  "workflow": "task",
+  "nodes": [
+    {
+      "id": "task/implement",
+      "kind": "agent",
+      "template": {
+        "name": "implement",
+        "packages": [
+          "git",
+          "openssh",
+          "go",
+          "gopls",
+          "agent-cli"
+        ],
+        "overlay": "./nix/overlay.nix",
+        "identity": "implementer",
+        "resources": {
+          "memory": "8g",
+          "cpus": 4
+        },
+        "skill": "implement",
+        "hooks": {
+          "context": "./hooks/gather-context",
+          "prelude": "./hooks/claim-item",
+          "on_failure": "./hooks/release-item"
+        },
+        "inputs": {
+          "item": {
+            "type": "string",
+            "required": true
+          },
+          "repo": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "output": {
+          "branch": {
+            "type": "string",
+            "required": true
+          },
+          "pr": {
+            "type": "int",
+            "required": true
+          }
+        }
+      },
+      "bindings": {
+        "item": {
+          "kind": "param",
+          "name": "item"
+        },
+        "repo": {
+          "kind": "param",
+          "name": "repo"
+        }
+      }
+    },
+    {
+      "id": "task/merge",
+      "kind": "agent",
+      "template": {
+        "name": "merge",
+        "packages": [
+          "git",
+          "openssh"
+        ],
+        "identity": "merger",
+        "resources": {},
+        "skill": "merge",
+        "hooks": {},
+        "inputs": {
+          "pr": {
+            "type": "int",
+            "required": true
+          },
+          "repo": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "output": {
+          "merged": {
+            "type": "bool",
+            "required": true
+          }
+        }
+      },
+      "bindings": {
+        "repo": {
+          "kind": "param",
+          "name": "repo"
+        }
+      },
+      "when": {
+        "cel": "steps[\"task/review\"].verdict == \"approved\"",
+        "deps": [
+          "task/review"
+        ]
+      }
+    },
+    {
+      "id": "task/review",
+      "kind": "selector",
+      "sel": {
+        "step": "review",
+        "candidates": [
+          "task/review-cycle@3/review",
+          "task/review-cycle@2/review",
+          "task/review-cycle@1/review"
+        ],
+        "exhausted": {
+          "cel": "!(steps[\"task/review-cycle@3/review\"].verdict == \"approved\")",
+          "deps": [
+            "task/review-cycle@3/review"
+          ]
+        }
+      },
+      "bindings": {}
+    },
+    {
+      "id": "task/review-cycle@1/fix",
+      "kind": "agent",
+      "template": {
+        "name": "fix",
+        "packages": [
+          "git",
+          "openssh",
+          "go",
+          "gopls",
+          "agent-cli"
+        ],
+        "overlay": "./nix/overlay.nix",
+        "identity": "implementer",
+        "resources": {},
+        "skill": "fix",
+        "hooks": {
+          "context": "./hooks/fetch-change"
+        },
+        "inputs": {
+          "pr": {
+            "type": "int",
+            "required": true
+          },
+          "repo": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "output": {
+          "status": {
+            "type": "string",
+            "required": true
+          }
+        }
+      },
+      "bindings": {
+        "repo": {
+          "kind": "param",
+          "name": "repo"
+        }
+      },
+      "when": {
+        "cel": "steps[\"task/review-cycle@1/review\"].verdict == \"changes\"",
+        "deps": [
+          "task/review-cycle@1/review"
+        ]
+      }
+    },
+    {
+      "id": "task/review-cycle@1/review",
+      "kind": "agent",
+      "template": {
+        "name": "review",
+        "packages": [
+          "git",
+          "openssh",
+          "go",
+          "agent-cli"
+        ],
+        "overlay": "./nix/overlay.nix",
+        "identity": "reviewer",
+        "resources": {},
+        "skill": "review",
+        "hooks": {
+          "context": "./hooks/fetch-change"
+        },
+        "inputs": {
+          "pr": {
+            "type": "int",
+            "required": true
+          },
+          "repo": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "output": {
+          "verdict": {
+            "type": "string",
+            "required": true,
+            "enum": [
+              "approved",
+              "changes"
+            ]
+          }
+        }
+      },
+      "bindings": {
+        "repo": {
+          "kind": "param",
+          "name": "repo"
+        }
+      }
+    },
+    {
+      "id": "task/review-cycle@2/fix",
+      "kind": "agent",
+      "template": {
+        "name": "fix",
+        "packages": [
+          "git",
+          "openssh",
+          "go",
+          "gopls",
+          "agent-cli"
+        ],
+        "overlay": "./nix/overlay.nix",
+        "identity": "implementer",
+        "resources": {},
+        "skill": "fix",
+        "hooks": {
+          "context": "./hooks/fetch-change"
+        },
+        "inputs": {
+          "pr": {
+            "type": "int",
+            "required": true
+          },
+          "repo": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "output": {
+          "status": {
+            "type": "string",
+            "required": true
+          }
+        }
+      },
+      "bindings": {
+        "repo": {
+          "kind": "param",
+          "name": "repo"
+        }
+      },
+      "when": {
+        "cel": "!(steps[\"task/review-cycle@1/review\"].verdict == \"approved\") && (steps[\"task/review-cycle@2/review\"].verdict == \"changes\")",
+        "deps": [
+          "task/review-cycle@1/review",
+          "task/review-cycle@2/review"
+        ]
+      }
+    },
+    {
+      "id": "task/review-cycle@2/review",
+      "kind": "agent",
+      "template": {
+        "name": "review",
+        "packages": [
+          "git",
+          "openssh",
+          "go",
+          "agent-cli"
+        ],
+        "overlay": "./nix/overlay.nix",
+        "identity": "reviewer",
+        "resources": {},
+        "skill": "review",
+        "hooks": {
+          "context": "./hooks/fetch-change"
+        },
+        "inputs": {
+          "pr": {
+            "type": "int",
+            "required": true
+          },
+          "repo": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "output": {
+          "verdict": {
+            "type": "string",
+            "required": true,
+            "enum": [
+              "approved",
+              "changes"
+            ]
+          }
+        }
+      },
+      "bindings": {
+        "repo": {
+          "kind": "param",
+          "name": "repo"
+        }
+      },
+      "when": {
+        "cel": "!(steps[\"task/review-cycle@1/review\"].verdict == \"approved\")",
+        "deps": [
+          "task/review-cycle@1/review"
+        ]
+      }
+    },
+    {
+      "id": "task/review-cycle@3/fix",
+      "kind": "agent",
+      "template": {
+        "name": "fix",
+        "packages": [
+          "git",
+          "openssh",
+          "go",
+          "gopls",
+          "agent-cli"
+        ],
+        "overlay": "./nix/overlay.nix",
+        "identity": "implementer",
+        "resources": {},
+        "skill": "fix",
+        "hooks": {
+          "context": "./hooks/fetch-change"
+        },
+        "inputs": {
+          "pr": {
+            "type": "int",
+            "required": true
+          },
+          "repo": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "output": {
+          "status": {
+            "type": "string",
+            "required": true
+          }
+        }
+      },
+      "bindings": {
+        "repo": {
+          "kind": "param",
+          "name": "repo"
+        }
+      },
+      "when": {
+        "cel": "!(steps[\"task/review-cycle@2/review\"].verdict == \"approved\") && (steps[\"task/review-cycle@3/review\"].verdict == \"changes\")",
+        "deps": [
+          "task/review-cycle@2/review",
+          "task/review-cycle@3/review"
+        ]
+      }
+    },
+    {
+      "id": "task/review-cycle@3/review",
+      "kind": "agent",
+      "template": {
+        "name": "review",
+        "packages": [
+          "git",
+          "openssh",
+          "go",
+          "agent-cli"
+        ],
+        "overlay": "./nix/overlay.nix",
+        "identity": "reviewer",
+        "resources": {},
+        "skill": "review",
+        "hooks": {
+          "context": "./hooks/fetch-change"
+        },
+        "inputs": {
+          "pr": {
+            "type": "int",
+            "required": true
+          },
+          "repo": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "output": {
+          "verdict": {
+            "type": "string",
+            "required": true,
+            "enum": [
+              "approved",
+              "changes"
+            ]
+          }
+        }
+      },
+      "bindings": {
+        "repo": {
+          "kind": "param",
+          "name": "repo"
+        }
+      },
+      "when": {
+        "cel": "!(steps[\"task/review-cycle@2/review\"].verdict == \"approved\")",
+        "deps": [
+          "task/review-cycle@2/review"
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "task/implement",
+      "from_port": "pr",
+      "to": "task/merge",
+      "to_port": "pr"
+    },
+    {
+      "from": "task/review-cycle@1/review",
+      "to": "task/review"
+    },
+    {
+      "from": "task/review-cycle@2/review",
+      "to": "task/review"
+    },
+    {
+      "from": "task/review-cycle@3/review",
+      "to": "task/review"
+    },
+    {
+      "from": "task/implement",
+      "from_port": "pr",
+      "to": "task/review-cycle@1/fix",
+      "to_port": "pr"
+    },
+    {
+      "from": "task/implement",
+      "from_port": "pr",
+      "to": "task/review-cycle@1/review",
+      "to_port": "pr"
+    },
+    {
+      "from": "task/review-cycle@1/fix",
+      "to": "task/review-cycle@2/fix"
+    },
+    {
+      "from": "task/review-cycle@1/review",
+      "to": "task/review-cycle@2/fix"
+    },
+    {
+      "from": "task/implement",
+      "from_port": "pr",
+      "to": "task/review-cycle@2/fix",
+      "to_port": "pr"
+    },
+    {
+      "from": "task/review-cycle@1/fix",
+      "to": "task/review-cycle@2/review"
+    },
+    {
+      "from": "task/review-cycle@1/review",
+      "to": "task/review-cycle@2/review"
+    },
+    {
+      "from": "task/implement",
+      "from_port": "pr",
+      "to": "task/review-cycle@2/review",
+      "to_port": "pr"
+    },
+    {
+      "from": "task/review-cycle@2/fix",
+      "to": "task/review-cycle@3/fix"
+    },
+    {
+      "from": "task/review-cycle@2/review",
+      "to": "task/review-cycle@3/fix"
+    },
+    {
+      "from": "task/implement",
+      "from_port": "pr",
+      "to": "task/review-cycle@3/fix",
+      "to_port": "pr"
+    },
+    {
+      "from": "task/review-cycle@2/fix",
+      "to": "task/review-cycle@3/review"
+    },
+    {
+      "from": "task/review-cycle@2/review",
+      "to": "task/review-cycle@3/review"
+    },
+    {
+      "from": "task/implement",
+      "from_port": "pr",
+      "to": "task/review-cycle@3/review",
+      "to_port": "pr"
+    }
+  ]
+}

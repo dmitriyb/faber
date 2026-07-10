@@ -1,0 +1,129 @@
+version: 1
+
+# Workflow-level bindings: the wiring seam is a named docker network.
+network:
+  name: agents-internal
+  proxy: http://egress:8888
+  no_proxy: [gateway, localhost, 127.0.0.1]
+
+remote:
+  url: ssh://git@gateway/srv/git
+  host_key_file: ./keys/gateway_host_key.pub
+
+credentials:
+  resolver: ./hooks/get-token
+  services:
+    agent-api:
+      mode: file
+
+identities:
+  implementer: {key: ./keys/implementer}
+  reviewer:    {key: ./keys/reviewer}
+  merger:      {key: ./keys/merger}
+
+templates:
+  implement:
+    build:
+      packages: [git, openssh, go, gopls, agent-cli]
+      overlay: ./nix/overlay.nix
+    run:
+      identity: implementer
+      resources: {memory: 8g, cpus: 4}
+    skill: implement
+    hooks:
+      context: ./hooks/gather-context
+      prelude: ./hooks/claim-item
+      on_failure: ./hooks/release-item
+    inputs:
+      repo: {type: string, required: true}
+      item: {type: string, required: true}
+    output:
+      branch: {type: string, required: true}
+      pr:     {type: int,    required: true}
+
+  review:
+    build:
+      packages: [git, openssh, go, agent-cli]
+      overlay: ./nix/overlay.nix
+    run:
+      identity: reviewer
+    skill: review
+    hooks:
+      context: ./hooks/fetch-change
+    inputs:
+      repo: {type: string, required: true}
+      pr:   {type: int,    required: true}
+    output:
+      verdict: {type: string, enum: [approved, changes], required: true}
+
+  fix:
+    build:
+      packages: [git, openssh, go, gopls, agent-cli]
+      overlay: ./nix/overlay.nix
+    run:
+      identity: implementer
+    skill: fix
+    hooks:
+      context: ./hooks/fetch-change
+    inputs:
+      repo: {type: string, required: true}
+      pr:   {type: int,    required: true}
+    output:
+      status: {type: string, required: true}
+
+  merge:
+    build:
+      packages: [git, openssh]
+    run:
+      identity: merger
+    skill: merge
+    inputs:
+      repo: {type: string, required: true}
+      pr:   {type: int,    required: true}
+    output:
+      merged: {type: bool, required: true}
+
+workflows:
+  # One work item: implement -> (review; fix)* until approved -> merge.
+  task:
+    params:
+      repo: {type: string, required: true}
+      item: {type: string, required: true}
+    steps:
+      - id: implement
+        use: implement
+        with: {repo: "${params.repo}", item: "${params.item}"}
+
+      - id: review-cycle
+        loop:
+          max: 3
+          until: steps.review.verdict == "approved"
+          steps:
+            - id: review
+              use: review
+              with: {repo: "${params.repo}", pr: "${steps.implement.pr}"}
+            - id: fix
+              use: fix
+              when: steps.review.verdict == "changes"
+              with: {repo: "${params.repo}", pr: "${steps.implement.pr}"}
+
+      - id: merge
+        use: merge
+        when: steps.review.verdict == "approved"
+        with: {repo: "${params.repo}", pr: "${steps.implement.pr}"}
+
+  # A group of work items: fan the task workflow out over a data source.
+  epic:
+    params:
+      repo: {type: string, required: true}
+      group: {type: string, required: true}
+    sources:
+      members:
+        command: ./hooks/list-members
+        args: ["${params.group}"]
+    steps:
+      - id: tasks
+        generate:
+          source: members
+          workflow: task
+          with: {repo: "${params.repo}", item: "${item.id}"}

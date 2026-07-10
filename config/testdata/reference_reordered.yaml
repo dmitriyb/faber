@@ -1,0 +1,128 @@
+# Same configuration as reference.yaml with mapping keys in a different order
+# and different comments — the desugared IR must be byte-identical.
+workflows:
+  epic:
+    sources:
+      members:
+        args: ["${params.group}"]
+        command: ./hooks/list-members
+    params:
+      group: {required: true, type: string}
+      repo: {required: true, type: string}
+    steps:
+      - generate:
+          workflow: task
+          with: {item: "${item.id}", repo: "${params.repo}"}
+          source: members
+        id: tasks
+
+  task:
+    steps:
+      - use: implement
+        id: implement
+        with: {item: "${params.item}", repo: "${params.repo}"}
+
+      - loop:
+          until: steps.review.verdict == "approved"
+          steps:
+            - with: {pr: "${steps.implement.pr}", repo: "${params.repo}"}
+              id: review
+              use: review
+            - when: steps.review.verdict == "changes"
+              id: fix
+              use: fix
+              with: {pr: "${steps.implement.pr}", repo: "${params.repo}"}
+          max: 3
+        id: review-cycle
+
+      - when: steps.review.verdict == "approved"
+        with: {pr: "${steps.implement.pr}", repo: "${params.repo}"}
+        id: merge
+        use: merge
+    params:
+      item: {required: true, type: string}
+      repo: {required: true, type: string}
+
+templates:
+  merge:
+    inputs:
+      pr:   {type: int,    required: true}
+      repo: {type: string, required: true}
+    output:
+      merged: {type: bool, required: true}
+    run:
+      identity: merger
+    skill: merge
+    build:
+      packages: [git, openssh]
+
+  fix:
+    skill: fix
+    run:
+      identity: implementer
+    inputs:
+      pr:   {required: true, type: int}
+      repo: {required: true, type: string}
+    hooks:
+      context: ./hooks/fetch-change
+    output:
+      status: {type: string, required: true}
+    build:
+      overlay: ./nix/overlay.nix
+      packages: [git, openssh, go, gopls, agent-cli]
+
+  review:
+    output:
+      verdict: {enum: [approved, changes], required: true, type: string}
+    inputs:
+      pr:   {type: int,    required: true}
+      repo: {type: string, required: true}
+    hooks:
+      context: ./hooks/fetch-change
+    skill: review
+    run:
+      identity: reviewer
+    build:
+      packages: [git, openssh, go, agent-cli]
+      overlay: ./nix/overlay.nix
+
+  implement:
+    output:
+      pr:     {type: int,    required: true}
+      branch: {type: string, required: true}
+    inputs:
+      item: {type: string, required: true}
+      repo: {type: string, required: true}
+    hooks:
+      on_failure: ./hooks/release-item
+      prelude: ./hooks/claim-item
+      context: ./hooks/gather-context
+    skill: implement
+    run:
+      resources: {cpus: 4, memory: 8g}
+      identity: implementer
+    build:
+      overlay: ./nix/overlay.nix
+      packages: [git, openssh, go, gopls, agent-cli]
+
+identities:
+  merger:      {key: ./keys/merger}
+  reviewer:    {key: ./keys/reviewer}
+  implementer: {key: ./keys/implementer}
+
+credentials:
+  services:
+    agent-api:
+      mode: file
+  resolver: ./hooks/get-token
+
+remote:
+  host_key_file: ./keys/gateway_host_key.pub
+  url: ssh://git@gateway/srv/git
+
+network:
+  no_proxy: [gateway, localhost, 127.0.0.1]
+  proxy: http://egress:8888
+  name: agents-internal
+
+version: 1
