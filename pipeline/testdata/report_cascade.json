@@ -1,0 +1,220 @@
+{
+  "run": {
+    "run_id": "run-test",
+    "workflow": "epic",
+    "config_hash": "cfg-hash",
+    "ir_hash": "1b45ec9203e584cd12b01647501f4b8872bf02cad8e6ce6a21084f0611036e86",
+    "totals": {
+      "ok": 5,
+      "failed": 1,
+      "skipped_condition": 5,
+      "skipped_dependency": 17,
+      "absent": 0
+    },
+    "wall": "2s",
+    "journal": "runs/run-test/journal.jsonl"
+  },
+  "steps": [
+    {
+      "id": "epic/tasks",
+      "status": "ok",
+      "attempts": 1,
+      "outputs": {
+        "count": 3,
+        "ids": [
+          "I-1",
+          "I-2",
+          "I-3"
+        ]
+      }
+    }
+  ],
+  "generate": [
+    {
+      "node": "epic/tasks",
+      "summary": "3 items: 1 ok, 1 failed, 1 skipped",
+      "items": [
+        {
+          "id": "I-1",
+          "status": "failed",
+          "duration": "1s",
+          "ok": 0,
+          "failed": 1,
+          "skipped": 8,
+          "steps": [
+            {
+              "id": "epic/tasks[I-1]/implement",
+              "status": "failed",
+              "duration": "1s",
+              "attempts": 1,
+              "error": {
+                "reason": "agent",
+                "detail": "box died"
+              }
+            },
+            {
+              "id": "epic/tasks[I-1]/merge",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-1]/review",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-1]/review-cycle@1/fix",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-1]/review-cycle@1/review",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-1]/review-cycle@2/fix",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-1]/review-cycle@2/review",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-1]/review-cycle@3/fix",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-1]/review-cycle@3/review",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            }
+          ]
+        },
+        {
+          "id": "I-2",
+          "status": "ok",
+          "duration": "2s",
+          "ok": 4,
+          "failed": 0,
+          "skipped": 5,
+          "steps": [
+            {
+              "id": "epic/tasks[I-2]/implement",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "branch": "work/x",
+                "pr": 17
+              }
+            },
+            {
+              "id": "epic/tasks[I-2]/merge",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "status": "done"
+              }
+            },
+            {
+              "id": "epic/tasks[I-2]/review",
+              "status": "ok",
+              "attempts": 1,
+              "outputs": {
+                "verdict": "approved"
+              }
+            },
+            {
+              "id": "epic/tasks[I-2]/review-cycle@1/fix",
+              "status": "skipped-condition"
+            },
+            {
+              "id": "epic/tasks[I-2]/review-cycle@1/review",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "verdict": "approved"
+              }
+            },
+            {
+              "id": "epic/tasks[I-2]/review-cycle@2/fix",
+              "status": "skipped-condition"
+            },
+            {
+              "id": "epic/tasks[I-2]/review-cycle@2/review",
+              "status": "skipped-condition"
+            },
+            {
+              "id": "epic/tasks[I-2]/review-cycle@3/fix",
+              "status": "skipped-condition"
+            },
+            {
+              "id": "epic/tasks[I-2]/review-cycle@3/review",
+              "status": "skipped-condition"
+            }
+          ]
+        },
+        {
+          "id": "I-3",
+          "status": "skipped-dependency",
+          "ok": 0,
+          "failed": 0,
+          "skipped": 9,
+          "steps": [
+            {
+              "id": "epic/tasks[I-3]/implement",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-3]/merge",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-3]/review",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-3]/review-cycle@1/fix",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-3]/review-cycle@1/review",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-3]/review-cycle@2/fix",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-3]/review-cycle@2/review",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-3]/review-cycle@3/fix",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            },
+            {
+              "id": "epic/tasks[I-3]/review-cycle@3/review",
+              "status": "skipped-dependency",
+              "ancestor": "epic/tasks[I-1]/implement"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
