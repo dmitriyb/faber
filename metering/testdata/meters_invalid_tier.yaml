@@ -1,0 +1,4 @@
+endpoints:
+  endpoint-a:
+    tier: fuzzy
+    unit: tokens

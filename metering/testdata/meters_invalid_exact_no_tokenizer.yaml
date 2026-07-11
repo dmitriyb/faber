@@ -1,0 +1,4 @@
+endpoints:
+  endpoint-a:
+    tier: exact
+    unit: tokens

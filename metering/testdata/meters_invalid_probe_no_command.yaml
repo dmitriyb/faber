@@ -1,0 +1,5 @@
+endpoints:
+  endpoint-a:
+    tier: probe
+    probe:
+      threshold: 0.9

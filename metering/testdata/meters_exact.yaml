@@ -1,0 +1,6 @@
+endpoints:
+  endpoint-a:
+    tier: exact
+    unit: tokens
+    tokenizer: {command: ./hooks/tokenize, max_output: 8192}
+    fields: {prompt_tokens: tokens, completion_tokens: tokens}
