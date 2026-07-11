@@ -98,6 +98,14 @@ func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, err
 	return res, nil
 }
 
+// RunArgs exposes the assembled docker run argv for the one caller that
+// cannot go through Run: the integration wiring's interactive TTY variant,
+// which must attach the operator's terminal. Argv construction still lives
+// only here.
+func RunArgs(spec RunSpec) []string {
+	return buildArgs(spec)
+}
+
 // buildArgs assembles the docker run argv in the fixed, golden-testable
 // order: rm/name, resource limits, engine mounts, engine env (sorted keys),
 // the binding fragment spliced verbatim (never parsed, reordered, or

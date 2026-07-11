@@ -1,0 +1,3 @@
+#!/bin/sh
+# opaque user hook (placeholder for the acceptance sandbox)
+exit 1

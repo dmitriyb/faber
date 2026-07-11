@@ -41,6 +41,16 @@ type RunOptions struct {
 	MaxParallel     int
 	Budgets         map[string]float64
 	MeteringPath    string
+
+	// Wiring context: the CLI fills these so the integration-level Executor
+	// can assemble per-run capabilities (journal header identity, security
+	// bindings, generate targets) without re-reading or re-validating the
+	// YAML. The executor core never reads Config — only the cmd wiring does.
+	ConfigPath string
+	Workflow   string
+	Supplied   map[string]string // the --param k=v bindings as given
+	Targets    map[string]*IR    // desugared, wiring-checked IRs of every reachable workflow
+	Config     *Config           // the loaded, validated config
 }
 
 // Executor executes a validated IR (pipeline module).
@@ -290,18 +300,21 @@ func cmdRun(args []string, stderr io.Writer, deps Deps) int {
 		return 2
 	}
 
-	cfg, ir, params, code := runEntry(common.config, workflow, supplied, stderr)
+	cfg, ir, targets, params, code := runEntry(common.config, workflow, supplied, stderr)
 	if code != 0 {
 		return code
 	}
-	_ = cfg
 	if deps.Executor == nil {
 		fmt.Fprintln(stderr, "faber run: execution requires the pipeline module, which is not wired into this binary yet (validation passed)")
 		return 1
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	opts := RunOptions{MaxParallel: *maxParallel, Budgets: budgets, MeteringPath: *metering}
+	opts := RunOptions{
+		MaxParallel: *maxParallel, Budgets: budgets, MeteringPath: *metering,
+		ConfigPath: common.config, Workflow: workflow, Supplied: supplied,
+		Targets: targets, Config: cfg,
+	}
 	if err := deps.Executor.Execute(ctx, ir, params, opts, logger.With("component", "pipeline")); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -313,23 +326,24 @@ func cmdRun(args []string, stderr io.Writer, deps Deps) int {
 // the entry workflow and everything reachable from it, then run-entry param
 // checking. There is no code path that executes an IR that did not just pass
 // full validation in the same process.
-func runEntry(configPath, workflow string, supplied map[string]string, stderr io.Writer) (*Config, *IR, Params, int) {
+func runEntry(configPath, workflow string, supplied map[string]string, stderr io.Writer) (*Config, *IR, map[string]*IR, Params, int) {
 	cfg, err := Load(configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return nil, nil, nil, 1
+		return nil, nil, nil, nil, 1
 	}
 	if err := Validate(cfg); err != nil {
 		fmt.Fprintln(stderr, err)
-		return nil, nil, nil, 1
+		return nil, nil, nil, nil, 1
 	}
 	wf, ok := cfg.Workflows[workflow]
 	if !ok {
 		fmt.Fprintf(stderr, "faber run: unknown workflow %q\n", workflow)
-		return nil, nil, nil, 1
+		return nil, nil, nil, nil, 1
 	}
 	var errs []error
 	var entryIR *IR
+	targets := map[string]*IR{}
 	for _, name := range reachableWorkflows(cfg, workflow) {
 		ir, derr := Desugar(cfg, name)
 		if derr != nil {
@@ -340,20 +354,21 @@ func runEntry(configPath, workflow string, supplied map[string]string, stderr io
 			errs = append(errs, werr)
 			continue
 		}
+		targets[name] = ir
 		if name == workflow {
 			entryIR = ir
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		fmt.Fprintln(stderr, err)
-		return nil, nil, nil, 1
+		return nil, nil, nil, nil, 1
 	}
 	params, err := CheckRunParams(wf, supplied)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return nil, nil, nil, 1
+		return nil, nil, nil, nil, 1
 	}
-	return cfg, entryIR, params, 0
+	return cfg, entryIR, targets, params, 0
 }
 
 func cmdResume(args []string, stderr io.Writer, deps Deps) int {
@@ -387,11 +402,10 @@ func cmdResume(args []string, stderr io.Writer, deps Deps) int {
 	}
 
 	// Re-derive config path, workflow, and params from the journal header.
-	cfg, ir, params, code := runEntry(header.ConfigPath, header.Workflow, header.Params, stderr)
+	cfg, ir, targets, params, code := runEntry(header.ConfigPath, header.Workflow, header.Params, stderr)
 	if code != 0 {
 		return code
 	}
-	_ = cfg
 	hash, err := HashIR(ir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -415,7 +429,11 @@ func cmdResume(args []string, stderr io.Writer, deps Deps) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	opts := RunOptions{RunID: runID, Mode: mode, InteractiveStep: *interactive}
+	opts := RunOptions{
+		RunID: runID, Mode: mode, InteractiveStep: *interactive,
+		ConfigPath: header.ConfigPath, Workflow: header.Workflow, Supplied: header.Params,
+		Targets: targets, Config: cfg,
+	}
 	if err := deps.Executor.Execute(ctx, ir, params, opts, logger.With("component", "pipeline")); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
