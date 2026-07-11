@@ -21,11 +21,16 @@ type Config struct {
 	Workflows   map[string]WorkflowDef `yaml:"workflows,omitempty"`
 }
 
-// NetworkDef is the workflow-level network binding (name, proxy, no_proxy).
+// NetworkDef is the workflow-level network binding. Exactly one egress mode
+// must be set when a network is configured: Proxy (the allow-listing egress
+// proxy) or Nftables (the baked in-image rule set, whose root entrypoint
+// needs NET_ADMIN). Making the choice explicit means a capability grant can
+// never happen by omission.
 type NetworkDef struct {
-	Name    string   `yaml:"name,omitempty"`
-	Proxy   string   `yaml:"proxy,omitempty"`
-	NoProxy []string `yaml:"no_proxy,omitempty"`
+	Name     string   `yaml:"name,omitempty"`
+	Proxy    string   `yaml:"proxy,omitempty"`
+	NoProxy  []string `yaml:"no_proxy,omitempty"`
+	Nftables bool     `yaml:"nftables,omitempty"`
 }
 
 // RemoteDef is the gateway URL prefix plus host-key policy. Exactly one of
