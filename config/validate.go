@@ -20,6 +20,12 @@ func (e *FieldError) Error() string { return e.Path + ": " + e.Msg }
 // serviceModes is the closed set of credential handle modes.
 var serviceModes = map[string]bool{"proxy": true, "file": true, "helper": true}
 
+// serviceNamePattern is the closed charset for credential service names: they
+// are embedded in env-var names, mount specs, and /run/secrets paths, so
+// anything outside it (':', '=', '/', spaces) must fail at load, not as an
+// opaque docker error mid-run.
+var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
 var memoryPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[bkmgBKMG]?$`)
 
 // Validate runs every schema-level check that can be phrased against the YAML
@@ -31,6 +37,7 @@ var memoryPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[bkmgBKMG]?$`)
 func Validate(cfg *Config) error {
 	v := &validator{cfg: cfg}
 	v.checkVersion()
+	v.checkNetwork()
 	v.checkRemote()
 	v.checkCredentials()
 	v.checkNameDiscipline()
@@ -54,6 +61,26 @@ func (v *validator) checkVersion() {
 	}
 }
 
+// checkNetwork enforces that a configured network section names its network
+// (an unnamed section would silently run steps on the default bridge with
+// unrestricted egress) and declares exactly one egress mode — proxy or
+// nftables — so NET_ADMIN is never granted by omission.
+func (v *validator) checkNetwork() {
+	n := v.cfg.Network
+	if n.Name == "" && n.Proxy == "" && len(n.NoProxy) == 0 && !n.Nftables {
+		return // network section absent
+	}
+	if n.Name == "" {
+		v.addf("network.name", "required when a network is configured")
+	}
+	if n.Proxy != "" && n.Nftables {
+		v.addf("network", "exactly one of proxy / nftables must be set (both given)")
+	}
+	if n.Proxy == "" && !n.Nftables {
+		v.addf("network", "exactly one of proxy / nftables must be set (neither given)")
+	}
+}
+
 func (v *validator) checkRemote() {
 	r := v.cfg.Remote
 	if r.URL == "" && r.HostKeyFile == "" && !r.TOFU {
@@ -73,6 +100,9 @@ func (v *validator) checkRemote() {
 func (v *validator) checkCredentials() {
 	for _, name := range sortedKeys(v.cfg.Credentials.Services) {
 		svc := v.cfg.Credentials.Services[name]
+		if !serviceNamePattern.MatchString(name) {
+			v.addf("credentials.services."+name, "invalid service name (must match %s)", serviceNamePattern)
+		}
 		if !serviceModes[svc.Mode] {
 			v.addf("credentials.services."+name+".mode", "unknown mode %q (legal: proxy, file, helper)", svc.Mode)
 		}

@@ -180,6 +180,44 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 			},
 			"templates.box: name collides with a workflow",
 		},
+		{
+			// Verifies 6e6d0bb46819: the egress lock cannot fail open — a
+			// network section without a name would silently run steps on the
+			// default bridge.
+			"network section without a name",
+			func(c *Config) {
+				c.Network = NetworkDef{Proxy: "http://egress:8888"}
+			},
+			"network.name: required when a network is configured",
+		},
+		{
+			// Verifies 6e6d0bb46819: the two egress modes are mutually
+			// exclusive.
+			"network with both proxy and nftables",
+			func(c *Config) {
+				c.Network = NetworkDef{Name: "agents-internal", Proxy: "http://egress:8888", Nftables: true}
+			},
+			"network: exactly one of proxy / nftables must be set (both given)",
+		},
+		{
+			// Verifies 6e6d0bb46819: the egress mode must be chosen
+			// explicitly — NET_ADMIN is never granted by omission.
+			"network with neither proxy nor nftables",
+			func(c *Config) {
+				c.Network = NetworkDef{Name: "agents-internal"}
+			},
+			"network: exactly one of proxy / nftables must be set (neither given)",
+		},
+		{
+			// Verifies 0c5bc0f678b7: service names feed env-var names, -v
+			// mount specs, and /run/secrets paths; a hostile charset must
+			// fail at load, not as an opaque docker error mid-run.
+			"credential service name outside the closed charset",
+			func(c *Config) {
+				c.Credentials = CredentialsDef{Resolver: "./hooks/get-token", Services: map[string]ServiceDef{"tok:ro": {Mode: "file"}}}
+			},
+			"credentials.services.tok:ro: invalid service name",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
