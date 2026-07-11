@@ -1,0 +1,11 @@
+endpoints:
+  endpoint-a:
+    tier: exact
+    unit: tokens
+    tokenizer: {command: ./hooks/tokenize, max_output: 4096}
+    fields: {total: tokens}
+    templates: [step-a]
+  endpoint-b:
+    tier: reported
+    unit: usd-cents
+    fields: {billed_cents: usd-cents}

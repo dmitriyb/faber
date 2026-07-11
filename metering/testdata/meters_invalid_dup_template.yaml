@@ -1,0 +1,11 @@
+endpoints:
+  endpoint-a:
+    tier: reported
+    unit: tokens
+    fields: {input_tokens: tokens}
+    templates: [step-a]
+  endpoint-b:
+    tier: reported
+    unit: tokens
+    fields: {input_tokens: tokens}
+    templates: [step-a]

@@ -1,0 +1,6 @@
+endpoints:
+  endpoint-a:
+    tier: exact
+    unit: tokens
+    tokenizer: {command: ./hooks/tokenize, max_output: 100}
+    fields: {billed_cents: usd-cents}

@@ -1,0 +1,6 @@
+endpoints:
+  endpoint-a:
+    tier: reported
+    unit: tokens
+    fields: {input_tokens: tokens}
+    thresold: 0.9
