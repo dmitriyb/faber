@@ -1,0 +1,97 @@
+{
+  "run": {
+    "run_id": "run-test",
+    "workflow": "task",
+    "config_hash": "cfg-hash",
+    "ir_hash": "078cf8750adcdb610316798d5a65b093f839179e9697f98e299348affc6827f6",
+    "totals": {
+      "ok": 7,
+      "failed": 1,
+      "skipped_condition": 0,
+      "skipped_dependency": 1,
+      "absent": 0
+    },
+    "wall": "2s",
+    "journal": "runs/run-test/journal.jsonl"
+  },
+  "steps": [
+    {
+      "id": "task/implement",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "branch": "work/x",
+        "pr": 17
+      }
+    },
+    {
+      "id": "task/merge",
+      "status": "skipped-dependency",
+      "ancestor": "task/review"
+    },
+    {
+      "id": "task/review",
+      "status": "failed",
+      "attempts": 1,
+      "error": {
+        "reason": "loop-exhausted",
+        "detail": "all 3 iterations of step \"review\" executed without the loop's until condition settling"
+      }
+    },
+    {
+      "id": "task/review-cycle@1/fix",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "status": "pushed"
+      }
+    },
+    {
+      "id": "task/review-cycle@1/review",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "verdict": "changes"
+      }
+    },
+    {
+      "id": "task/review-cycle@2/fix",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "status": "pushed"
+      }
+    },
+    {
+      "id": "task/review-cycle@2/review",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "verdict": "changes"
+      }
+    },
+    {
+      "id": "task/review-cycle@3/fix",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "status": "pushed"
+      }
+    },
+    {
+      "id": "task/review-cycle@3/review",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "verdict": "changes"
+      }
+    }
+  ]
+}

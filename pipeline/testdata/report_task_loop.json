@@ -1,0 +1,86 @@
+{
+  "run": {
+    "run_id": "run-test",
+    "workflow": "task",
+    "config_hash": "cfg-hash",
+    "ir_hash": "078cf8750adcdb610316798d5a65b093f839179e9697f98e299348affc6827f6",
+    "totals": {
+      "ok": 6,
+      "failed": 0,
+      "skipped_condition": 3,
+      "skipped_dependency": 0,
+      "absent": 0
+    },
+    "wall": "2s",
+    "journal": "runs/run-test/journal.jsonl"
+  },
+  "steps": [
+    {
+      "id": "task/implement",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "branch": "work/x",
+        "pr": 17
+      }
+    },
+    {
+      "id": "task/merge",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "merged": "yes"
+      }
+    },
+    {
+      "id": "task/review",
+      "status": "ok",
+      "attempts": 1,
+      "outputs": {
+        "verdict": "approved"
+      },
+      "chose": "task/review-cycle@2/review"
+    },
+    {
+      "id": "task/review-cycle@1/fix",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "status": "pushed"
+      }
+    },
+    {
+      "id": "task/review-cycle@1/review",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "verdict": "changes"
+      }
+    },
+    {
+      "id": "task/review-cycle@2/fix",
+      "status": "skipped-condition"
+    },
+    {
+      "id": "task/review-cycle@2/review",
+      "status": "ok",
+      "duration": "2s",
+      "attempts": 1,
+      "outputs": {
+        "verdict": "approved"
+      }
+    },
+    {
+      "id": "task/review-cycle@3/fix",
+      "status": "skipped-condition"
+    },
+    {
+      "id": "task/review-cycle@3/review",
+      "status": "skipped-condition"
+    }
+  ]
+}
