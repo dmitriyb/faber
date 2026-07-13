@@ -16,17 +16,20 @@ acceptance environment only.
 
 ## Scenarios
 
-1. **Golden argv.** A fully populated RunSpec (limits, both engine mounts,
-   three env keys, a representative binding fragment containing `--network`,
-   an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a `:ro` secret mount, and
-   `--runtime`) assembles to the golden argv byte-for-byte: fixed section
-   order, sorted env, the fragment contiguous and verbatim at its slot,
-   image then entry argv last.
+1. **Golden argv.** A fully populated RunSpec (limits, every engine mount kind —
+   a result bind rw, `:ro` hook + entry binds, a `/workspace` volume, a `/tmp`
+   tmpfs — three env keys, a representative binding fragment containing
+   `--network`, an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a `:ro` secret
+   mount, and `--runtime`) assembles to the golden argv byte-for-byte: fixed
+   section order, a bind as `-v Host:Container[:ro]`, a volume as bare
+   `-v Container`, a tmpfs as `--tmpfs Container`, sorted env, the fragment
+   contiguous and verbatim at its slot, image then entry argv last.
 2. **Argv discipline (property).** Over randomized RunSpecs (fuzzed env,
    mounts, fragments), the assembled argv never contains a docker-socket
-   mount, `--privileged`, `--network=host`, or any `-v` not present in the
-   spec's mounts or fragment; `--rm` and `--name` are always present;
-   declared memory/cpus always surface as flags, absent resources emit none.
+   mount, `--privileged`, `--user`, `--network=host`, or any `-v`/`--tmpfs` not
+   present in the spec's mounts or fragment; `--rm` and `--name` are always
+   present; declared memory/cpus always surface as flags, absent resources emit
+   none.
 3. **Tag determinism.** Same packages shuffled → identical tag; one package
    added, one overlay byte changed, or the pin rev bumped → different tag;
    the tag is computed with zero adapter calls (pure, no nix).

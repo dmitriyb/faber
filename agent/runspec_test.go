@@ -7,6 +7,7 @@ import (
 
 	"github.com/dmitriyb/faber/agent/contract"
 	"github.com/dmitriyb/faber/config"
+	"github.com/dmitriyb/faber/infra"
 )
 
 func testTemplate() *config.ResolvedTemplate {
@@ -77,17 +78,28 @@ func TestBuildRunSpecContract(t *testing.T) {
 	}
 	var mounts []string
 	for _, m := range rs.Mounts {
-		ro := ""
-		if m.ReadOnly {
-			ro = ":ro"
+		switch m.Kind {
+		case infra.KindTmpfs:
+			mounts = append(mounts, "tmpfs:"+m.Container)
+		case infra.KindVolume:
+			mounts = append(mounts, "vol:"+m.Container)
+		default:
+			ro := ""
+			if m.ReadOnly {
+				ro = ":ro"
+			}
+			mounts = append(mounts, m.Host+":"+m.Container+ro)
 		}
-		mounts = append(mounts, m.Host+":"+m.Container+ro)
 	}
 	want := []string{
 		"/host/results/task-implement:" + contract.ContainerResultDir,
 		"/host/bin/faber-box:" + contract.ContainerEntry + ":ro",
 		"/host/hooks/ctx:" + contract.ContainerHooksDir + "/" + contract.HookContext + ":ro",
 		"/host/hooks/pre:" + contract.ContainerHooksDir + "/" + contract.HookPrelude + ":ro",
+		"vol:" + contract.ContainerWorkspace,
+		"tmpfs:" + contract.ContainerBundleDir,
+		"tmpfs:/tmp",
+		"tmpfs:" + contract.ContainerHome,
 		"/host/cache:/cache",
 	}
 	if fmt.Sprint(mounts) != fmt.Sprint(want) {

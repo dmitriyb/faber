@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -513,6 +514,41 @@ func TestCloneFailureRedactsRemoteURL(t *testing.T) {
 	rec := readRecord(t, d)
 	if rec.Error.Reason != contract.ReasonCloneFailed || !strings.Contains(rec.Error.Detail, "exited 128") {
 		t.Fatalf("record error = %+v", rec.Error)
+	}
+}
+
+// Verifies the large-repo seam: with FABER_GIT_CACHE set the clone borrows
+// objects via --reference-if-able; without it, a plain clone with no reference.
+func TestCloneReferencesObjectCache(t *testing.T) {
+	gitClone := func(fr *fakeRunner) []string {
+		for _, c := range fr.calls {
+			if len(c.Argv) >= 2 && c.Argv[0] == "git" && c.Argv[1] == "clone" {
+				return c.Argv
+			}
+		}
+		return nil
+	}
+
+	d := newTestDirs(t)
+	fr := &fakeRunner{handle: oneKeyHandler(nil)}
+	b := newTestBox(t, d, map[string]string{
+		"FABER_REMOTE_URL":   "/gw/repo-a.git",
+		contract.EnvGitCache: "/cache/repo-a.git",
+	}, fr)
+	if err := b.clone(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if argv := gitClone(fr); !strings.Contains(strings.Join(argv, " "), "--reference-if-able /cache/repo-a.git") {
+		t.Fatalf("clone argv lacks the cache reference: %q", argv)
+	}
+
+	fr2 := &fakeRunner{handle: oneKeyHandler(nil)}
+	b2 := newTestBox(t, d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git"}, fr2)
+	if err := b2.clone(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if argv := gitClone(fr2); slices.Contains(argv, "--reference-if-able") {
+		t.Fatalf("plain clone unexpectedly references a cache: %q", argv)
 	}
 }
 

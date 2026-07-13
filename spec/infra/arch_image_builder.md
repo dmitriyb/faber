@@ -50,12 +50,33 @@ errors rather than reported first-error-only.
 
 ## Immutability at runtime
 
-Package contents are Nix store paths: root-owned, read-only, with the
-non-root agent user unable to modify them. There is no package manager in the
-image and no writable layer trick to install one's way around the toolset —
-the environment *is* the restriction, which is what makes the in-box agent's
-`bypassPermissions` safe. Anything writable (workspace, result dir, tmp) is a
-run-time mount or tmpfs, never image content.
+Package contents are Nix store paths: root-owned, read-only, with the non-root
+agent user unable to modify them. There is no package manager in the image and
+no writable layer trick to install one's way around the toolset — the
+environment *is* the restriction, which is what makes the in-box agent's
+`bypassPermissions` safe.
+
+Nothing writable is ever baked: the image carries no writable dirs and no baked
+user, so one image stays generic across hosts. Every writable path is a run-time
+mount, sized to its content:
+
+- **`/workspace`** (the repo clone, potentially gigabytes) is a **disk-backed
+  volume** — a per-container anonymous volume on the daemon's storage, discarded
+  with `--rm`. It is deliberately *not* tmpfs: a multi-gigabyte clone in RAM
+  would exhaust the daemon's memory, and on the macOS VM the volume's disk is
+  fast local storage, not the slow host-bind (virtiofs) path.
+- **`/faber/bundle`, `/tmp`, and `HOME`** are small and ephemeral, so they are
+  **tmpfs** (RAM) — regenerated every run, gone on exit.
+- **`/faber/result`** stays a host bind mount: it is the one writable path whose
+  content must survive the container to reach the host.
+
+Because a freshly created volume or tmpfs is root-owned, the box cannot start as
+its non-root user and still write them. Instead the container starts as root and
+the box's entry program (`faber-box`) `chown`s exactly these writable mounts to
+the run uid:gid, then **drops privileges** to that non-root user before any hook
+or agent runs — the same root-entry-then-drop shape the network binding already
+uses. The run uid:gid is the host user's, so files the box writes to the result
+bind stay host-owned. See PhaseSequencer for the privileged preamble.
 
 ## Deferred seam: image GC and cache eviction
 

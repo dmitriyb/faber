@@ -17,9 +17,10 @@ import (
 
 func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
-// fullRunSpec is the golden-argv fixture: limits, both engine mounts, three
-// env keys, and a representative binding fragment (--network, agent-socket
-// -v, SSH_AUTH_SOCK, proxy env, :ro secret mount, --runtime).
+// fullRunSpec is the golden-argv fixture: limits, every engine mount kind (a
+// result bind rw, a :ro hook bind, a workspace volume, a /tmp tmpfs), three env
+// keys, and a representative binding fragment (--network, agent-socket -v,
+// SSH_AUTH_SOCK, proxy env, :ro secret mount, --runtime).
 func fullRunSpec() RunSpec {
 	return RunSpec{
 		Name:      "faber-r1-impl-a1",
@@ -28,6 +29,8 @@ func fullRunSpec() RunSpec {
 		Mounts: []Mount{
 			{Host: "/runs/r1/impl", Container: "/result"},
 			{Host: "/proj/hooks", Container: "/hooks", ReadOnly: true},
+			{Kind: KindVolume, Container: "/workspace"},
+			{Kind: KindTmpfs, Container: "/tmp"},
 		},
 		Env: map[string]string{
 			"FABER_STEP":   "impl",
@@ -56,6 +59,8 @@ func TestGoldenArgv(t *testing.T) {
 		"--memory=8g", "--cpus=4",
 		"-v", "/runs/r1/impl:/result",
 		"-v", "/proj/hooks:/hooks:ro",
+		"-v", "/workspace",
+		"--tmpfs", "/tmp",
 		"-e", "ANSWER=42",
 		"-e", "FABER_RESULT=/result/result.json",
 		"-e", "FABER_STEP=impl",
@@ -88,29 +93,46 @@ func TestArgvDiscipline(t *testing.T) {
 			t.Fatalf("spec %d: argv head %q", i, args[:4])
 		}
 		joined := "\x00" + strings.Join(args, "\x00") + "\x00"
-		for _, forbidden := range []string{"docker.sock", "--privileged", "--network=host", "--pid=host", "--ipc=host"} {
+		for _, forbidden := range []string{"docker.sock", "--privileged", "--user", "--network=host", "--pid=host", "--ipc=host"} {
 			if strings.Contains(joined, forbidden) {
 				t.Fatalf("spec %d: forbidden token %q in argv %q", i, forbidden, args)
 			}
 		}
-		// Every -v traces to a declared mount or to the verbatim fragment.
-		declared := map[string]bool{}
+		// Every -v / --tmpfs traces to a declared mount or the verbatim fragment.
+		declaredV := map[string]bool{}
+		declaredTmpfs := map[string]bool{}
 		for _, m := range spec.Mounts {
-			v := m.Host + ":" + m.Container
-			if m.ReadOnly {
-				v += ":ro"
+			switch m.Kind {
+			case KindTmpfs:
+				declaredTmpfs[m.Container] = true
+			case KindVolume:
+				v := m.Container
+				if m.ReadOnly {
+					v += ":ro"
+				}
+				declaredV[v] = true
+			default:
+				v := m.Host + ":" + m.Container
+				if m.ReadOnly {
+					v += ":ro"
+				}
+				declaredV[v] = true
 			}
-			declared[v] = true
 		}
 		for j := 0; j < len(spec.Bindings)-1; j++ {
 			if spec.Bindings[j] == "-v" {
-				declared[spec.Bindings[j+1]] = true
+				declaredV[spec.Bindings[j+1]] = true
 			}
 		}
 		for j, a := range args {
-			if a == "-v" {
-				if j+1 >= len(args) || !declared[args[j+1]] {
+			switch a {
+			case "-v":
+				if j+1 >= len(args) || !declaredV[args[j+1]] {
 					t.Fatalf("spec %d: undeclared -v %q", i, args[j+1])
+				}
+			case "--tmpfs":
+				if j+1 >= len(args) || !declaredTmpfs[args[j+1]] {
+					t.Fatalf("spec %d: undeclared --tmpfs %q", i, args[j+1])
 				}
 			}
 		}
@@ -155,6 +177,12 @@ func randomRunSpec(rng *rand.Rand, i int) RunSpec {
 			Container: fmt.Sprintf("/box/%d", rng.Intn(1000)),
 			ReadOnly:  rng.Intn(2) == 0,
 		})
+	}
+	if rng.Intn(2) == 0 {
+		spec.Mounts = append(spec.Mounts, Mount{Kind: KindVolume, Container: fmt.Sprintf("/vol/%d", rng.Intn(1000)), ReadOnly: rng.Intn(2) == 0})
+	}
+	if rng.Intn(2) == 0 {
+		spec.Mounts = append(spec.Mounts, Mount{Kind: KindTmpfs, Container: fmt.Sprintf("/tmpfs/%d", rng.Intn(1000))})
 	}
 	env := map[string]string{}
 	for e := rng.Intn(4); e > 0; e-- {

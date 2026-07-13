@@ -56,7 +56,7 @@ const tagHexLen = 12
 // rendered image expression's shape (added dirs, env, etc.) invalidates the
 // content tag and forces a rebuild, instead of the daemon serving a stale
 // cached image under an unchanged tag. Bump on any renderImageExpr shape change.
-const imageSchemaVersion = "2"
+const imageSchemaVersion = "1"
 
 // stagedOverlayName is the file name a declared overlay is copied to beside
 // the rendered expression, so the expression imports it by relative path and
@@ -340,13 +340,13 @@ func renderImageExpr(pin NixpkgsPin, tpl, tag string, packages []string, withOve
 	for _, p := range slices.Sorted(slices.Values(packages)) {
 		fmt.Fprintf(&sb, "    %s\n", renderPkgAttr(p))
 	}
-	// dockerTools images are minimal — no /tmp. The box needs a writable, sticky
-	// /tmp for its scratch workdir, so create it.
+	// The image is a pure function of the toolset: root-owned store paths and a
+	// PATH, no baked user and nothing writable. One image stays generic across
+	// hosts. Every writable path (the workspace volume, the tmpfs bundle/tmp/
+	// home) is a run-time mount the box chowns and drops into — see the runner
+	// and the phase sequencer's privileged preamble.
 	sb.WriteString(`  ];
   config.Env = [ "PATH=/bin:/usr/bin" ];
-  extraCommands = ''
-    mkdir -m 1777 -p tmp
-  '';
 }
 `)
 	return sb.String()

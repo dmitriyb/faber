@@ -30,6 +30,8 @@ type BoxEnv struct {
     Effort, ExtraInstruction, MaxBudget string
     Attempt              int
     OutputSchema         config.OutputSchema // decoded from FABER_OUTPUT_SCHEMA
+    RunUID, RunGID       int               // FABER_RUN_UID/GID; the preamble drops to these; 0/0 = no drop
+    GitCache             string            // FABER_GIT_CACHE; ro object cache for clone --reference-if-able, empty = none
 }
 
 func ParseEnv(environ []string) (*BoxEnv, error) // collects ALL violations
@@ -59,6 +61,10 @@ var phases = []Phase{
 }
 
 func Main(ctx context.Context, box *Box) int {
+    if err := box.enterRunUser(); err != nil { // phase 0: chown writable mounts, drop root
+        box.failStop("preamble", err)
+        return 1
+    }
     for _, p := range phases {
         start := time.Now()
         err := p.Run(box, ctx)
@@ -69,6 +75,28 @@ func Main(ctx context.Context, box *Box) int {
         }
     }
     return 0
+}
+```
+
+`enterRunUser` is the privileged preamble (arch phase 0). When the box is root
+and a run uid is set, it chowns exactly the writable mounts and drops:
+
+```go
+func (b *Box) enterRunUser() error {
+    if os.Getuid() != 0 || b.Env.RunUID == 0 {
+        return nil // already non-root, or no drop requested (gateless local)
+    }
+    home := "/home/box"
+    for _, d := range []string{contract.ContainerWorkspace, b.Env.BundleDir, "/tmp", home} {
+        if err := os.Chown(d, b.Env.RunUID, b.Env.RunGID); err != nil {
+            return fmt.Errorf("preamble: chown %s: %w", d, err)
+        }
+    }
+    os.Setenv("HOME", home)
+    if err := syscall.Setgroups([]int{b.Env.RunGID}); err != nil { return err }
+    if err := syscall.Setgid(b.Env.RunGID); err != nil { return err }
+    if err := syscall.Setuid(b.Env.RunUID); err != nil { return err } // all-thread since Go 1.16
+    return nil
 }
 ```
 
@@ -95,8 +123,11 @@ type CmdResult struct{ Stdout []byte; StderrTail []byte; ExitCode int }
   `GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=<f> -o StrictHostKeyChecking=yes"`;
   TOFU → `accept-new`; neither, with an ssh remote URL → error before any
   network phase runs.
-- `clone`: `git clone <RemoteURL>/<Repo>.git <workdir>` via the runner; sets
-  `Box.Workdir`. Gateless steps get `os.MkdirTemp` instead and skip signing.
+- `clone`: `git clone [--reference-if-able <GitCache>] <RemoteURL>/<Repo>.git
+  <workdir>` via the runner, into `/workspace/<Repo>`; sets `Box.Workdir`. The
+  `--reference-if-able` flag is added only when `GitCache` is set, so per-box
+  clones borrow objects from the shared read-only cache without duplicating
+  history. Gateless steps get `os.MkdirTemp` instead and skip signing.
 - `configureSigning`: `ssh-add -L` via the runner; `len(lines) != 1` is an
   error naming the count; then four `git config` invocations (`gpg.format
   ssh`, `user.signingkey "key::"+pub`, `commit.gpgsign true`, name/email with

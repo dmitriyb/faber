@@ -69,6 +69,16 @@ const (
 	EnvSecretsDir   = "FABER_SECRETS_DIR"
 	EnvWorkspaceDir = "FABER_WORKSPACE_DIR"
 
+	// EnvRunUID and EnvRunGID are the host user's uid:gid the box's privileged
+	// preamble chowns the writable mounts to and drops privileges into. Unset
+	// or 0 means no drop (a gateless local invocation already running non-root).
+	EnvRunUID = "FABER_RUN_UID"
+	EnvRunGID = "FABER_RUN_GID"
+
+	// EnvGitCache points at a read-only git object cache (a pre-warmed volume);
+	// when set, the clone borrows objects via --reference-if-able. Empty = none.
+	EnvGitCache = "FABER_GIT_CACHE"
+
 	// InputEnvPrefix prefixes one variable per bound input slot:
 	// FABER_INPUT_<SLOT>, the typed-inputs contract for hooks and agent.
 	InputEnvPrefix = "FABER_INPUT_"
@@ -91,8 +101,13 @@ const (
 	// and set as the container command.
 	ContainerEntry = "/faber/bin/faber-box"
 
-	// ContainerWorkspace is the parent directory of the gateway clone.
+	// ContainerWorkspace is the parent directory of the gateway clone, mounted
+	// as a disk-backed anonymous volume.
 	ContainerWorkspace = "/workspace"
+
+	// ContainerHome is the box's HOME: a tmpfs the preamble chowns to the run
+	// user, exported as HOME before any hook or agent runs.
+	ContainerHome = "/home/box"
 )
 
 // Well-known file names inside the bundle and result directories.

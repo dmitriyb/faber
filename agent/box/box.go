@@ -21,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/dmitriyb/faber/agent/contract"
@@ -95,6 +96,10 @@ var phases = []phase{
 // runs after a failed one, and every failure converges on the handoff funnel.
 // The return value is the process exit code.
 func Main(ctx context.Context, b *Box) int {
+	if err := b.enterRunUser(ctx); err != nil {
+		b.failStop(ctx, "preamble", err)
+		return 1
+	}
 	for _, p := range phases {
 		b.Log.InfoContext(ctx, "phase start", "phase", p.name)
 		start := time.Now()
@@ -107,6 +112,40 @@ func Main(ctx context.Context, b *Box) int {
 		b.Log.DebugContext(ctx, "phase done", "phase", p.name, "duration", b.Timing[p.name])
 	}
 	return 0
+}
+
+// enterRunUser is the privileged preamble (arch phase 0). The container starts
+// as root because the writable mounts arrive root-owned; this chowns exactly
+// those mounts to the run user, exports HOME, and drops privileges — setgroups
+// to the single run group, setgid, setuid — so every phase below, and the
+// untrusted agent above all, runs non-root. The toolset store paths stay
+// root-owned and read-only. A box already running non-root, or with no run uid
+// (a gateless local invocation with no root to drop), is a no-op. It is the
+// only moment faber-box holds privilege.
+func (b *Box) enterRunUser(ctx context.Context) error {
+	if os.Getuid() != 0 || b.Env.RunUID == 0 {
+		return nil
+	}
+	fail := func(step string, err error) error {
+		return &boxError{Reason: contract.ReasonEnvContract, Detail: fmt.Sprintf("preamble: %s: %v", step, err)}
+	}
+	for _, dir := range []string{b.Env.WorkspaceDir, b.Env.BundleDir, "/tmp", contract.ContainerHome} {
+		if err := os.Chown(dir, b.Env.RunUID, b.Env.RunGID); err != nil {
+			return fail("chown "+dir, err)
+		}
+	}
+	b.setEnv("HOME", contract.ContainerHome)
+	if err := syscall.Setgroups([]int{b.Env.RunGID}); err != nil {
+		return fail("setgroups", err)
+	}
+	if err := syscall.Setgid(b.Env.RunGID); err != nil {
+		return fail("setgid", err)
+	}
+	if err := syscall.Setuid(b.Env.RunUID); err != nil {
+		return fail("setuid", err)
+	}
+	b.Log.InfoContext(ctx, "dropped to run user", "uid", b.Env.RunUID, "gid", b.Env.RunGID)
+	return nil
 }
 
 // boxError is a phase failure carrying the record fields the fail-stop funnel
@@ -417,10 +456,14 @@ func (b *Box) clone(ctx context.Context) error {
 	if err := os.MkdirAll(b.Env.WorkspaceDir, 0o755); err != nil {
 		return &boxError{Reason: contract.ReasonCloneFailed, Detail: fmt.Sprintf("workspace dir: %v", err)}
 	}
-	res, err := b.Runner.Run(ctx, CmdSpec{
-		Argv: []string{"git", "clone", b.Env.RemoteURL, target},
-		Env:  b.Environ,
-	})
+	argv := []string{"git", "clone"}
+	if b.Env.GitCache != "" {
+		// Borrow objects from the shared read-only cache; --if-able degrades to a
+		// plain clone if the cache is unusable rather than failing the step.
+		argv = append(argv, "--reference-if-able", b.Env.GitCache)
+	}
+	argv = append(argv, b.Env.RemoteURL, target)
+	res, err := b.Runner.Run(ctx, CmdSpec{Argv: argv, Env: b.Environ})
 	if err != nil {
 		return &boxError{Reason: contract.ReasonCloneFailed, Detail: err.Error(), ExitCode: res.ExitCode}
 	}

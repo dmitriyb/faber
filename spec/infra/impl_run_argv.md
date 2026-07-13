@@ -14,13 +14,27 @@ type RunSpec struct {
     Name      string            // deterministic: faber-<run-id>-<slug(step-id)>-a<attempt>
     Image     string            // the tag ImageBuilder produced
     Resources config.ResourceDef
-    Mounts    []Mount           // engine mounts only (result dir, hook scripts, box entry binary)
+    Mounts    []Mount           // engine mounts: result bind, ro hooks + box entry, workspace volume, tmpfs writables
     Env       map[string]string // engine env; contract values, never secrets
     Bindings  []string          // ordered argv fragment from security.BindingSet
     Entry     []string          // in-container entry argv
 }
 
+// MountKind selects the docker flag. The container starts as root (image
+// default — no baked user); faber-box chowns the writable mounts to the run
+// uid:gid (carried in Env as FABER_RUN_UID/GID) and drops privileges before any
+// hook or agent. There is no --user flag and no RunSpec field for one.
+type MountKind int
+const (
+    KindBind   MountKind = iota // -v Host:Container[:ro]  — host bind
+    KindVolume                  // -v Container[:ro]       — anonymous volume, disk-backed, --rm-discarded
+    KindTmpfs                   // --tmpfs Container        — RAM
+)
+
+// Mount is one engine mount. Host is set only for KindBind; ReadOnly applies to
+// bind and volume (a tmpfs is always writable — it is the box's own scratch).
 type Mount struct {
+    Kind            MountKind
     Host, Container string
     ReadOnly        bool
 }
@@ -47,9 +61,18 @@ func buildArgs(spec RunSpec) []string {
         args = append(args, fmt.Sprintf("--cpus=%g", c))
     }
     for _, m := range spec.Mounts {
-        v := m.Host + ":" + m.Container
-        if m.ReadOnly { v += ":ro" }
-        args = append(args, "-v", v)
+        switch m.Kind {
+        case KindTmpfs:
+            args = append(args, "--tmpfs", m.Container)
+        case KindVolume:
+            v := m.Container
+            if m.ReadOnly { v += ":ro" }
+            args = append(args, "-v", v)
+        default: // KindBind
+            v := m.Host + ":" + m.Container
+            if m.ReadOnly { v += ":ro" }
+            args = append(args, "-v", v)
+        }
     }
     for _, k := range slices.Sorted(maps.Keys(spec.Env)) {
         args = append(args, "-e", k+"="+spec.Env[k])
@@ -63,11 +86,14 @@ func buildArgs(spec RunSpec) []string {
 Pure function, no I/O — the golden-argv tests in test_infra.md exercise it
 directly. Sorted env keys keep the argv deterministic for a given spec; the
 binding fragment's internal order is BindingSet's contract, preserved
-byte-for-byte. The mounts a spec may carry are exactly the engine's two (result
-dir rw, hook scripts ro); everything else — agent socket, secret file, cache
-volume, `--network`, `--runtime` — arrives inside `Bindings`. There is no code
-path that could emit a docker-socket mount or `--privileged`: no field of
-`RunSpec` maps to them.
+byte-for-byte. The engine mounts a spec carries are the result bind (rw), the
+read-only hook scripts and box entry binary, the disk-backed `/workspace`
+volume, and the tmpfs writables (`/faber/bundle`, `/tmp`, `HOME`); everything
+else — agent socket, secret file, cache volume, `--network`, `--runtime` —
+arrives inside `Bindings`. There is no code path that could emit a docker-socket
+mount, `--privileged`, or `--user`: no field of `RunSpec` maps to them, and the
+non-root drop is the box's own job, driven by the `FABER_RUN_UID`/`FABER_RUN_GID`
+engine env, not a docker flag.
 
 ## Run lifecycle
 

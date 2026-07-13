@@ -29,7 +29,9 @@ invoked by faber or by hand inside an interactive recovery shell.
 
 ## Output: the context bundle
 
-By the time the prelude exits, `$FABER_BUNDLE_DIR` must contain:
+`$FABER_BUNDLE_DIR` is a per-container tmpfs (RAM), writable by the run user and
+discarded on exit — the bundle is regenerated every run, never persisted. By the
+time the prelude exits, it must contain:
 
 - `CONTEXT.md` — the prompt body handed verbatim to the agent. Mandatory.
 - `bundle.env` — optional machine-readable sidecar: line-oriented

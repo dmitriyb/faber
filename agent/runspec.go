@@ -72,6 +72,11 @@ type BoxSpec struct {
 	// GitName and GitEmail override the box's committer defaults.
 	GitName  string
 	GitEmail string
+
+	// GitCache, when set, is the container path of a read-only git object cache
+	// (a pre-warmed volume) the box clones with --reference-if-able. Empty means
+	// a plain full clone.
+	GitCache string
 }
 
 // BuildRunSpec assembles the engine half of the box run contract: container
@@ -169,6 +174,11 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	setIf(contract.EnvMaxBudget, spec.MaxBudget)
 	setIf(contract.EnvGitName, spec.GitName)
 	setIf(contract.EnvGitEmail, spec.GitEmail)
+	setIf(contract.EnvGitCache, spec.GitCache)
+	// The box starts as root and drops to the host user: its uid:gid so the
+	// files the box writes to the result bind stay host-owned.
+	env[contract.EnvRunUID] = strconv.Itoa(os.Getuid())
+	env[contract.EnvRunGID] = strconv.Itoa(os.Getgid())
 	for slot, val := range spec.Inputs {
 		env[contract.InputEnv(slot)] = val
 	}
@@ -187,6 +197,15 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 			Host: spec.PreludeHook, Container: contract.ContainerHooksDir + "/" + contract.HookPrelude, ReadOnly: true,
 		})
 	}
+	// Writable engine mounts: the disk-backed clone volume and the tmpfs scratch
+	// (bundle, tmp, home). All arrive root-owned; the box's preamble chowns them
+	// to the run user and drops privileges before any hook or agent runs.
+	mounts = append(mounts,
+		infra.Mount{Kind: infra.KindVolume, Container: contract.ContainerWorkspace},
+		infra.Mount{Kind: infra.KindTmpfs, Container: contract.ContainerBundleDir},
+		infra.Mount{Kind: infra.KindTmpfs, Container: "/tmp"},
+		infra.Mount{Kind: infra.KindTmpfs, Container: contract.ContainerHome},
+	)
 	for _, host := range slices.Sorted(maps.Keys(tpl.Volumes)) {
 		mounts = append(mounts, infra.Mount{Host: host, Container: tpl.Volumes[host]})
 	}
@@ -198,10 +217,6 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 		Mounts:    mounts,
 		Env:       env,
 		Entry:     []string{contract.ContainerEntry},
-		// Run the box as the host user (non-root): the harness contains an
-		// untrusted agent, and root would undo the isolation. This also keeps
-		// files the box writes to mounted dirs owned by the host user.
-		User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 	}, nil
 }
 

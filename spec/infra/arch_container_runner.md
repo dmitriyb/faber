@@ -16,13 +16,23 @@ The assembly order is fixed and golden-testable:
 
 ```
 docker run --rm --name <deterministic-step-name>
-  [--memory=<m>] [--cpus=<n>]              # from run.resources, omitted if unset
-  -v <result-host-dir>:<result-path>       # engine mount, rw
-  -v <hook-scripts-dir>:<hooks-path>:ro    # engine mount, read-only
-  -e KEY=VALUE ...                         # engine env, sorted keys, no secrets
-  <binding fragment, spliced verbatim>     # network/remote/identity/credentials/runtime
+  [--memory=<m>] [--cpus=<n>]                    # from run.resources, omitted if unset
+  -v <result-host-dir>:<result-path>             # engine bind, rw (survives the container)
+  -v <hook-scripts-dir>:<hooks-path>:ro          # engine bind, read-only
+  -v <box-entry-binary>:<entry-path>:ro          # engine bind, read-only
+  -v <workspace-path>                            # engine anonymous volume, disk-backed
+  --tmpfs <bundle-path> --tmpfs /tmp --tmpfs <home>   # engine tmpfs, RAM
+  -e KEY=VALUE ...                               # engine env, sorted keys, no secrets
+  <binding fragment, spliced verbatim>           # network/remote/identity/credentials/runtime
   <image-tag> <entry argv...>
 ```
+
+The container starts as **root** — the image carries no baked user. There is no
+`--user` flag: `faber-box` chowns the writable mounts (workspace, tmpfs bundle,
+tmp, home) to the run uid:gid carried in engine env (`FABER_RUN_UID`/
+`FABER_RUN_GID`) and drops privileges before any hook or agent runs. This is why
+the workspace can be a fresh (root-owned) volume and still be writable by the
+non-root box.
 
 The binding fragment is **opaque and verbatim**: ContainerRunner neither
 parses, reorders, nor deduplicates it. The security module owns what a network
@@ -35,11 +45,13 @@ infra splices.
 Mirroring the proven harness's run shape, the assembled argv never contains:
 
 - a docker socket mount (the box cannot reach the daemon);
-- any host mount beyond the declared ones — the result dir, the read-only hook
+- any mount beyond the declared ones — the result-dir bind, the read-only hook
   scripts, the read-only box entry binary (the agent module's sequencer,
-  mounted and set as the entry argv), and whatever the binding fragment
+  mounted and set as the entry argv), the disk-backed `/workspace` volume, the
+  tmpfs writables (bundle, tmp, home), and whatever the binding fragment
   declares (agent socket, secret file, cache volume);
-- `--privileged`, host networking, or host PID/IPC namespaces;
+- `--privileged`, `--user`, host networking, or host PID/IPC namespaces (the
+  box runs as root only until its entry program drops to the run user);
 - a secret in `-e` form — engine env carries step-contract values only
   (secrets travel as binding-declared handles or file mounts).
 

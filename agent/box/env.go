@@ -59,6 +59,16 @@ type BoxEnv struct {
 	SecretsDir   string
 	WorkspaceDir string
 
+	// RunUID and RunGID are the host user's uid:gid the privileged preamble
+	// chowns the writable mounts to and drops privileges into. 0 means no drop
+	// (already non-root, e.g. a gateless local invocation).
+	RunUID int
+	RunGID int
+
+	// GitCache is a read-only git object cache path; when set the clone adds
+	// --reference-if-able so it borrows objects instead of duplicating history.
+	GitCache string
+
 	// rawSchema, rawAttempt and rawTOFU hold the undecoded values for the
 	// env phase.
 	rawSchema  string
@@ -95,10 +105,15 @@ func ParseEnv(environ []string) *BoxEnv {
 		HooksDir:         withDefault(get(contract.EnvHooksDir), contract.ContainerHooksDir),
 		SecretsDir:       withDefault(get(contract.EnvSecretsDir), security.ContainerSecretsDir),
 		WorkspaceDir:     withDefault(get(contract.EnvWorkspaceDir), contract.ContainerWorkspace),
+		GitCache:         get(contract.EnvGitCache),
 		rawSchema:        get(contract.EnvOutputSchema),
 		rawAttempt:       get(contract.EnvAttempt),
 		rawTOFU:          get(security.EnvHostKeyTOFU),
 	}
+	// Non-numeric or absent uid/gid parse to 0, which the preamble reads as "no
+	// drop" — the same fail-safe as an already-non-root box.
+	env.RunUID, _ = strconv.Atoi(get(contract.EnvRunUID))
+	env.RunGID, _ = strconv.Atoi(get(contract.EnvRunGID))
 	if req := strings.TrimSpace(get(contract.EnvRequiredInputs)); req != "" {
 		for _, name := range strings.Split(req, ",") {
 			if name = strings.TrimSpace(name); name != "" {

@@ -18,6 +18,19 @@ Phases 1–5 are deterministic engine code (environment setup), 6–8 are the
 user-filled phases, 9 is the container-boundary phase. Each phase either
 completes or the box fail-stops — no phase ever runs after a failed one.
 
+0. **Privileged preamble (drop to the run user).** The container starts as root
+   because the writable mounts arrive root-owned: a fresh `/workspace` volume
+   and the tmpfs writables (`/faber/bundle`, `/tmp`, `HOME`) are created by the
+   daemon owned by root. Before any other phase, `faber-box` `chown`s exactly
+   those writable mounts to `FABER_RUN_UID:FABER_RUN_GID` (the host user's
+   uid:gid, so result-bind files stay host-owned), then drops privileges —
+   `setgroups` to the single run group, `setgid`, `setuid` — so every phase
+   below, and the untrusted agent in particular, runs non-root. The store paths
+   of the toolset remain root-owned and read-only throughout. If the box is
+   already non-root (a gateless local invocation with no root to drop), the
+   preamble is a no-op. This is the same root-entry-then-drop shape the network
+   binding uses; it is the *only* moment `faber-box` holds privilege.
+
 1. **Env contract.** The box's inputs arrive as environment: `FABER_SKILL`,
    `FABER_IDENTITY`, `FABER_RESULT_DIR` (a host-mounted directory),
    `FABER_BUNDLE_DIR`, `FABER_OUTPUT_SCHEMA`, and one `FABER_INPUT_<SLOT>` per
@@ -37,6 +50,16 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    the box's only reachable remote — into `/workspace/<repo>`, the working
    directory for every later phase. When absent (a gateless step), later
    phases run in a scratch directory and phases 4–5 are skipped.
+
+   *Shared object cache (the large-repo seam).* A cross-container git worktree
+   is rejected: a shared `.git` is mutable state shared between untrusted
+   sandboxes, which breaks the step-as-lambda isolation and git's own
+   single-writer assumption. Instead, when a read-only git object cache is bound
+   as a pre-warmed `Volumes` entry (`FABER_GIT_CACHE` points at its mount), the
+   clone adds `--reference-if-able <cache>`: each box keeps its own isolated
+   `.git` and working tree but borrows objects (the bulk — history) from the
+   shared cache via alternates, so N parallel boxes pay N× only for the working
+   checkout, never N× for history. The cache is never written by the box.
 5. **Signing config.** The public key is read from the forwarded agent socket
    (`ssh-add -L` over `SSH_AUTH_SOCK`); exactly one key must be listed — zero
    or several is an identity-binding violation and aborts. Then:

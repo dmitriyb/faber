@@ -33,15 +33,28 @@ type RunSpec struct {
 	Name      string             // deterministic: faber-<run-id>-<slug(step-id)>-a<attempt>
 	Image     string             // the tag ImageBuilder produced
 	Resources config.ResourceDef // template limits; absent fields emit no flags
-	Mounts    []Mount            // engine mounts only
+	Mounts    []Mount            // engine mounts: result bind, ro hooks+entry, workspace volume, tmpfs writables
 	Env       map[string]string  // engine env; step-contract values, never secrets
 	Bindings  []string           // ordered argv fragment from the security module, verbatim
 	Entry     []string           // in-container entry argv; empty runs the image default
-	User      string             // "uid:gid" the container runs as; empty leaves the image default (root)
 }
 
-// Mount is one engine-declared bind mount.
+// MountKind selects the docker flag a Mount emits. The container starts as root
+// (the image bakes no user); faber-box chowns the writable mounts to the run
+// uid:gid (FABER_RUN_UID/GID engine env) and drops privileges before any hook or
+// agent, so a fresh root-owned volume/tmpfs still ends up writable by the box.
+type MountKind int
+
+const (
+	KindBind   MountKind = iota // -v Host:Container[:ro]  — host bind
+	KindVolume                  // -v Container[:ro]       — anonymous volume, disk-backed, --rm-discarded
+	KindTmpfs                   // --tmpfs Container        — RAM
+)
+
+// Mount is one engine mount. Host is set only for KindBind; ReadOnly applies to
+// bind and volume (a tmpfs is always writable — the box's own scratch).
 type Mount struct {
+	Kind            MountKind
 	Host, Container string
 	ReadOnly        bool
 }
@@ -114,9 +127,6 @@ func RunArgs(spec RunSpec) []string {
 // and the entry argv. Pure function, no I/O.
 func buildArgs(spec RunSpec) []string {
 	args := []string{"run", "--rm", "--name", spec.Name}
-	if spec.User != "" {
-		args = append(args, "--user", spec.User)
-	}
 	if m := spec.Resources.Memory; m != "" {
 		args = append(args, "--memory="+m)
 	}
@@ -124,11 +134,22 @@ func buildArgs(spec RunSpec) []string {
 		args = append(args, fmt.Sprintf("--cpus=%g", c))
 	}
 	for _, m := range spec.Mounts {
-		v := m.Host + ":" + m.Container
-		if m.ReadOnly {
-			v += ":ro"
+		switch m.Kind {
+		case KindTmpfs:
+			args = append(args, "--tmpfs", m.Container)
+		case KindVolume:
+			v := m.Container
+			if m.ReadOnly {
+				v += ":ro"
+			}
+			args = append(args, "-v", v)
+		default: // KindBind
+			v := m.Host + ":" + m.Container
+			if m.ReadOnly {
+				v += ":ro"
+			}
+			args = append(args, "-v", v)
 		}
-		args = append(args, "-v", v)
 	}
 	for _, k := range slices.Sorted(maps.Keys(spec.Env)) {
 		args = append(args, "-e", k+"="+spec.Env[k])
