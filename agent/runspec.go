@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path"
 	"slices"
 	"strconv"
@@ -197,6 +198,10 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 		Mounts:    mounts,
 		Env:       env,
 		Entry:     []string{contract.ContainerEntry},
+		// Run the box as the host user (non-root): the harness contains an
+		// untrusted agent, and root would undo the isolation. This also keeps
+		// files the box writes to mounted dirs owned by the host user.
+		User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 	}, nil
 }
 

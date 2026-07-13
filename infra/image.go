@@ -52,6 +52,12 @@ var pinRE = regexp.MustCompile(`^[A-Za-z0-9:+/=._-]+$`)
 // namespace is one user's templates.
 const tagHexLen = 12
 
+// imageSchemaVersion is folded into the image tag so that a change to the
+// rendered image expression's shape (added dirs, env, etc.) invalidates the
+// content tag and forces a rebuild, instead of the daemon serving a stale
+// cached image under an unchanged tag. Bump on any renderImageExpr shape change.
+const imageSchemaVersion = "2"
+
 // stagedOverlayName is the file name a declared overlay is copied to beside
 // the rendered expression, so the expression imports it by relative path and
 // no user-controlled path is ever spliced into Nix source.
@@ -92,6 +98,7 @@ func NewImageBuilder(docker DockerClient, nix NixClient, pin NixpkgsPin, stateDi
 // list, and the overlay file's content hash (bytes, not path).
 func (b *ImageBuilder) ImageTag(name string, build config.BuildDef) (string, error) {
 	h := sha256.New()
+	fmt.Fprintln(h, imageSchemaVersion)
 	fmt.Fprintln(h, b.pin.Rev)
 	for _, p := range slices.Sorted(slices.Values(build.Packages)) {
 		fmt.Fprintln(h, p)
@@ -333,8 +340,13 @@ func renderImageExpr(pin NixpkgsPin, tpl, tag string, packages []string, withOve
 	for _, p := range slices.Sorted(slices.Values(packages)) {
 		fmt.Fprintf(&sb, "    %s\n", renderPkgAttr(p))
 	}
+	// dockerTools images are minimal — no /tmp. The box needs a writable, sticky
+	// /tmp for its scratch workdir, so create it.
 	sb.WriteString(`  ];
   config.Env = [ "PATH=/bin:/usr/bin" ];
+  extraCommands = ''
+    mkdir -m 1777 -p tmp
+  '';
 }
 `)
 	return sb.String()

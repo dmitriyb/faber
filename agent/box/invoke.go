@@ -60,6 +60,9 @@ func (b *Box) runAgent(ctx context.Context) error {
 		MaxBudget: b.Env.MaxBudget,
 	}
 	env := append([]string(nil), b.Environ...)
+	// The minimal image has no home for a non-root uid; point HOME at the box's
+	// own workdir so the agent has a writable home. A prelude may override it.
+	env = append(env, "HOME="+b.Workdir)
 	for _, key := range slices.Sorted(maps.Keys(b.Bundle.Env)) {
 		env = append(env, key+"="+b.Bundle.Env[key])
 	}

@@ -37,6 +37,7 @@ type RunSpec struct {
 	Env       map[string]string  // engine env; step-contract values, never secrets
 	Bindings  []string           // ordered argv fragment from the security module, verbatim
 	Entry     []string           // in-container entry argv; empty runs the image default
+	User      string             // "uid:gid" the container runs as; empty leaves the image default (root)
 }
 
 // Mount is one engine-declared bind mount.
@@ -113,6 +114,9 @@ func RunArgs(spec RunSpec) []string {
 // and the entry argv. Pure function, no I/O.
 func buildArgs(spec RunSpec) []string {
 	args := []string{"run", "--rm", "--name", spec.Name}
+	if spec.User != "" {
+		args = append(args, "--user", spec.User)
+	}
 	if m := spec.Resources.Memory; m != "" {
 		args = append(args, "--memory="+m)
 	}
