@@ -262,10 +262,15 @@ func renderPinnedPkgs(pin NixpkgsPin, withOverlay bool) string {
 		overlays = "[ (import ./" + stagedOverlayName + ") ]"
 	}
 	return fmt.Sprintf(`let
+  # A container image is always Linux. Target the Linux variant of the host arch
+  # so a native Linux host builds directly, while a Darwin host offloads to a
+  # linux builder (e.g. nix-darwin's linux-builder) — instead of wrongly building
+  # Darwin packages for a Linux image.
+  system = builtins.replaceStrings [ "darwin" ] [ "linux" ] builtins.currentSystem;
   pkgs = import (fetchTarball {
     url = "https://github.com/NixOS/nixpkgs/archive/%s.tar.gz";
     sha256 = "%s";
-  }) { overlays = %s; };
+  }) { inherit system; overlays = %s; };
 `, sanitizePin(pin.Rev), sanitizePin(pin.SHA256), overlays)
 }
 
