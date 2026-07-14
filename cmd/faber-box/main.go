@@ -28,6 +28,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	environ := os.Environ()
 	b := box.New(box.ParseEnv(environ), box.NewExecRunner(os.Stdout, os.Stderr), environ, logger)
+	b.Stdin = os.Stdin // the secrets phase reads the file-mode payload from here
 	code := box.Main(ctx, b)
 	stop()
 	os.Exit(code)

@@ -25,10 +25,11 @@ const killGracePeriod = 15 * time.Second
 
 // RunSpec is one fully resolved step-container invocation. Engine mounts are
 // exactly the declared ones (result dir, hook scripts, box entry binary);
-// everything else — agent socket, secret file, cache volume, --network,
-// --runtime — arrives inside Bindings, the security module's ordered argv
-// fragment, spliced verbatim. No RunSpec field maps to a docker-socket mount,
-// --privileged, or host namespaces: the discipline is structural.
+// everything else — agent socket, the /run/secrets tmpfs, cache volume,
+// --network, --runtime — arrives inside Bindings, the security module's
+// ordered argv fragment, spliced verbatim. No RunSpec field maps to a
+// docker-socket mount, --privileged, or host namespaces: the discipline is
+// structural.
 type RunSpec struct {
 	Name      string             // deterministic: faber-<run-id>-<slug(step-id)>-a<attempt>
 	Image     string             // the tag ImageBuilder produced
@@ -36,7 +37,13 @@ type RunSpec struct {
 	Mounts    []Mount            // engine mounts: result bind, ro hooks+entry, workspace volume, tmpfs writables
 	Env       map[string]string  // engine env; step-contract values, never secrets
 	Bindings  []string           // ordered argv fragment from the security module, verbatim
-	Entry     []string           // in-container entry argv; empty runs the image default
+	// StdinSecrets is the framed JSON file-mode secrets payload
+	// (security.Assembled.SecretsStdin): empty = no stdin, no -i; non-empty
+	// emits -i (right after --rm) and streams the bytes on the container's
+	// stdin. It MUST be paired with Env[contract.EnvSecretsStdin]="1" by the
+	// assembler — ContainerRunner never sets that flag (see impl_run_argv.md).
+	StdinSecrets []byte
+	Entry        []string // in-container entry argv; empty runs the image default
 }
 
 // MountKind selects the docker flag a Mount emits. The container starts as root
@@ -93,8 +100,17 @@ func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, err
 	}
 	out := newTailBuffer(outputCap)
 	sink := io.MultiWriter(out, slogWriter(r.logger, "step", spec.Name))
+	var stdin io.Reader // nil unless a secrets payload rides stdin
+	if len(spec.StdinSecrets) > 0 {
+		// A *bytes.Reader, deliberately not an *os.File: os/exec then pipes it
+		// through a copier that closes the write end on EOF, so the box's
+		// io.ReadAll(stdin) sees a clean end-of-payload rather than hanging (see
+		// cliRunner.runStreaming). Passing an *os.File here would reintroduce
+		// that hang.
+		stdin = bytes.NewReader(spec.StdinSecrets)
+	}
 	start := time.Now()
-	code, err := r.docker.ContainerRun(ctx, buildArgs(spec), sink)
+	code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, sink)
 	res := RunResult{ExitCode: code, Output: out.Bytes(), Started: start, Duration: time.Since(start)}
 	if ctx.Err() != nil {
 		// Killing the docker client process only detaches; stop the container
@@ -121,12 +137,19 @@ func RunArgs(spec RunSpec) []string {
 }
 
 // buildArgs assembles the docker run argv in the fixed, golden-testable
-// order: rm/name, resource limits, engine mounts, engine env (sorted keys),
-// the binding fragment spliced verbatim (never parsed, reordered, or
-// deduplicated — its meaning belongs to the security module), then the image
-// and the entry argv. Pure function, no I/O.
+// order: rm, the lone -i (only when StdinSecrets is non-empty, right after
+// --rm), name, resource limits, engine mounts, engine env (sorted keys), the
+// binding fragment spliced verbatim (never parsed, reordered, or deduplicated
+// — its meaning belongs to the security module, including its --tmpfs
+// /run/secrets), then the image and the entry argv. The file-mode token is not
+// a mount: it rides StdinSecrets on the container's stdin. Pure function, no
+// I/O — -i's presence is a pure function of the spec too.
 func buildArgs(spec RunSpec) []string {
-	args := []string{"run", "--rm", "--name", spec.Name}
+	args := []string{"run", "--rm"}
+	if len(spec.StdinSecrets) > 0 {
+		args = append(args, "-i") // attach stdin for the secrets payload
+	}
+	args = append(args, "--name", spec.Name)
 	if m := spec.Resources.Memory; m != "" {
 		args = append(args, "--memory="+m)
 	}

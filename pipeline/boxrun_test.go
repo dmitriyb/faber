@@ -47,11 +47,14 @@ func (f *fakeContainers) Run(ctx context.Context, spec infra.RunSpec) (infra.Run
 	return infra.RunResult{ExitCode: 0, Started: testBase, Duration: 2e9}, nil
 }
 
-// fakeBindings records Prepare calls and returns a fixed argv fragment.
+// fakeBindings records Prepare calls and returns a fixed argv fragment. When
+// secretsStdin is set it also returns a file-mode secrets payload, exercising
+// the RunSpec assembler's StdinSecrets/FABER_SECRETS_STDIN pairing.
 type fakeBindings struct {
-	mu        sync.Mutex
-	steps     []security.StepSpec
-	teardowns int
+	mu           sync.Mutex
+	steps        []security.StepSpec
+	teardowns    int
+	secretsStdin []byte
 }
 
 func (f *fakeBindings) Prepare(ctx context.Context, step security.StepSpec) (security.Assembled, error) {
@@ -59,7 +62,8 @@ func (f *fakeBindings) Prepare(ctx context.Context, step security.StepSpec) (sec
 	f.steps = append(f.steps, step)
 	f.mu.Unlock()
 	return security.Assembled{
-		Args: []string{"--network=none", "-e", "HANDLE=x"},
+		Args:         []string{"--network=none", "-e", "HANDLE=x"},
+		SecretsStdin: f.secretsStdin,
 		Teardown: func(context.Context) error {
 			f.mu.Lock()
 			f.teardowns++
@@ -122,6 +126,40 @@ func TestBoxRun_ComposesAndAdaptsOK(t *testing.T) {
 	}
 	if bindings.steps[0].ScratchDir == "" {
 		t.Errorf("bindings prepared without a scratch dir")
+	}
+}
+
+// Verifies ae796d2a1503 and the credentials pairing invariant: a non-empty
+// Assembled.SecretsStdin is copied into RunSpec.StdinSecrets and
+// Env[FABER_SECRETS_STDIN]="1" is set in the same step, never one without the
+// other; an empty payload sets neither.
+func TestBoxRun_SecretsStdinPairing(t *testing.T) {
+	payload := []byte(`{"agent-api":"dG9r"}`)
+	containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1}}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{secretsStdin: payload}, EntryBinary: "/usr/local/bin/faber-box"}
+	if _, err := boxes.RunAttempt(context.Background(), boxAttempt(t)); err != nil {
+		t.Fatalf("run attempt: %v", err)
+	}
+	spec := containers.specs[0]
+	if string(spec.StdinSecrets) != string(payload) {
+		t.Fatalf("StdinSecrets = %q, want %q", spec.StdinSecrets, payload)
+	}
+	if spec.Env[contract.EnvSecretsStdin] != "1" {
+		t.Fatalf("the stdin signal was not paired with the payload: %v", spec.Env[contract.EnvSecretsStdin])
+	}
+
+	// No payload: neither half is set.
+	containers2 := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1}}
+	boxes2 := &AgentBoxes{Containers: containers2, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	if _, err := boxes2.RunAttempt(context.Background(), boxAttempt(t)); err != nil {
+		t.Fatalf("run attempt: %v", err)
+	}
+	spec2 := containers2.specs[0]
+	if len(spec2.StdinSecrets) != 0 {
+		t.Fatalf("StdinSecrets set without a payload: %q", spec2.StdinSecrets)
+	}
+	if _, ok := spec2.Env[contract.EnvSecretsStdin]; ok {
+		t.Fatalf("the stdin signal was set without a payload")
 	}
 }
 

@@ -2,13 +2,9 @@ package security
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"maps"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 )
@@ -22,9 +18,9 @@ const (
 
 // serviceNamePattern mirrors the loader's closed charset for service names.
 // Every mode embeds the name somewhere structural — env-var names (proxy,
-// helper), the -v mount spec and the /run/secrets path (file) — so a name
-// carrying ':', '=', '/', or spaces must fail closed here too, naming the
-// service, rather than surface as an opaque docker error mid-run.
+// helper), the stdin payload key and the /run/secrets/<name> file the box
+// writes (file) — so a name carrying ':', '=', '/', or spaces must fail closed
+// here too, naming the service, rather than surface as an opaque error mid-run.
 var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // CredentialBroker is the credential-delegation binding (requirement
@@ -36,10 +32,13 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 //     endpoint URL on the internal network; the user's auth-injecting proxy
 //     behind it holds the real credential. Faber never touches the secret.
 //   - file (degraded, explicit opt-in): the raw token is resolved host-side
-//     and mounted read-only as a tmpfs-backed 0600 file under
-//     /run/secrets/<service> — never env (env leaks into docker inspect,
-//     child processes, and crash dumps), never an image layer, never the
-//     journal — and shredded after the run on every exit path.
+//     (it stays in host RAM) and delivered into a container tmpfs over the
+//     container's stdin — never a host file, never env (env leaks into docker
+//     inspect, child processes, and crash dumps), never argv, never an image
+//     layer, never the journal. The binding emits "--tmpfs /run/secrets" once
+//     and carries the resolved tokens on its Contribution.Secrets; the runner
+//     streams them on stdin and faber-box writes each 0600 file that dies with
+//     the container — no host tmpfs, no shred.
 //   - helper: config passthrough for tools with a credential-helper
 //     protocol, forwarded as FABER_HELPER_<NAME>_* env.
 //
@@ -53,24 +52,14 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 type CredentialBroker struct {
 	resolver Resolver
 	logger   *slog.Logger
-
-	// isTmpfs, shred, and writeFile are seams for tests; production uses the
-	// platform statfs check, the overwrite-sync-remove shredder, and
-	// os.WriteFile.
-	isTmpfs   func(path string) (bool, error)
-	shred     func(path string) error
-	writeFile func(path string, data []byte, perm os.FileMode) error
 }
 
 // NewCredentialBroker wires the broker to the resolver seam. resolver may be
 // nil when no credentials.resolver is configured; only file mode needs it.
 func NewCredentialBroker(resolver Resolver, logger *slog.Logger) *CredentialBroker {
 	return &CredentialBroker{
-		resolver:  resolver,
-		logger:    childLogger(logger, "credential-broker"),
-		isTmpfs:   isTmpfsDir,
-		shred:     shredFile,
-		writeFile: os.WriteFile,
+		resolver: resolver,
+		logger:   childLogger(logger, "credential-broker"),
 	}
 }
 
@@ -78,154 +67,71 @@ func NewCredentialBroker(resolver Resolver, logger *slog.Logger) *CredentialBrok
 func (b *CredentialBroker) Name() string { return "credentials" }
 
 // Prepare walks the step's declared services in sorted name order (the
-// fragment stays deterministic) and appends each handle's flags. Any resolver
-// failure, unwritable scratch file, or non-tmpfs scratch dir fails the step
-// before a container exists; file material already written is shredded before
-// returning. Errors name the binding and service, never secret content — the
-// Secret type makes that structural.
+// fragment stays deterministic) and appends each handle's flags. File mode
+// resolves each token host-side into the Contribution's Secrets map and emits
+// one "--tmpfs <ContainerSecretsDir>" (once, regardless of how many file-mode
+// services); the tokens themselves never enter Args and leave the module only
+// as the encoded Assembled.SecretsStdin payload. Any resolver failure fails
+// the step before a container exists — there is no host file to write and none
+// to clean, so file mode contributes no teardown. Errors name the binding and
+// service, never secret content — the Secret type makes that structural.
 func (b *CredentialBroker) Prepare(ctx context.Context, step StepSpec) (Contribution, error) {
 	if len(step.Services) == 0 {
 		return Contribution{}, nil
 	}
 	var args []string
-	var files []string
-	fail := func(err error) (Contribution, error) {
-		for _, f := range files {
-			if serr := b.shred(f); serr != nil {
-				b.logger.WarnContext(ctx, "shred after failed credential setup", "err", serr)
-			}
-		}
-		return Contribution{}, err
-	}
-	tmpfsChecked := false
+	var secrets map[string]Secret
 	for _, name := range slices.Sorted(maps.Keys(step.Services)) {
 		if !serviceNamePattern.MatchString(name) {
 			// The loader rejects these; fail closed anyway for all modes.
-			return fail(fmt.Errorf("service %q: invalid name (must match %s)", name, serviceNamePattern))
+			return Contribution{}, fmt.Errorf("service %q: invalid name (must match %s)", name, serviceNamePattern)
 		}
 		svc := step.Services[name]
 		switch svc.Mode {
 		case modeProxy:
 			if svc.Endpoint == "" {
-				return fail(fmt.Errorf("service %q: proxy mode requires an endpoint", name))
+				return Contribution{}, fmt.Errorf("service %q: proxy mode requires an endpoint", name)
 			}
 			args = append(args, "-e", ServiceURLEnv(name)+"="+svc.Endpoint)
 		case modeHelper:
 			if svc.Endpoint == "" {
-				return fail(fmt.Errorf("service %q: helper mode requires an endpoint", name))
+				return Contribution{}, fmt.Errorf("service %q: helper mode requires an endpoint", name)
 			}
 			args = append(args, "-e", HelperEnv(name, "ENDPOINT")+"="+svc.Endpoint)
 		case modeFile:
-			if !tmpfsChecked {
-				if err := b.checkScratch(step.ScratchDir); err != nil {
-					return fail(err)
-				}
-				tmpfsChecked = true
-			}
-			path, err := b.writeSecretFile(ctx, step.ScratchDir, name)
+			tok, err := b.resolveToken(ctx, name)
 			if err != nil {
-				return fail(err)
+				return Contribution{}, err
 			}
-			files = append(files, path)
-			args = append(args, "-v", path+":"+ContainerSecretsDir+"/"+name+":ro")
+			if secrets == nil {
+				secrets = map[string]Secret{}
+				// One tmpfs for the whole secrets dir, emitted once regardless of
+				// how many file-mode services — RAM in the container, no host file.
+				args = append(args, "--tmpfs", ContainerSecretsDir)
+			}
+			secrets[name] = tok
 			// Deliberately noisy: drift from proxy mode must stay visible.
 			b.logger.WarnContext(ctx, "file-mode credential: degraded raw-token path (explicit opt-in)",
 				"node", step.NodeID, "service", name)
 		default:
 			// The loader rejects unknown modes; fail closed anyway.
-			return fail(fmt.Errorf("service %q: unknown credential mode %q", name, svc.Mode))
+			return Contribution{}, fmt.Errorf("service %q: unknown credential mode %q", name, svc.Mode)
 		}
 	}
-	var teardown func(ctx context.Context) error
-	if len(files) > 0 {
-		teardown = func(ctx context.Context) error {
-			var errs []error
-			for _, f := range files {
-				if err := b.shred(f); err != nil {
-					errs = append(errs, fmt.Errorf("shred %s: %w", f, err))
-				}
-			}
-			return errors.Join(errs...)
-		}
-	}
-	return Contribution{Args: args, Teardown: teardown}, nil
+	return Contribution{Args: args, Secrets: secrets}, nil
 }
 
-// checkScratch refuses a scratch dir that is not verifiably tmpfs-backed: the
-// raw token must never touch disk.
-func (b *CredentialBroker) checkScratch(dir string) error {
-	if dir == "" {
-		return errors.New("file-mode credentials require a per-step scratch dir")
-	}
-	ok, err := b.isTmpfs(dir)
-	if err != nil {
-		return fmt.Errorf("verify scratch dir is tmpfs-backed: %w", err)
-	}
-	if !ok {
-		return fmt.Errorf("scratch dir %s is not tmpfs-backed; refusing to write a raw credential file", dir)
-	}
-	return nil
-}
-
-// writeSecretFile resolves the service's token host-side and writes it as the
-// 0600 mount source. This is the only call site of Secret.reveal. Once the
-// write has been attempted, any failure — a partial write on a size-limited
-// tmpfs (ENOSPC), a failed chmod — shreds whatever landed in the scratch dir
-// before returning, so a token file that never reached the caller's teardown
-// list still cannot outlive the failed Prepare.
-func (b *CredentialBroker) writeSecretFile(ctx context.Context, scratchDir, name string) (string, error) {
+// resolveToken invokes the user resolver host-side for one file-mode service.
+// The token stays in host RAM as an opaque Secret; it is unwrapped only later,
+// once, by encodeSecretsPayload. A nil resolver or a resolver failure fails
+// the step, naming the service but never the token content.
+func (b *CredentialBroker) resolveToken(ctx context.Context, name string) (Secret, error) {
 	if b.resolver == nil {
-		return "", fmt.Errorf("service %q: file mode needs a credentials.resolver and none is configured", name)
+		return Secret{}, fmt.Errorf("service %q: file mode needs a credentials.resolver and none is configured", name)
 	}
 	tok, err := b.resolver.GetToken(ctx, name)
 	if err != nil {
-		return "", fmt.Errorf("service %q: %w", name, err)
+		return Secret{}, fmt.Errorf("service %q: %w", name, err)
 	}
-	path := filepath.Join(scratchDir, name)
-	shredPartial := func() {
-		if serr := b.shred(path); serr != nil {
-			b.logger.WarnContext(ctx, "shred after failed token write", "service", name, "err", serr)
-		}
-	}
-	if err := b.writeFile(path, tok.reveal(), 0o600); err != nil {
-		shredPartial()
-		return "", fmt.Errorf("service %q: write token file: %w", name, err)
-	}
-	// WriteFile applies the mode only at creation; a leftover file must not
-	// widen it.
-	if err := os.Chmod(path, 0o600); err != nil {
-		shredPartial()
-		return "", fmt.Errorf("service %q: restrict token file: %w", name, err)
-	}
-	return path, nil
-}
-
-// shredFile overwrites the file's full length with zeros, syncs, and removes
-// it. A file already gone counts as shredded — there is nothing left to leak.
-func shredFile(path string) error {
-	info, err := os.Stat(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	var errs []error
-	if _, err := f.WriteAt(make([]byte, info.Size()), 0); err != nil {
-		errs = append(errs, fmt.Errorf("overwrite: %w", err))
-	}
-	if err := f.Sync(); err != nil {
-		errs = append(errs, fmt.Errorf("sync: %w", err))
-	}
-	if err := f.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	if err := os.Remove(path); err != nil {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
+	return tok, nil
 }

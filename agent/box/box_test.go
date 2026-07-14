@@ -3,8 +3,11 @@ package box
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -300,6 +303,88 @@ func TestSecretsExportedToChildEnv(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("child env misses %q", want)
+	}
+}
+
+// failReader fails the test if any phase reads it: the stdin-untouched guard
+// when FABER_SECRETS_STDIN is unset.
+type failReader struct{ t *testing.T }
+
+func (r failReader) Read([]byte) (int, error) {
+	r.t.Fatal("stdin read with FABER_SECRETS_STDIN unset")
+	return 0, io.EOF
+}
+
+// Verifies 93ba0858d75f: with FABER_SECRETS_STDIN=1 the secrets phase reads the
+// JSON stdin payload, writes each 0600 file into the secrets tmpfs, then
+// exports it to the child env via b.setEnv — the stdin origin, same 0600-file
+// -plus-env-export contract.
+func TestSecretsFromStdinMaterialized(t *testing.T) {
+	d := newTestDirs(t)
+	fr := &fakeRunner{}
+	b := newTestBox(t, d, map[string]string{contract.EnvSecretsStdin: "1"}, fr)
+	const tok = "sekret-v"
+	b.Stdin = strings.NewReader(`{"service-token":"` + base64.StdEncoding.EncodeToString([]byte(tok)) + `"}`)
+	if err := b.checkEnv(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.loadSecrets(context.Background()); err != nil {
+		t.Fatalf("loadSecrets: %v", err)
+	}
+	fp := filepath.Join(d.secrets, "service-token")
+	info, err := os.Stat(fp)
+	if err != nil {
+		t.Fatalf("secret file not written: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("secret file mode %o, want 0600", info.Mode().Perm())
+	}
+	if content, _ := os.ReadFile(fp); string(content) != tok {
+		t.Fatalf("secret file content %q, want %q", content, tok)
+	}
+	if !slices.Contains(b.Environ, "SERVICE_TOKEN="+tok) {
+		t.Fatalf("child env misses the materialized secret: %v", b.Environ)
+	}
+}
+
+// Verifies 93ba0858d75f: a malformed stdin payload (not a JSON object, or a
+// non-base64 value) aborts the secrets phase with reason secrets.
+func TestSecretsFromStdinMalformedAborts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+	}{
+		{"not json", "this is not json"},
+		{"not an object", `["a","b"]`},
+		{"non-base64 value", `{"svc":"@@@ not base64 @@@"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTestDirs(t)
+			b := newTestBox(t, d, map[string]string{contract.EnvSecretsStdin: "1"}, &fakeRunner{})
+			b.Stdin = strings.NewReader(tc.payload)
+			err := b.loadSecrets(context.Background())
+			var berr *boxError
+			if !errors.As(err, &berr) || berr.Reason != contract.ReasonSecrets {
+				t.Fatalf("want a secrets boxError, got %v", err)
+			}
+		})
+	}
+}
+
+// Verifies 93ba0858d75f: with FABER_SECRETS_STDIN unset the phase never touches
+// stdin and still exports pre-placed files (the origin-agnostic second step).
+func TestSecretsFlagUnsetLeavesStdinUnread(t *testing.T) {
+	d := newTestDirs(t)
+	if err := os.WriteFile(filepath.Join(d.secrets, "pre-placed"), []byte("v\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := newTestBox(t, d, nil, &fakeRunner{})
+	b.Stdin = failReader{t: t}
+	if err := b.loadSecrets(context.Background()); err != nil {
+		t.Fatalf("loadSecrets: %v", err)
+	}
+	if !slices.Contains(b.Environ, "PRE_PLACED=v") {
+		t.Fatalf("pre-placed secret not exported: %v", b.Environ)
 	}
 }
 

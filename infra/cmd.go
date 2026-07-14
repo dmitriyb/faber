@@ -76,10 +76,25 @@ func (c *cliRunner) run(ctx context.Context, args ...string) ([]byte, error) {
 // runStreaming executes the tool with combined stdout+stderr streamed to
 // output, returning the exit code. Unlike run, a plain non-zero exit is
 // returned as (code, nil) — the docker run verb treats exit codes as data.
-func (c *cliRunner) runStreaming(ctx context.Context, output io.Writer, args ...string) (int, error) {
+// When stdin is non-nil os/exec copies it to the child's standard input and
+// closes the pipe on EOF; the bytes are never logged (they may be a
+// credential). stdin == nil leaves the child's stdin unattached.
+//
+// The EOF/close guarantee is load-bearing: it is what lets faber-box's
+// io.ReadAll(stdin) return instead of blocking forever. It holds because the
+// caller (ContainerRunner.Run) passes a *bytes.Reader — a non-*os.File reader.
+// For such a reader os/exec creates an os.Pipe, spawns a copier goroutine, and
+// closes the pipe's write end when the copy hits EOF, so the container sees a
+// clean end-of-payload. Were cmd.Stdin ever an *os.File (or an already-open fd)
+// os/exec would dup that fd straight through with no copier and no close-on-EOF,
+// and the box's read would hang — do not pass an *os.File here.
+func (c *cliRunner) runStreaming(ctx context.Context, output io.Writer, stdin io.Reader, args ...string) (int, error) {
 	cmd := exec.CommandContext(ctx, c.name, args...)
 	cmd.Stdout = output
 	cmd.Stderr = output
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
 	setupProcess(cmd)
 	c.logger.DebugContext(ctx, "exec", "cmd", c.name, "args", args)
 	err := cmd.Run()

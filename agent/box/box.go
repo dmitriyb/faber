@@ -14,8 +14,11 @@ package box
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path"
@@ -34,6 +37,12 @@ type Box struct {
 	Env    *BoxEnv
 	Runner CmdRunner
 	Log    *slog.Logger
+
+	// Stdin is the box's standard input, read exactly once by the secrets
+	// phase when FABER_SECRETS_STDIN=1 (the file-mode credential payload).
+	// Injectable for tests; the binary wires os.Stdin. When the flag is unset
+	// the phase never touches it.
+	Stdin io.Reader
 
 	// Environ is the child environment for hooks and the agent: the process
 	// environment plus everything the setup phases export (secrets, git ssh
@@ -66,6 +75,7 @@ func New(env *BoxEnv, runner CmdRunner, environ []string, logger *slog.Logger) *
 		Env:     env,
 		Runner:  runner,
 		Log:     logger.With("component", "box"),
+		Stdin:   os.Stdin,
 		Environ: append([]string(nil), environ...),
 		Timing:  map[string]time.Duration{},
 	}
@@ -133,6 +143,15 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 	for _, dir := range []string{b.Env.WorkspaceDir, b.Env.BundleDir, "/tmp", contract.ContainerHome} {
 		if err := os.Chown(dir, b.Env.RunUID, b.Env.RunGID); err != nil {
 			return fail("chown "+dir, err)
+		}
+	}
+	// The /run/secrets tmpfs is present only in file mode and mounted
+	// root-owned by the binding's --tmpfs; chown it — but only when it exists —
+	// so the secrets phase can write its 0600 files as the dropped run user.
+	// Absent file mode there is no such mount and the chown set is unchanged.
+	if _, err := os.Stat(b.Env.SecretsDir); err == nil {
+		if err := os.Chown(b.Env.SecretsDir, b.Env.RunUID, b.Env.RunGID); err != nil {
+			return fail("chown "+b.Env.SecretsDir, err)
 		}
 	}
 	b.setEnv("HOME", contract.ContainerHome)
@@ -320,11 +339,24 @@ func (b *Box) checkEnv(ctx context.Context) error {
 	return nil
 }
 
-// loadSecrets is phase 3: each regular file under the secrets directory (the
-// credential binding's file mode) is exported into the child environment
-// under its uppercased basename. The values exist only in this process tree —
-// never in a docker argv, a log record, or the handoff.
+// loadSecrets is phase 3, in two steps. First, when FABER_SECRETS_STDIN=1
+// (file mode delivered its tokens over stdin), it reads all of the box's stdin
+// to EOF, JSON-decodes the single object {"<name>":"<base64(token)>", ...},
+// base64-decodes each value, and writes /run/secrets/<name> at 0600 into the
+// container tmpfs the preamble already chowned — a malformed payload or a
+// decode error aborts with reason secrets. Stdin is read exactly once and only
+// here; nothing earlier touches it and the headless agent never reads it, so
+// faber closing stdin gives a clean EOF. Second (unchanged, and whether or not
+// the stdin step ran): each regular file under the secrets directory is
+// exported into the child environment under its uppercased basename. The
+// values exist only in this process tree — never in a docker argv, a log
+// record, or the handoff.
 func (b *Box) loadSecrets(ctx context.Context) error {
+	if b.Env.SecretsStdin {
+		if err := b.materializeStdinSecrets(ctx); err != nil {
+			return &boxError{Reason: contract.ReasonSecrets, Detail: err.Error()}
+		}
+	}
 	entries, err := os.ReadDir(b.Env.SecretsDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -344,6 +376,39 @@ func (b *Box) loadSecrets(ctx context.Context) error {
 		b.setEnv(key, strings.TrimSpace(string(raw)))
 		b.Log.DebugContext(ctx, "secret exported", "key", key)
 	}
+	return nil
+}
+
+// materializeStdinSecrets reads the file-mode secrets payload from the box's
+// stdin and writes each token as a 0600 file into the secrets tmpfs. It is the
+// mirror of the host-side encodeSecretsPayload: read all of stdin, JSON-decode
+// the single {"<name>":"<base64(token)>"} object, base64-decode each value,
+// and write it. The raw token bytes never enter a log line or an error string.
+func (b *Box) materializeStdinSecrets(ctx context.Context) error {
+	if b.Stdin == nil {
+		return errors.New("secrets payload signalled but the box has no stdin")
+	}
+	raw, err := io.ReadAll(b.Stdin)
+	if err != nil {
+		return fmt.Errorf("read stdin secrets payload: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return fmt.Errorf("decode stdin secrets payload: %v", err)
+	}
+	if err := os.MkdirAll(b.Env.SecretsDir, 0o700); err != nil {
+		return fmt.Errorf("secrets dir: %v", err)
+	}
+	for name, b64 := range payload {
+		tok, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return fmt.Errorf("decode token for %q: not valid base64", name)
+		}
+		if err := os.WriteFile(filepath.Join(b.Env.SecretsDir, name), tok, 0o600); err != nil {
+			return fmt.Errorf("write secret file %q: %v", name, err)
+		}
+	}
+	b.Log.DebugContext(ctx, "stdin secrets materialized", "count", len(payload))
 	return nil
 }
 

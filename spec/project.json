@@ -61,7 +61,7 @@
       "id": "eddb5adc5adb",
       "type": "functional",
       "title": "Credential delegation via handles",
-      "description": "No secret is ever materialized inside a container. Brokers are forwarded as handles: an ssh-agent socket for keys, an unauthenticated local endpoint backed by an auth-injecting proxy for API tokens. The get_token(service) resolver is user-supplied (keychain/rbw/env/static). Raw-token-in-RAM (read-only tmpfs file mount, chmod 600, --rm) is the explicit degraded opt-out.",
+      "description": "No secret is ever materialized on host disk or in a container image. Brokers are forwarded as handles: an ssh-agent socket for keys, an unauthenticated local endpoint backed by an auth-injecting proxy for API tokens. The get_token(service) resolver is user-supplied (keychain/rbw/env/static). Raw-token-in-RAM (resolved host-side, streamed over the container's stdin into a container tmpfs, chmod 600, --rm; never a host file, never env) is the explicit degraded opt-out.",
       "priority": 1
     },
     {

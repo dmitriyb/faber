@@ -86,12 +86,21 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 	if cfg.Credentials.Resolver != "" {
 		resolver = security.NewExecResolver(cfg.Credentials.Resolver, infra.NewCommandRunner(logger))
 	}
+	netBinding := security.NewNetworkBinding(w.docker, logger)
+	remoteBinding := security.NewRemoteBinding(logger)
+	identityBinding := security.NewIdentityBinding(security.NewAgentController(logger), logger)
 	bindings := security.NewBindingSet(
-		security.NewNetworkBinding(w.docker, logger),
-		security.NewRemoteBinding(logger),
-		security.NewIdentityBinding(security.NewAgentController(logger), logger),
+		netBinding,
+		remoteBinding,
+		identityBinding,
 		security.NewCredentialBroker(resolver, logger),
 		logger)
+	// Interactive re-entry composes no credential broker: the debug shell only
+	// observes a failed step, never runs the agent, and cannot materialize a
+	// stdin secrets payload — so it resolves no tokens (no GetToken side effect)
+	// and streams none. Network/remote/identity stay so clone and observe still
+	// work; an operator who needs a secret sets it by hand inside the shell.
+	reentryBindings := security.NewBindingSetWithoutCredentials(netBinding, remoteBinding, identityBinding, logger)
 
 	network := &cfg.Network
 	if cfg.Network.Name == "" && cfg.Network.Proxy == "" && len(cfg.Network.NoProxy) == 0 && !cfg.Network.Nftables {
@@ -125,13 +134,12 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 		Reentry: &pipeline.Reentry{
 			IR:          ir,
 			Images:      images,
-			Bindings:    bindings,
+			Bindings:    reentryBindings,
 			Interactive: terminalRunner{},
 			EntryBinary: entry,
 			Network:     network,
 			Remote:      remote,
 			Identities:  cfg.Identities,
-			Services:    cfg.Credentials.Services,
 		},
 		Meta: pipeline.RunMeta{
 			ConfigPath: opts.ConfigPath,

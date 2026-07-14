@@ -74,6 +74,12 @@ type BoxEnv struct {
 	// template declares no skills leg and the phase is a no-op.
 	SkillsLink string
 
+	// SecretsStdin reports FABER_SECRETS_STDIN=1: file-mode tokens arrive as a
+	// JSON payload on the box's stdin, and the secrets phase materializes them
+	// into the /run/secrets tmpfs before the origin-agnostic env export. Unset
+	// means the phase never touches stdin.
+	SecretsStdin bool
+
 	// rawSchema, rawAttempt and rawTOFU hold the undecoded values for the
 	// env phase.
 	rawSchema  string
@@ -112,6 +118,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		WorkspaceDir:     withDefault(get(contract.EnvWorkspaceDir), contract.ContainerWorkspace),
 		GitCache:         get(contract.EnvGitCache),
 		SkillsLink:       get(contract.EnvSkillsLink),
+		SecretsStdin:     get(contract.EnvSecretsStdin) == "1",
 		rawSchema:        get(contract.EnvOutputSchema),
 		rawAttempt:       get(contract.EnvAttempt),
 		rawTOFU:          get(security.EnvHostKeyTOFU),

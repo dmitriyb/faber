@@ -46,7 +46,7 @@ func (f *fakeDocker) NetworkExists(_ context.Context, name string) (bool, error)
 	return f.networks[name], nil
 }
 
-func (f *fakeDocker) ContainerRun(context.Context, []string, io.Writer) (int, error) {
+func (f *fakeDocker) ContainerRun(context.Context, []string, io.Reader, io.Writer) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runCalls++
@@ -214,7 +214,6 @@ func newHarness(t *testing.T) *harness {
 	agent := newFakeAgent()
 	resolver := &fakeResolver{token: []byte(testToken)}
 	broker := NewCredentialBroker(resolver, logger)
-	broker.isTmpfs = func(string) (bool, error) { return true, nil } // t.TempDir is not reliably tmpfs
 	return &harness{
 		docker:   docker,
 		agent:    agent,
@@ -258,7 +257,8 @@ func mergeStep(scratch string) StepSpec {
 }
 
 // implementFragment is the exact ordered argv fragment the implement step
-// must assemble to.
+// must assemble to. File mode contributes exactly one --tmpfs /run/secrets and
+// no token flag — the token rides Assembled.SecretsStdin, not the argv.
 func implementFragment(scratch string) []string {
 	return []string{
 		"--network", "agents-internal",
@@ -269,7 +269,7 @@ func implementFragment(scratch string) []string {
 		"-e", "FABER_HOST_KEY=" + hostKeyLine,
 		"-v", filepath.Join(scratch, "ssh-agent", "agent.sock") + ":/ssh-agent",
 		"-e", "SSH_AUTH_SOCK=/ssh-agent",
-		"-v", filepath.Join(scratch, "agent-api") + ":/run/secrets/agent-api:ro",
+		"--tmpfs", "/run/secrets",
 	}
 }
 

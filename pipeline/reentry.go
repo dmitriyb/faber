@@ -41,11 +41,13 @@ type Reentry struct {
 	EntryBinary string
 	Shell       []string // in-container entry; default ["/bin/sh"]
 
-	// Security configuration, resolved by the wiring like AgentBoxes'.
+	// Security configuration, resolved by the wiring like AgentBoxes'. Note the
+	// absence of Services: re-entry is wired with a credential-free binding set
+	// (security.NewBindingSetWithoutCredentials), so no service declaration is
+	// ever consulted here — see Reenter.
 	Network    *config.NetworkDef
 	Remote     *config.RemoteDef
 	Identities map[string]config.IdentityDef
-	Services   map[string]config.ServiceDef
 }
 
 var _ failure.BoxReentry = (*Reentry)(nil)
@@ -118,12 +120,17 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 			identity = &def
 		}
 	}
+	// The re-entry debug shell carries no credentials. r.Bindings is the
+	// credential-free binding set: the shell observes the failed step, it never
+	// runs the agent, and it cannot materialize the stdin secrets payload (the
+	// raw shell replaces the box sequencer), so no token is resolved and none is
+	// streamed. Deliberately no Services here — the credential broker is not
+	// composed for re-entry; an operator who needs a secret sets it by hand.
 	asm, err := r.Bindings.Prepare(ctx, security.StepSpec{
 		NodeID:     t.StepID,
 		Network:    r.Network,
 		Remote:     r.Remote,
 		Identity:   identity,
-		Services:   r.Services,
 		Runtime:    node.Template.Runtime,
 		Repo:       handoff.Inputs["repo"],
 		ScratchDir: scratchDir,

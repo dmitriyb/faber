@@ -24,11 +24,18 @@ import (
 // "Loaded image:" result line; ContainerRun executes a pre-assembled argv
 // (only ContainerRunner ever constructs one) streaming combined output to the
 // writer; Kill stops a container by its deterministic name.
+//
+// When stdin is non-nil ContainerRun wires it to the container's standard
+// input (the caller has already put "-i" in args), copies it to EOF, and
+// closes the pipe — a clean EOF the box reads as end-of-payload. stdin == nil
+// leaves stdin unattached. The stdin bytes are a potential credential (the
+// file-mode secrets payload), so they are never logged, exactly like a
+// CommandRunner's stdout.
 type DockerClient interface {
 	ImageExists(ctx context.Context, tag string) (bool, error)
 	Load(ctx context.Context, tarball string) (string, error) // returns the loaded tag
 	NetworkExists(ctx context.Context, name string) (bool, error)
-	ContainerRun(ctx context.Context, args []string, output io.Writer) (int, error)
+	ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error)
 	Kill(ctx context.Context, name string) error
 }
 

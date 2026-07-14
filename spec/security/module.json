@@ -28,7 +28,7 @@
       "preq_id": "eddb5adc5adb",
       "type": "functional",
       "title": "Credential broker handles",
-      "description": "API credentials are delegated as handles to out-of-container brokers, per-tool: an ssh-agent socket for keys, a base-URL rewrite to an auth-injecting local proxy for HTTP tokens, or a credential-helper endpoint. The get_token(service) resolver is an opaque user command faber invokes host-side. Degraded mode (explicit opt-in): resolve the raw token host-side and mount it read-only as a tmpfs-backed file (never env), shredded after the run."
+      "description": "API credentials are delegated as handles to out-of-container brokers, per-tool: an ssh-agent socket for keys, a base-URL rewrite to an auth-injecting local proxy for HTTP tokens, or a credential-helper endpoint. The get_token(service) resolver is an opaque user command faber invokes host-side. Degraded mode (explicit opt-in): resolve the raw token host-side (in RAM) and deliver it into a container tmpfs over the container's stdin (never a host file, never env), materialized to a 0600 file at /run/secrets/<service> that dies with the container."
     },
     {
       "id": "41bb811a34e8",
@@ -84,7 +84,7 @@
     {
       "id": "8608d80a273e",
       "name": "CredentialBroker",
-      "description": "The credential-delegation interface: handle shapes (socket, endpoint, credential-helper), the opaque get_token resolver invocation, and the degraded raw-token file mount with post-run shredding. Owns the deferred expiry/refresh seam.",
+      "description": "The credential-delegation interface: handle shapes (socket, endpoint, credential-helper), the opaque get_token resolver invocation, and the degraded raw-token file mode that delivers the token into a container tmpfs over stdin (no host file, no shred). Owns the deferred expiry/refresh seam.",
       "content": "arch_credential_broker.md",
       "implements": ["0c5bc0f678b7", "0157d30de15f"]
     },

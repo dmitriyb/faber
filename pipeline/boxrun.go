@@ -153,6 +153,15 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		return BoxResult{}, err
 	}
 	spec.Bindings = asm.Args
+	// The credentials pairing is atomic: a non-empty file-mode secrets payload
+	// is copied into RunSpec.StdinSecrets and the box's stdin signal is set in
+	// the same step, never one without the other (see spec/infra/impl_run_argv.md
+	// and spec/pipeline/impl_scheduling.md). This is the only host-side owner of
+	// RunSpec.Env assembly at the step-runner seam.
+	if len(asm.SecretsStdin) > 0 {
+		spec.StdinSecrets = asm.SecretsStdin
+		spec.Env[contract.EnvSecretsStdin] = "1"
+	}
 
 	runRes, runErr := b.Containers.Run(ctx, spec)
 	if terr := asm.Teardown(ctx); terr != nil {

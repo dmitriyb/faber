@@ -23,7 +23,8 @@ type fakeDocker struct {
 	loadTag    string          // tag Load reports
 	loadErr    error
 	markLoaded bool // Load marks loadTag as existing (daemon-as-cache)
-	runFn      func(ctx context.Context, args []string, output io.Writer) (int, error)
+	runFn      func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error)
+	runStdins  [][]byte // full contents of each ContainerRun's stdin (nil when unattached)
 	killErr    error
 	killed     []string
 }
@@ -76,10 +77,19 @@ func (f *fakeDocker) NetworkExists(ctx context.Context, name string) (bool, erro
 	return f.exists[name], nil
 }
 
-func (f *fakeDocker) ContainerRun(ctx context.Context, args []string, output io.Writer) (int, error) {
+func (f *fakeDocker) ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
 	f.record("run", args...)
+	// Drain stdin to EOF exactly as the real adapter does — the box reads the
+	// clean EOF as end-of-payload. nil stdin records a nil entry.
+	var drained []byte
+	if stdin != nil {
+		drained, _ = io.ReadAll(stdin)
+	}
+	f.mu.Lock()
+	f.runStdins = append(f.runStdins, drained)
+	f.mu.Unlock()
 	if f.runFn != nil {
-		return f.runFn(ctx, args, output)
+		return f.runFn(ctx, args, stdin, output)
 	}
 	return 0, nil
 }

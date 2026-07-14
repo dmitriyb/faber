@@ -19,12 +19,14 @@ runtime**. Each binding's contribution is internally ordered too, so the
 same resolved step always yields the same argv fragment byte-for-byte —
 golden-testable, diffable in logs, and stable under map iteration. Setup
 hooks run in that same order (network preflight, host-key read, agent
-spawn + key load, resolver calls / secret-file writes); teardown hooks run
-in exact reverse (shred secret files, kill the agent, nothing for remote or
+spawn + key load, resolver calls / secrets-payload encode); teardown hooks
+run in exact reverse (kill the agent, nothing for credentials, remote, or
 network) and run *always* — after the container exits, after a setup
 failure partway through (unwinding only what was set up), and on context
-cancellation. Teardown errors are collected and surfaced together, never
-short-circuited: a failed shred must not skip killing the agent.
+cancellation. File mode leaves no host-side residue to undo — its tokens
+live only in the container tmpfs and die with the container — so its
+teardown is a no-op. Teardown errors are collected and surfaced together,
+never short-circuited: a failed hook must not skip killing the agent.
 
 ## The runtime knob
 
@@ -46,7 +48,7 @@ whose error names the binding and the cause — missing network, unreadable
 host key, resolver non-zero exit, agent spawn failure. Nothing is retried
 inside the BindingSet; retry is a step-level concern, and each attempt
 gets a completely fresh assembly (new agent, fresh resolver invocation,
-new secret files), which is what makes between-attempt cleanup sound.
+fresh secrets payload), which is what makes between-attempt cleanup sound.
 
 ## Boundary notes
 

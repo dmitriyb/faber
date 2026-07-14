@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -22,9 +20,7 @@ func testBroker(resolver Resolver, logBuf *bytes.Buffer) *CredentialBroker {
 	} else {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	b := NewCredentialBroker(resolver, logger)
-	b.isTmpfs = func(string) (bool, error) { return true, nil }
-	return b
+	return NewCredentialBroker(resolver, logger)
 }
 
 func serviceStep(scratch string, services map[string]config.ServiceDef) StepSpec {
@@ -32,9 +28,10 @@ func serviceStep(scratch string, services map[string]config.ServiceDef) StepSpec
 }
 
 // Verifies 0c5bc0f678b7: with agent-api in file mode the resolver runs
-// host-side exactly once, the fragment carries the read-only mount and no env
-// var carrying the token, and the mount source is a 0600 file holding the
-// token inside the scratch dir — test scenario 5.
+// host-side exactly once, the fragment carries exactly one --tmpfs
+// /run/secrets and no -v mount and no env var carrying the token, the token
+// rides Contribution.Secrets, no host file is written anywhere, and there is
+// no teardown — test scenario 5.
 func TestBrokerFileModeContainment(t *testing.T) {
 	resolver := &fakeResolver{token: []byte(testToken)}
 	var logBuf bytes.Buffer
@@ -44,8 +41,7 @@ func TestBrokerFileModeContainment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	src := filepath.Join(scratch, "agent-api")
-	want := []string{"-v", src + ":/run/secrets/agent-api:ro"}
+	want := []string{"--tmpfs", "/run/secrets"}
 	if !slices.Equal(c.Args, want) {
 		t.Fatalf("args: want %q, got %q", want, c.Args)
 	}
@@ -57,42 +53,45 @@ func TestBrokerFileModeContainment(t *testing.T) {
 	if resolver.callCount() != 1 {
 		t.Fatalf("resolver must run exactly once, ran %d times", resolver.callCount())
 	}
-	info, err := os.Stat(src)
-	if err != nil {
-		t.Fatalf("mount source: %v", err)
+	// The token lives only on the Contribution's Secrets map, and its formatted
+	// form is redacted.
+	if got := c.Secrets["agent-api"].String(); got != redacted {
+		t.Fatalf("secret not redacted in formatting: %q", got)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mount source mode: want 0600, got %o", info.Mode().Perm())
+	if string(c.Secrets["agent-api"].reveal()) != testToken {
+		t.Fatalf("Secrets map does not carry the resolved token")
 	}
-	content, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatal(err)
+	// No host file is written anywhere under the scratch dir.
+	if entries, _ := os.ReadDir(scratch); len(entries) != 0 {
+		t.Fatalf("file mode wrote host files: %v", entries)
 	}
-	if string(content) != testToken {
-		t.Fatalf("mount source content mismatch")
+	if c.Teardown != nil {
+		t.Fatal("file mode leaves no host residue; teardown must be nil")
 	}
 	// Degraded mode is deliberately noisy.
 	if log := logBuf.String(); !strings.Contains(log, "level=WARN") || !strings.Contains(log, "agent-api") {
 		t.Fatalf("want a degraded-path warning naming the service, got %q", log)
 	}
-	if err := c.Teardown(context.Background()); err != nil {
-		t.Fatalf("Teardown: %v", err)
-	}
-	if _, serr := os.Stat(src); !os.IsNotExist(serr) {
-		t.Fatal("teardown must remove the token file")
-	}
 }
 
-// Verifies 0c5bc0f678b7: a non-tmpfs scratch dir refuses assembly — the raw
-// token must never touch disk — test scenario 5.
-func TestBrokerNonTmpfsScratchRefused(t *testing.T) {
+// Verifies 0c5bc0f678b7: two file-mode services yield exactly one --tmpfs
+// /run/secrets and a two-key Secrets map — the tmpfs is emitted once — test
+// scenario 5.
+func TestBrokerFileModeSingleTmpfs(t *testing.T) {
 	resolver := &fakeResolver{token: []byte(testToken)}
 	b := testBroker(resolver, nil)
-	b.isTmpfs = func(string) (bool, error) { return false, nil }
-	_, err := b.Prepare(context.Background(), serviceStep(t.TempDir(), map[string]config.ServiceDef{"agent-api": {Mode: "file"}}))
-	errContains(t, err, "not tmpfs-backed")
-	if resolver.callCount() != 0 {
-		t.Fatal("no token may be resolved for an unusable scratch dir")
+	c, err := b.Prepare(context.Background(), serviceStep(t.TempDir(), map[string]config.ServiceDef{
+		"agent-api": {Mode: "file"},
+		"other-api": {Mode: "file"},
+	}))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if want := []string{"--tmpfs", "/run/secrets"}; !slices.Equal(c.Args, want) {
+		t.Fatalf("args: want exactly one --tmpfs, got %q", c.Args)
+	}
+	if len(c.Secrets) != 2 || c.Secrets["agent-api"].reveal() == nil || c.Secrets["other-api"].reveal() == nil {
+		t.Fatalf("want a two-key Secrets map, got %v", c.Secrets)
 	}
 }
 
@@ -157,32 +156,23 @@ func TestBrokerSortedServiceOrder(t *testing.T) {
 }
 
 // Verifies 0c5bc0f678b7: a resolver failure fails the step before a container
-// exists, names the binding's service but never stdout content, and shreds
-// any file material already written for earlier services.
-func TestBrokerResolverFailureShredsEarlierFiles(t *testing.T) {
+// exists, names the binding's service but never stdout content, and leaves no
+// host file behind — there is nothing to shred because nothing is ever written
+// to disk.
+func TestBrokerResolverFailureNoHostResidue(t *testing.T) {
 	resolver := &fakeResolver{token: []byte(testToken), errFor: map[string]error{"beta-api": errors.New("exit 1")}}
 	b := testBroker(resolver, nil)
-	var shredded []string
-	realShred := b.shred
-	b.shred = func(path string) error {
-		shredded = append(shredded, path)
-		return realShred(path)
-	}
 	scratch := t.TempDir()
 	_, err := b.Prepare(context.Background(), serviceStep(scratch, map[string]config.ServiceDef{
-		"agent-api": {Mode: "file"}, // sorts first, succeeds
+		"agent-api": {Mode: "file"}, // sorts first, succeeds (token stays in RAM)
 		"beta-api":  {Mode: "file"}, // fails
 	}))
 	errContains(t, err, "beta-api")
 	if strings.Contains(err.Error(), testToken) {
 		t.Fatalf("error leaked token content: %q", err.Error())
 	}
-	first := filepath.Join(scratch, "agent-api")
-	if !slices.Contains(shredded, first) {
-		t.Fatalf("earlier file %q must be shredded on failure, shredded: %q", first, shredded)
-	}
-	if _, serr := os.Stat(first); !os.IsNotExist(serr) {
-		t.Fatal("earlier token file must be gone after failed Prepare")
+	if entries, _ := os.ReadDir(scratch); len(entries) != 0 {
+		t.Fatalf("no host file may be written in file mode, found: %v", entries)
 	}
 }
 
@@ -239,71 +229,6 @@ func TestBrokerServiceNameCharsetEnforced(t *testing.T) {
 				t.Fatalf("resolver must not run for an invalid service name, ran %d times", resolver.callCount())
 			}
 		})
-	}
-}
-
-// Verifies 0c5bc0f678b7 (finding 2 regression): a token write that fails
-// after touching the filesystem — a partial write on a size-limited tmpfs
-// (ENOSPC) — is shredded before Prepare returns, even though the file never
-// reached the teardown list; nothing raw survives the failed attempt.
-func TestBrokerFailedWriteStillShredded(t *testing.T) {
-	resolver := &fakeResolver{token: []byte(testToken)}
-	b := testBroker(resolver, nil)
-	b.writeFile = func(path string, data []byte, perm os.FileMode) error {
-		// Emulate ENOSPC mid-write: half the token lands, then the write fails.
-		if err := os.WriteFile(path, data[:len(data)/2], perm); err != nil {
-			return err
-		}
-		return errors.New("no space left on device")
-	}
-	var shredded []string
-	realShred := b.shred
-	b.shred = func(path string) error {
-		shredded = append(shredded, path)
-		return realShred(path)
-	}
-	scratch := t.TempDir()
-	_, err := b.Prepare(context.Background(), serviceStep(scratch, map[string]config.ServiceDef{"agent-api": {Mode: "file"}}))
-	errContains(t, err, "agent-api")
-	errContains(t, err, "write token file")
-	partial := filepath.Join(scratch, "agent-api")
-	if !slices.Contains(shredded, partial) {
-		t.Fatalf("partial write must be shredded, shredded: %q", shredded)
-	}
-	if _, serr := os.Stat(partial); !os.IsNotExist(serr) {
-		t.Fatal("partial token file must be gone after the failed write")
-	}
-}
-
-// Verifies 0c5bc0f678b7: shredFile overwrites the file's content with zeros
-// before removing it (observed through an independently held descriptor) —
-// the instrumented half of test scenario 3's shred assertion.
-func TestShredZeroesBeforeRemoval(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(path, []byte(testToken), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	held, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer held.Close()
-	if err := shredFile(path); err != nil {
-		t.Fatalf("shredFile: %v", err)
-	}
-	if _, serr := os.Stat(path); !os.IsNotExist(serr) {
-		t.Fatal("shred must remove the file")
-	}
-	content, err := io.ReadAll(held)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(content) != len(testToken) || !bytes.Equal(content, make([]byte, len(testToken))) {
-		t.Fatalf("content must be zeroed before removal, got %q", content)
-	}
-	// Idempotent on the second call: nothing left to leak.
-	if err := shredFile(path); err != nil {
-		t.Fatalf("shredFile on absent file: %v", err)
 	}
 }
 

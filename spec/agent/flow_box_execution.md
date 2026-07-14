@@ -6,15 +6,16 @@ inside the sealed container.
 
 ```
 host: step spec (resolved template + bound inputs)
-        │  box contract: FABER_* env (incl. FABER_SKILLS_LINK), result-dir
-        │  mount, hook mounts, ro /faber/skills mount, faber-box mount;
-        │  binding fragments (network/remote/identity/credentials) composed
-        │  by security, argv assembled by infra
+        │  box contract: FABER_* env (incl. FABER_SKILLS_LINK,
+        │  FABER_SECRETS_STDIN), result-dir mount, hook mounts, ro
+        │  /faber/skills mount, faber-box mount; binding fragments
+        │  (network/remote/identity/credentials) composed by security,
+        │  argv assembled by infra; file-mode tokens streamed on stdin
         ▼
 ──────────────── container start ───────────────────────────────
  1 skills link                 $HOME/<link> ──► /faber/skills (no-op if unset)
  2 env contract check          FABER_INPUT_*, FABER_SKILL, dirs
- 3 /run/secrets/*  ──►  process env (uppercased basenames)
+ 3 stdin payload ──► /run/secrets/* (file mode)  then  /run/secrets/* ──► process env
  4 host-key policy             pinned │ tofu │ abort
  5 git clone gateway/<repo>    only when the repo input is bound
  6 signing config              ssh-add -L ──► git config key::<pub>
@@ -41,7 +42,7 @@ host: ExtractResult ──► re-validate ──► failure.Result
 
 | Boundary | Shape | Contract |
 |----------|-------|----------|
-| host -> box | env vars + read-only mounts | typed inputs as `FABER_INPUT_<SLOT>`; no secret ever in the docker `-e` argv |
+| host -> box | env vars + read-only mounts (+ stdin in file mode) | typed inputs as `FABER_INPUT_<SLOT>`; no secret ever in the docker `-e` argv or a host file — file-mode tokens arrive as a JSON payload on the container's stdin |
 | setup -> hooks | the box environment | hooks see inputs, handles, workspace cwd; nothing else |
 | hooks -> agent | context bundle | `CONTEXT.md` mandatory (or synthesized); `bundle.env` values opaque, `BRANCH` = declared side-effect |
 | agent -> extractor | `output.json` | declared output fields only; absence triggers the fallback |

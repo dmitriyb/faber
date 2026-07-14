@@ -84,6 +84,13 @@ const (
 	// absent means the template declares no skills leg and the phase is a no-op.
 	EnvSkillsLink = "FABER_SKILLS_LINK"
 
+	// EnvSecretsStdin signals that file-mode credential tokens ride the
+	// container's stdin: set to "1" by the host-side RunSpec assembler exactly
+	// when a SecretsStdin payload is attached, and the secrets phase gates its
+	// stdin read on it. The signal and the payload are set together, never one
+	// without the other (see the pipeline scheduler's RunSpec assembly seam).
+	EnvSecretsStdin = "FABER_SECRETS_STDIN"
+
 	// InputEnvPrefix prefixes one variable per bound input slot:
 	// FABER_INPUT_<SLOT>, the typed-inputs contract for hooks and agent.
 	InputEnvPrefix = "FABER_INPUT_"

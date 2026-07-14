@@ -7,6 +7,8 @@
 package box_test
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -48,6 +50,8 @@ type fixture struct {
 	t    *testing.T
 	root string
 	env  map[string]string
+
+	stdin []byte // fed to the box's stdin (the file-mode secrets payload)
 
 	resultDir, bundleDir, hooksDir, secretsDir, workspace string
 }
@@ -219,6 +223,9 @@ func (f *fixture) run() (int, string) {
 	var stderr, stdout strings.Builder
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stdout
+	if f.stdin != nil {
+		cmd.Stdin = bytes.NewReader(f.stdin)
+	}
 	err := cmd.Run()
 	code := 0
 	if err != nil {
@@ -512,43 +519,95 @@ exit 0
 	})
 }
 
-// Scenario 7. Verifies 93ba0858d75f and b880aa49b3b9: delegated secret files
-// reach hooks as environment, and a later failure's handoff carries the
-// FABER_INPUT_* map but no trace of the secret value.
+// Scenario 7. Verifies 93ba0858d75f and b880aa49b3b9: with FABER_SECRETS_STDIN=1
+// and a single JSON object on stdin, the secrets phase writes the 0600
+// /run/secrets file (scratch stand-in) with the decoded bytes and exports it,
+// so the hook environment carries SERVICE_TOKEN; a later failure's handoff
+// carries the FABER_INPUT_* map but no trace of the value, and the raw token
+// appears in no log line. A malformed stdin payload aborts at the secrets phase
+// with reason secrets. Unset FABER_SECRETS_STDIN with a pre-placed file still
+// exports it and leaves stdin unread.
 func TestLifecycle_SecretsReachHooksNeverHandoff(t *testing.T) {
-	f := newFixture(t)
 	const secret = "sekret-value-12345"
-	if err := os.WriteFile(filepath.Join(f.secretsDir, "service_token"), []byte(secret+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f.writeHook(contract.HookContext, "#!/bin/sh\nenv > \"$STUB_DIR/hook-env\"\nprintf 'body\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
-	f.env["FABER_INPUT_ALPHA"] = "v1"
-	f.env["STUB_EXIT"] = "17" // force a later failure
 
-	code, _ := f.run()
-	if code == 0 {
-		t.Fatal("want nonzero exit")
-	}
-	hookEnv, err := os.ReadFile(filepath.Join(f.root, "hook-env"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(hookEnv), "SERVICE_TOKEN="+secret) {
-		t.Fatal("the hook environment misses the delegated secret")
-	}
-	h := f.handoff()
-	if h.Inputs["ALPHA"] != "v1" {
-		t.Fatalf("handoff inputs = %v", h.Inputs)
-	}
-	for _, file := range []string{contract.HandoffFile, contract.ResultFile} {
-		raw, err := os.ReadFile(filepath.Join(f.resultDir, file))
+	t.Run("stdin payload materialized and exported", func(t *testing.T) {
+		f := newFixture(t)
+		f.env[contract.EnvSecretsStdin] = "1"
+		f.stdin = []byte(`{"service_token":"` + base64.StdEncoding.EncodeToString([]byte(secret)) + `"}`)
+		f.writeHook(contract.HookContext, "#!/bin/sh\nenv > \"$STUB_DIR/hook-env\"\nstat -c '%a' \"$FABER_SECRETS_DIR/service_token\" > \"$STUB_DIR/secret-mode\"\nprintf 'body\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
+		f.env["FABER_INPUT_ALPHA"] = "v1"
+		f.env["STUB_EXIT"] = "17" // force a later failure
+
+		code, stderr := f.run()
+		if code == 0 {
+			t.Fatal("want nonzero exit")
+		}
+		hookEnv, err := os.ReadFile(filepath.Join(f.root, "hook-env"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(raw), secret) {
-			t.Fatalf("%s leaks the secret value", file)
+		if !strings.Contains(string(hookEnv), "SERVICE_TOKEN="+secret) {
+			t.Fatal("the hook environment misses the stdin-delivered secret")
 		}
-	}
+		if mode, _ := os.ReadFile(filepath.Join(f.root, "secret-mode")); strings.TrimSpace(string(mode)) != "600" {
+			t.Fatalf("secret file mode = %q, want 600", strings.TrimSpace(string(mode)))
+		}
+		h := f.handoff()
+		if h.Inputs["ALPHA"] != "v1" {
+			t.Fatalf("handoff inputs = %v", h.Inputs)
+		}
+		for _, file := range []string{contract.HandoffFile, contract.ResultFile} {
+			raw, err := os.ReadFile(filepath.Join(f.resultDir, file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), secret) {
+				t.Fatalf("%s leaks the secret value", file)
+			}
+		}
+		if strings.Contains(stderr, secret) {
+			t.Fatal("the raw token appears in a log line")
+		}
+	})
+
+	t.Run("malformed stdin payload aborts at secrets", func(t *testing.T) {
+		f := newFixture(t)
+		f.env[contract.EnvSecretsStdin] = "1"
+		f.stdin = []byte(`{"service_token":"@@ not base64 @@"}`)
+		f.writeHook(contract.HookContext, "#!/bin/sh\ntouch \"$STUB_DIR/hook-ran\"\n")
+		code, _ := f.run()
+		if code == 0 {
+			t.Fatal("malformed payload must fail the box")
+		}
+		if _, err := os.Stat(filepath.Join(f.root, "hook-ran")); err == nil {
+			t.Fatal("the hook ran despite a secrets-phase abort")
+		}
+		if rec := f.record(); rec.Error == nil || rec.Error.Reason != contract.ReasonSecrets {
+			t.Fatalf("want a secrets-reason failure, got %+v", rec.Error)
+		}
+	})
+
+	t.Run("unset flag exports pre-placed file, stdin unread", func(t *testing.T) {
+		f := newFixture(t)
+		if err := os.WriteFile(filepath.Join(f.secretsDir, "service_token"), []byte(secret+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// A non-empty stdin that must be ignored when the flag is unset.
+		f.stdin = []byte("this stdin must never be read")
+		f.writeHook(contract.HookContext, "#!/bin/sh\nenv > \"$STUB_DIR/hook-env\"\nprintf 'body\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
+		f.env["STUB_EXIT"] = "17"
+		code, _ := f.run()
+		if code == 0 {
+			t.Fatal("want nonzero exit from the forced failure")
+		}
+		hookEnv, err := os.ReadFile(filepath.Join(f.root, "hook-env"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(hookEnv), "SERVICE_TOKEN="+secret) {
+			t.Fatal("the pre-placed secret was not exported")
+		}
+	})
 }
 
 // Scenario 8. Verifies ff8e85704b0a: an agent that exits 0 writing no

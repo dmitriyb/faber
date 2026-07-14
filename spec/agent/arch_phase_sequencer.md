@@ -25,7 +25,17 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    those writable mounts to `FABER_RUN_UID:FABER_RUN_GID` (the host user's
    uid:gid, so result-bind files stay host-owned), then drops privileges —
    `setgroups` to the single run group, `setgid`, `setuid` — so every phase
-   below, and the untrusted agent in particular, runs non-root. The store paths
+   below, and the untrusted agent in particular, runs non-root. The
+   `/run/secrets` tmpfs (present only in file mode, mounted root-owned by the
+   binding's `--tmpfs` flag) is a **gated add to the chown set**: chowned only
+   when it exists, so the dropped run user can write its `0600` secret files in
+   phase 3. Absent file mode there is no such mount and the chown set is
+   unchanged. File-mode secrets therefore presume the root-entry-then-drop path
+   (or the box-lifecycle harness's writable `/run/secrets` override): the gated
+   chown is what makes the root-owned tmpfs writable by the run user, so a
+   genuinely non-root / no-drop box — where the preamble is a no-op and chowns
+   nothing — must already own `/run/secrets` itself for phase 3 to write there.
+   The store paths
    of the toolset remain root-owned and read-only throughout. If the box is
    already non-root (a gateless local invocation with no root to drop), the
    preamble is a no-op. This is the same root-entry-then-drop shape the network
@@ -53,14 +63,25 @@ completes or the box fail-stops — no phase ever runs after a failed one.
 2. **Env contract.** The box's inputs arrive as environment: `FABER_SKILL`,
    `FABER_IDENTITY`, `FABER_RESULT_DIR` (a host-mounted directory),
    `FABER_BUNDLE_DIR`, `FABER_OUTPUT_SCHEMA`, the optional `FABER_SKILLS_LINK`,
-   and one `FABER_INPUT_<SLOT>` per bound input slot. Every required slot of the
-   template must be present and non-empty; a violation aborts immediately with
-   reason `env-contract`.
-3. **Delegated secrets.** Each file under `/run/secrets/` (the credential
-   binding's degraded file mode) is exported into the *process* environment
-   under its uppercased basename. Secrets never cross the docker boundary as
-   `-e` env — that rule is the host-side binding's; this phase is the in-box
-   convenience that makes the mounted handle reachable by hooks and agent.
+   the optional `FABER_SECRETS_STDIN` (set to `1` when file-mode tokens ride
+   stdin), and one `FABER_INPUT_<SLOT>` per bound input slot. Every required
+   slot of the template must be present and non-empty; a violation aborts
+   immediately with reason `env-contract`.
+3. **Delegated secrets.** Two steps, the first gated. When
+   `FABER_SECRETS_STDIN=1` (file mode delivered its tokens over stdin), the box
+   reads **all of stdin** to EOF, JSON-decodes the single object
+   `{"<name>":"<base64(token)>", ...}`, base64-decodes each value, and writes
+   `/run/secrets/<name>` at `0600` into the container tmpfs. This runs at the
+   start of phase 3 (phases 1 skills and 2 env run between the preamble drop and
+   here); nothing earlier touches stdin
+   and the headless agent never reads it, so faber closing stdin gives a clean
+   EOF. Then — unchanged, and whether or not the stdin step ran — each regular
+   file under `/run/secrets/` is exported into the *process* environment under
+   its uppercased basename. Secrets never cross the docker boundary as `-e` env
+   — that rule is the host-side binding's; this phase materializes the
+   stdin-delivered handle and makes it reachable by hooks and agent. Only the
+   secret's *origin* changed (container stdin, not a host bind mount); the
+   `0600`-file-plus-env-export contract is identical.
 4. **Host-key policy.** Pinned key material (`FABER_HOST_KEY`) is written to a
    known-hosts file with `StrictHostKeyChecking=yes` (fail closed); else an
    explicit TOFU opt-in (`FABER_HOST_KEY_TOFU=1`) selects `accept-new`

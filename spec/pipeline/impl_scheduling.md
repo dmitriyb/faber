@@ -33,6 +33,15 @@ All graph mutation happens on the loop goroutine; workers communicate only via
 `events`. No mutex guards the DAG — the splice, the decrements, and the ready
 queue are single-threaded by construction, and `go test -race` stays quiet.
 
+The `steps` closure is the host-side `infra.RunSpec` assembly seam: it bridges
+the security module's `Assembled` (verbatim argv fragment + `SecretsStdin`) and
+the engine mounts/env into one run spec before handing it to
+`infra.ContainerRunner`, so it is the single place that owns `RunSpec.Env`
+assembly and therefore enforces the credentials pairing — a non-empty
+`Assembled.SecretsStdin` is copied into `RunSpec.StdinSecrets` and
+`RunSpec.Env[contract.EnvSecretsStdin]="1"` is set in the same step, never one
+without the other (see spec/infra/impl_run_argv.md).
+
 ## The loop
 
 ```go

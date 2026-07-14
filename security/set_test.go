@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"os"
@@ -30,6 +31,11 @@ func TestGoldenFragment(t *testing.T) {
 	}
 	if !slices.Equal(first.Args, want) {
 		t.Fatalf("fragment:\nwant %q\ngot  %q", want, first.Args)
+	}
+	// The file-mode token rides SecretsStdin as one JSON object, not the argv.
+	wantPayload := `{"agent-api":"` + base64.StdEncoding.EncodeToString([]byte(testToken)) + `"}`
+	if string(first.SecretsStdin) != wantPayload {
+		t.Fatalf("SecretsStdin: want %q, got %q", wantPayload, first.SecretsStdin)
 	}
 	if err := first.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
@@ -146,9 +152,10 @@ func TestPrepareFailureUnwindsPriorBindings(t *testing.T) {
 
 // Verifies e47a00273f03 and 0c5bc0f678b7: teardown always runs — after a
 // clean run, after a failed run, and when a later binding's Prepare fails
-// after the agent was spawned (a failing resolver) — leaving the agent dead,
-// the socket directory removed, every file-mode secret shredded, and (in the
-// Prepare-failure case) no container ever started — test scenario 3.
+// after the agent was spawned (a failing resolver) — leaving the agent dead
+// and the socket directory removed. File mode contributes no teardown and
+// writes no host file, so there is nothing to shred; the (Prepare-failure)
+// case additionally asserts no container ever started — test scenario 3.
 func TestTeardownAlwaysRuns(t *testing.T) {
 	assertClean := func(t *testing.T, h *harness, scratch string) {
 		t.Helper()
@@ -158,8 +165,10 @@ func TestTeardownAlwaysRuns(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(scratch, "ssh-agent")); !os.IsNotExist(err) {
 			t.Fatal("socket directory must be removed")
 		}
+		// File mode writes no host file at all: the scratch area never held the
+		// token, so there is nothing to shred.
 		if _, err := os.Stat(filepath.Join(scratch, "agent-api")); !os.IsNotExist(err) {
-			t.Fatal("file-mode secret must be shredded")
+			t.Fatal("file mode must not write a host token file")
 		}
 	}
 

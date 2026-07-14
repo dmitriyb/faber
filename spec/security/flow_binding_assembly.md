@@ -10,21 +10,23 @@ resolved step (IR node + params)
         ▼            ▼             ▼              ▼             │
   NetworkBinding RemoteBinding IdentityBinding CredentialBroker│
    (preflight:    (read host    (spawn agent,   (get_token     │
-    net exists)    key line)     load 1 key)     host-side,    │
-        │            │             │             write files)  │
+    net exists)    key line)     load 1 key)     host-side →    │
+        │            │             │             Secrets map)  │
         └────────────┴──────┬──────┴──────────────┴────────────┘
                             ▼   fixed order: network, remote,
                      BindingSet.Prepare   identity, credentials, runtime
-                            │
-              Assembled{Args, Teardown}
+                            │   (encode Secrets → SecretsStdin JSON, once)
+              Assembled{Args, SecretsStdin, Teardown}
                             │
                             ▼
-              infra.ContainerRunner (argv fragment spliced verbatim)
+              infra.ContainerRunner (argv fragment spliced verbatim;
+                            │         SecretsStdin streamed on stdin, -i)
                             │  run, wait, capture
                             ▼
               Assembled.Teardown  ── reverse order, always:
-                                     shred /run/secrets files,
                                      kill agent + remove socket
+                                     (file mode: nothing — tmpfs dies
+                                      with the container)
 ```
 
 ## Shapes at each boundary
@@ -34,7 +36,8 @@ resolved step (IR node + params)
 | step -> Binding | `StepSpec` | resolved values only; bindings never read YAML or the IR |
 | Binding -> BindingSet | `Contribution{Args, Teardown}` | args internally ordered; teardown idempotent-once or nil |
 | resolver -> broker | `Secret` on stdout | opaque, redacted formatting; non-zero exit = step failure |
-| BindingSet -> ContainerRunner | `Assembled{Args, Teardown}` | fragment consumed verbatim; the only docker-run assembly point is infra's |
+| broker -> BindingSet | `Contribution.Secrets` (name→Secret) | file-mode tokens only; encoded once into `Assembled.SecretsStdin` |
+| BindingSet -> ContainerRunner | `Assembled{Args, SecretsStdin, Teardown}` | fragment consumed verbatim; `SecretsStdin` streamed on stdin; the only docker-run assembly point is infra's |
 | teardown -> caller | joined error or nil | every hook attempted; detached context so cancellation cannot skip it |
 
 ## Error paths
@@ -51,7 +54,7 @@ the step but do not overwrite the step's own result.
 
 The pipeline executor invokes the flow once per step *attempt*: retry
 discards the previous `Assembled` entirely and re-prepares — fresh agent,
-fresh resolver call, fresh secret files — so between-attempt cleanup can
+fresh resolver call, fresh secrets payload — so between-attempt cleanup can
 assume nothing survives an attempt. Nothing in this flow is shared across
 steps; parallel steps assemble concurrently against disjoint scratch
 directories and sockets. `faber validate` does not run this flow (it is

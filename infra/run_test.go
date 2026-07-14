@@ -17,11 +17,15 @@ import (
 
 func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
+// goldenStdinSecrets is the golden fixture's file-mode secrets payload; its
+// bytes must never appear anywhere in the assembled argv.
+var goldenStdinSecrets = []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
+
 // fullRunSpec is the golden-argv fixture: limits, every engine mount kind (a
 // result bind rw, a :ro hook bind, a :ro /faber/skills bind, a workspace
-// volume, a /tmp tmpfs), three env keys, and a representative binding fragment
-// (--network, agent-socket -v, SSH_AUTH_SOCK, proxy env, :ro secret mount,
-// --runtime).
+// volume, a /tmp tmpfs), three env keys, a StdinSecrets payload, and a
+// representative binding fragment (--network, agent-socket -v, SSH_AUTH_SOCK,
+// proxy env, --tmpfs /run/secrets, --runtime).
 func fullRunSpec() RunSpec {
 	return RunSpec{
 		Name:      "faber-r1-impl-a1",
@@ -39,12 +43,13 @@ func fullRunSpec() RunSpec {
 			"FABER_RESULT": "/result/result.json",
 			"ANSWER":       "42",
 		},
+		StdinSecrets: goldenStdinSecrets,
 		Bindings: []string{
 			"--network", "wf-net",
 			"-v", "/run/faber/agent.sock:/agent.sock",
 			"-e", "SSH_AUTH_SOCK=/agent.sock",
 			"-e", "HTTPS_PROXY=http://egress:3128",
-			"-v", "/dev/shm/h1:/creds/token:ro",
+			"--tmpfs", "/run/secrets",
 			"--runtime", "runsc",
 		},
 		Entry: []string{"/hooks/box-entry", "--phase", "all"},
@@ -52,12 +57,15 @@ func fullRunSpec() RunSpec {
 }
 
 // Verifies 0c82c6478856: a fully populated RunSpec assembles to the golden
-// argv byte-for-byte — fixed section order, sorted env, the binding fragment
-// contiguous and verbatim at its slot, image then entry argv last.
+// argv byte-for-byte — fixed section order, -i immediately after --rm (because
+// StdinSecrets is set), sorted env, the binding fragment contiguous and
+// verbatim at its slot, image then entry argv last. The same spec with
+// StdinSecrets empty assembles identically except no -i appears, and the token
+// bytes never reach the argv.
 func TestGoldenArgv(t *testing.T) {
 	got := buildArgs(fullRunSpec())
 	want := []string{
-		"run", "--rm", "--name", "faber-r1-impl-a1",
+		"run", "--rm", "-i", "--name", "faber-r1-impl-a1",
 		"--memory=8g", "--cpus=4",
 		"-v", "/runs/r1/impl:/result",
 		"-v", "/proj/hooks:/hooks:ro",
@@ -71,13 +79,30 @@ func TestGoldenArgv(t *testing.T) {
 		"-v", "/run/faber/agent.sock:/agent.sock",
 		"-e", "SSH_AUTH_SOCK=/agent.sock",
 		"-e", "HTTPS_PROXY=http://egress:3128",
-		"-v", "/dev/shm/h1:/creds/token:ro",
+		"--tmpfs", "/run/secrets",
 		"--runtime", "runsc",
 		"faber/impl:0a1b2c3d4e5f",
 		"/hooks/box-entry", "--phase", "all",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("argv mismatch:\n got %q\nwant %q", got, want)
+	}
+	for _, a := range got {
+		if strings.Contains(a, "dG9rLXNlY3JldA==") || strings.Contains(a, "tok-secret") {
+			t.Fatalf("token bytes leaked into argv: %q", a)
+		}
+	}
+
+	// Same spec with no StdinSecrets: identical except -i is gone.
+	spec := fullRunSpec()
+	spec.StdinSecrets = nil
+	got = buildArgs(spec)
+	if slices.Contains(got, "-i") {
+		t.Fatalf("-i emitted with empty StdinSecrets: %q", got)
+	}
+	wantNoI := slices.DeleteFunc(slices.Clone(want), func(s string) bool { return s == "-i" })
+	if !slices.Equal(got, wantNoI) {
+		t.Fatalf("no-stdin argv mismatch:\n got %q\nwant %q", got, wantNoI)
 	}
 }
 
@@ -92,10 +117,27 @@ func TestArgvDiscipline(t *testing.T) {
 		spec := randomRunSpec(rng, i)
 		args := buildArgs(spec)
 
-		if args[0] != "run" || args[1] != "--rm" || args[2] != "--name" || args[3] != spec.Name {
-			t.Fatalf("spec %d: argv head %q", i, args[:4])
+		// Head is run, --rm, then the lone -i exactly when StdinSecrets is set,
+		// then --name <name>.
+		wantI := len(spec.StdinSecrets) > 0
+		rest := args[2:]
+		if wantI {
+			if args[2] != "-i" {
+				t.Fatalf("spec %d: -i not right after --rm: %q", i, args[:5])
+			}
+			rest = args[3:]
+		}
+		if args[0] != "run" || args[1] != "--rm" || rest[0] != "--name" || rest[1] != spec.Name {
+			t.Fatalf("spec %d: argv head %q", i, args[:min(6, len(args))])
+		}
+		if got := slices.Contains(args, "-i"); got != wantI {
+			t.Fatalf("spec %d: -i presence %v, want %v (StdinSecrets len %d)", i, got, wantI, len(spec.StdinSecrets))
 		}
 		joined := "\x00" + strings.Join(args, "\x00") + "\x00"
+		// The token bytes never surface in the argv.
+		if len(spec.StdinSecrets) > 0 && strings.Contains(joined, string(spec.StdinSecrets)) {
+			t.Fatalf("spec %d: StdinSecrets bytes leaked into argv", i)
+		}
 		for _, forbidden := range []string{"docker.sock", "--privileged", "--user", "--network=host", "--pid=host", "--ipc=host"} {
 			if strings.Contains(joined, forbidden) {
 				t.Fatalf("spec %d: forbidden token %q in argv %q", i, forbidden, args)
@@ -123,8 +165,11 @@ func TestArgvDiscipline(t *testing.T) {
 			}
 		}
 		for j := 0; j < len(spec.Bindings)-1; j++ {
-			if spec.Bindings[j] == "-v" {
+			switch spec.Bindings[j] {
+			case "-v":
 				declaredV[spec.Bindings[j+1]] = true
+			case "--tmpfs":
+				declaredTmpfs[spec.Bindings[j+1]] = true
 			}
 		}
 		for j, a := range args {
@@ -196,13 +241,17 @@ func randomRunSpec(rng *rand.Rand, i int) RunSpec {
 		{"--network", fmt.Sprintf("net-%d", rng.Intn(10))},
 		{"-v", fmt.Sprintf("/run/faber/a%d.sock:/agent.sock", rng.Intn(10))},
 		{"-e", "SSH_AUTH_SOCK=/agent.sock"},
-		{"-v", fmt.Sprintf("/dev/shm/h%d:/creds/token:ro", rng.Intn(10))},
+		{"--tmpfs", "/run/secrets"},
 		{"--runtime", "runsc"},
 	}
 	for _, f := range fragments {
 		if rng.Intn(2) == 0 {
 			spec.Bindings = append(spec.Bindings, f...)
 		}
+	}
+	// A file-mode secrets payload rides stdin on roughly half the specs.
+	if rng.Intn(2) == 0 {
+		spec.StdinSecrets = []byte(fmt.Sprintf(`{"svc-%d":"dG9r"}`, rng.Intn(100)))
 	}
 	for e := rng.Intn(3); e > 0; e-- {
 		spec.Entry = append(spec.Entry, fmt.Sprintf("arg%d", rng.Intn(100)))
@@ -228,7 +277,7 @@ func TestArgvEmptyBindingsAndEntry(t *testing.T) {
 // belongs to the failure module.
 func TestNonZeroExitIsData(t *testing.T) {
 	docker := &fakeDocker{
-		runFn: func(ctx context.Context, args []string, output io.Writer) (int, error) {
+		runFn: func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
 			fmt.Fprintln(output, "box says goodbye")
 			return 1, nil
 		},
@@ -249,12 +298,54 @@ func TestNonZeroExitIsData(t *testing.T) {
 	}
 }
 
+// Verifies 0c82c6478856 (scenario 11): with a StdinSecrets payload the fake
+// DockerClient.ContainerRun receives a non-nil stdin reader whose full
+// contents equal the payload bytes (and it observes EOF); -i is in the argv
+// and the payload never appears in the recorded argv or the log. With empty
+// StdinSecrets the recorded stdin is nil and no -i is emitted.
+func TestStdinSecretsDelivery(t *testing.T) {
+	payload := []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
+	docker := &fakeDocker{}
+	r := NewContainerRunner(docker, testLogger())
+	if _, err := r.Run(context.Background(), RunSpec{
+		Name: "faber-s", Image: "faber/t:abc", StdinSecrets: payload,
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(docker.runStdins) != 1 || docker.runStdins[0] == nil {
+		t.Fatalf("stdin not delivered: %v", docker.runStdins)
+	}
+	if !slices.Equal(docker.runStdins[0], payload) {
+		t.Fatalf("stdin bytes %q, want %q", docker.runStdins[0], payload)
+	}
+	run := docker.callsFor("run")[0]
+	if !slices.Contains(run, "-i") {
+		t.Fatalf("argv missing -i: %q", run)
+	}
+	if strings.Contains(strings.Join(run, "\x00"), string(payload)) {
+		t.Fatalf("payload leaked into recorded argv: %q", run)
+	}
+
+	// Empty payload: stdin unattached, no -i.
+	docker2 := &fakeDocker{}
+	r2 := NewContainerRunner(docker2, testLogger())
+	if _, err := r2.Run(context.Background(), RunSpec{Name: "faber-s2", Image: "faber/t:abc"}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(docker2.runStdins) != 1 || docker2.runStdins[0] != nil {
+		t.Fatalf("stdin should be nil with empty StdinSecrets: %v", docker2.runStdins)
+	}
+	if slices.Contains(docker2.callsFor("run")[0], "-i") {
+		t.Fatalf("-i emitted with empty StdinSecrets")
+	}
+}
+
 // Verifies 0c82c6478856: on context cancellation Run kills the container by
 // its deterministic name, returns the context error within the grace window,
 // and the RunResult still carries partial output and timing.
 func TestKillOnCancel(t *testing.T) {
 	docker := &fakeDocker{
-		runFn: func(ctx context.Context, args []string, output io.Writer) (int, error) {
+		runFn: func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
 			fmt.Fprintln(output, "partial output before cancel")
 			<-ctx.Done()
 			return -1, fmt.Errorf("infra: docker: %w", ctx.Err())

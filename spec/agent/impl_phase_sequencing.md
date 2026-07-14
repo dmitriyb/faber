@@ -33,6 +33,7 @@ type BoxEnv struct {
     RunUID, RunGID       int               // FABER_RUN_UID/GID; the preamble drops to these; 0/0 = no drop
     GitCache             string            // FABER_GIT_CACHE; ro object cache for clone --reference-if-able, empty = none
     SkillsLink           string            // FABER_SKILLS_LINK; $HOME-relative path to symlink at /faber/skills, empty = no skills leg
+    SecretsStdin         bool              // FABER_SECRETS_STDIN=1; file-mode tokens arrive on stdin for phase 3 to materialize
 }
 
 func ParseEnv(environ []string) (*BoxEnv, error) // collects ALL violations
@@ -52,7 +53,7 @@ type Phase struct {
 var phases = []Phase{
     {"skills", (*Box).linkSkills},    // $HOME/<link> -> /faber/skills, no-op when unset
     {"env", (*Box).checkEnv},         // required slots present, dirs writable
-    {"secrets", (*Box).loadSecrets},  // /run/secrets/* -> process env
+    {"secrets", (*Box).loadSecrets},  // stdin payload -> /run/secrets/* (file mode); then /run/secrets/* -> process env
     {"hostkey", (*Box).applyHostKeyPolicy},
     {"clone", (*Box).clone},          // no-op when Repo == ""
     {"signing", (*Box).configureSigning},
@@ -94,7 +95,15 @@ func (b *Box) enterRunUser() error {
             return fmt.Errorf("preamble: chown %s: %w", d, err)
         }
     }
-    os.Setenv("HOME", home)
+    // /run/secrets is a gated add: the --tmpfs is present only in file mode and
+    // is mounted root-owned, so chown it — but only when it exists — so phase 3
+    // can write the 0600 files as the dropped run user.
+    if _, err := os.Stat(contract.ContainerSecretsDir); err == nil {
+        if err := os.Chown(contract.ContainerSecretsDir, b.Env.RunUID, b.Env.RunGID); err != nil {
+            return fmt.Errorf("preamble: chown %s: %w", contract.ContainerSecretsDir, err)
+        }
+    }
+    b.setEnv("HOME", home) // b.Environ only — never os.Setenv (no-global-state policy)
     if err := syscall.Setgroups([]int{b.Env.RunGID}); err != nil { return err }
     if err := syscall.Setgid(b.Env.RunGID); err != nil { return err }
     if err := syscall.Setuid(b.Env.RunUID); err != nil { return err } // all-thread since Go 1.16
@@ -160,7 +169,17 @@ type CmdSpec struct{ Argv []string; Dir string; Env []string }
 type CmdResult struct{ Stdout []byte; StderrTail []byte; ExitCode int }
 ```
 
-- `loadSecrets`: `os.ReadDir("/run/secrets")`; each regular file exported as
+- `loadSecrets`: two steps. First, when `b.Env.SecretsStdin` is set (file
+  mode), it reads all of `os.Stdin` to EOF (`io.ReadAll`), `json.Unmarshal`s the
+  single object into `map[string]string`, `base64.StdEncoding`-decodes each
+  value, and `os.WriteFile(filepath.Join(contract.ContainerSecretsDir, name),
+  tok, 0o600)` — materializing the container-RAM secret files that the preamble
+  already chowned to the run user. A malformed payload or a decode error aborts
+  the phase (reason `secrets`). Stdin is read exactly once and only here; the
+  headless agent never touches it, and faber closes stdin so the read sees a
+  clean EOF. Second (unchanged, and whether or not the stdin step ran):
+  `os.ReadDir(contract.ContainerSecretsDir)` — a missing dir is treated as no
+  secrets (the common proxy/helper case) — and each regular file is exported as
   `strings.ToUpper(name)` = trimmed contents, `os.Setenv` only — the value
   exists in this process tree, never in the docker argv.
 - `applyHostKeyPolicy`: pinned key → write a known-hosts file and export

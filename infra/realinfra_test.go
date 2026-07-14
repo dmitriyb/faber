@@ -18,6 +18,9 @@ package infra
 //     container, and partial output/timing survive.
 //   - Non-zero exit is data (scenario 10): entry ["false"] yields err == nil
 //     and ExitCode == 1.
+//   - Stdin secrets delivery (scenario 11): a StdinSecrets payload streamed
+//     over docker run -i to entry ["cat"] is echoed back byte-for-byte, proving
+//     the stream reaches the container intact and closes on EOF.
 //   - Package resolution proof against real nix eval: stock names resolve,
 //     bogus names come back as field-path errors without any build.
 //   - Docker structured queries against a real daemon: ImageExists /
@@ -232,6 +235,42 @@ func TestRealinfra_NonZeroExitIsData(t *testing.T) {
 	}
 	if res.ExitCode != 1 {
 		t.Fatalf("exit code %d, want 1", res.ExitCode)
+	}
+}
+
+// Verifies 0c82c6478856 (scenario 11, integration half): a StdinSecrets payload
+// streamed to a real container over docker run -i reaches the process intact and
+// the write end is closed on EOF — entry ["cat"] reads stdin to EOF and echoes
+// the exact bytes back through captured output, which both proves delivery and
+// proves the read terminated (cat would block forever without the close-on-EOF).
+func TestRealinfra_StdinSecretsDelivery(t *testing.T) {
+	requireTools(t)
+	logger := realLogger(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	docker := NewDockerCLI(logger)
+	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), logger)
+	tag, err := b.Build(ctx, "realinfra-min", minimalToolset())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	runner := NewContainerRunner(docker, logger)
+	payload := []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
+	res, err := runner.Run(ctx, RunSpec{
+		Name:         fmt.Sprintf("faber-realinfra-stdin-%d", time.Now().UnixNano()),
+		Image:        tag,
+		StdinSecrets: payload,
+		Entry:        []string{"cat"},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("cat exited %d (a hang would time out instead)", res.ExitCode)
+	}
+	if !strings.Contains(string(res.Output), string(payload)) {
+		t.Fatalf("stdin payload not echoed back: output %q, want %q", res.Output, payload)
 	}
 }
 

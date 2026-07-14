@@ -10,12 +10,12 @@ import (
 // redacted is what every formatting and marshalling path of a Secret yields.
 const redacted = "[redacted]"
 
-// Secret is an opaque credential value. It can be written to a file mount
-// source; it cannot be printed: %s, %v, %+v, %#v, error wrapping, JSON, text,
-// and slog output all yield "[redacted]". The raw bytes are reachable only
-// through the unexported accessor inside this package, and only the degraded
-// file handle mode uses it — redaction is a property of the type system, not
-// of discipline.
+// Secret is an opaque credential value. It can be encoded into the stdin
+// secrets payload; it cannot be printed: %s, %v, %+v, %#v, error wrapping,
+// JSON, text, and slog output all yield "[redacted]". The raw bytes are
+// reachable only through the unexported accessor inside this package, and only
+// the stdin-payload encoder uses it — redaction is a property of the type
+// system, not of discipline.
 type Secret struct {
 	v []byte
 }
@@ -46,6 +46,7 @@ func (Secret) MarshalText() ([]byte, error) { return []byte(redacted), nil }
 // LogValue redacts structured log output regardless of handler.
 func (Secret) LogValue() slog.Value { return slog.StringValue(redacted) }
 
-// reveal returns the raw bytes. Unexported by design: only the file-mode
-// credential handle calls it, at the moment of writing the mount source.
+// reveal returns the raw bytes. Unexported by design: only
+// encodeSecretsPayload (set.go) calls it, at the single moment of encoding the
+// file-mode tokens into the stdin secrets payload.
 func (s Secret) reveal() []byte { return s.v }

@@ -17,6 +17,7 @@ type RunSpec struct {
     Mounts    []Mount           // engine mounts: result bind, ro hooks + box entry, ro skills (when the template declares them), workspace volume, tmpfs writables
     Env       map[string]string // engine env; contract values, never secrets
     Bindings  []string          // ordered argv fragment from security.BindingSet
+    StdinSecrets []byte          // framed JSON secrets payload (security.Assembled.SecretsStdin); empty = no stdin, no -i; non-empty MUST pair with Env[contract.EnvSecretsStdin]="1" — see the pairing invariant below
     Entry     []string          // in-container entry argv
 }
 
@@ -49,11 +50,27 @@ type RunResult struct {
 func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, error)
 ```
 
+**`StdinSecrets` is half of an atomic pairing.** The assembler MUST set
+`StdinSecrets` and `Env[contract.EnvSecretsStdin]="1"` together — never one
+without the other. A non-empty `StdinSecrets` with the flag unset makes the box
+skip its stdin read (phase 3 is gated on `FABER_SECRETS_STDIN=1`) and silently
+lose the credential; the flag set with an empty payload leaves the box waiting
+on a stdin that never arrives. ContainerRunner is a pure argv builder: it only
+mechanically emits `-i` and streams the bytes when `StdinSecrets` is non-empty,
+and it never sets the flag. Enforcing the pairing therefore belongs to whoever
+assembles the `RunSpec` from `security.Assembled` and the engine env — the
+step-runner seam in the pipeline scheduler (see spec/pipeline/impl_scheduling.md),
+which is the only host-side owner of `RunSpec.Env` assembly.
+
 ## Assembly
 
 ```go
 func buildArgs(spec RunSpec) []string {
-    args := []string{"run", "--rm", "--name", spec.Name}
+    args := []string{"run", "--rm"}
+    if len(spec.StdinSecrets) > 0 {
+        args = append(args, "-i") // attach stdin for the secrets payload
+    }
+    args = append(args, "--name", spec.Name)
     if m := spec.Resources.Memory; m != "" {
         args = append(args, "--memory="+m)
     }
@@ -86,12 +103,17 @@ func buildArgs(spec RunSpec) []string {
 Pure function, no I/O — the golden-argv tests in test_infra.md exercise it
 directly. Sorted env keys keep the argv deterministic for a given spec; the
 binding fragment's internal order is BindingSet's contract, preserved
-byte-for-byte. The engine mounts a spec carries are the result bind (rw), the
+byte-for-byte. The lone `-i` flag is emitted only when `StdinSecrets` is
+non-empty and sits right after `--rm`, so its presence is a pure function of the
+spec too. The engine mounts a spec carries are the result bind (rw), the
 read-only hook scripts and box entry binary, the read-only skills directory
 (`contract.ContainerSkillsDir` = `/faber/skills`, present only when the template
 declares a `skills` leg), the disk-backed `/workspace` volume, and the tmpfs
 writables (`/faber/bundle`, `/tmp`, `HOME`); everything else — agent socket,
-secret file, cache volume, `--network`, `--runtime` — arrives inside `Bindings`.
+the secrets tmpfs (`--tmpfs /run/secrets`), cache volume, `--network`,
+`--runtime` — arrives inside `Bindings`. The file-mode token is not a mount at
+all: it rides `StdinSecrets` on the container's stdin, and faber-box writes it
+into that tmpfs.
 `/faber/skills` is a sibling of `/faber/hooks`: per-template, read-only, static
 capabilities, deliberately not nested under the box-writable per-run bundle
 tmpfs. There is no code path that could emit a docker-socket
@@ -105,8 +127,12 @@ engine env, not a docker flag.
 func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
     out := newTailBuffer(256 << 10) // bounded capture
     sink := io.MultiWriter(out, slogWriter(r.logger, "step", spec.Name))
+    var stdin io.Reader // nil unless a secrets payload rides stdin
+    if len(spec.StdinSecrets) > 0 {
+        stdin = bytes.NewReader(spec.StdinSecrets) // written then closed by the adapter
+    }
     start := time.Now()
-    code, err := r.docker.ContainerRun(ctx, buildArgs(spec), sink)
+    code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, sink)
     res := RunResult{ExitCode: code, Output: out.Bytes(),
         Started: start, Duration: time.Since(start)}
     if ctx.Err() != nil {
@@ -139,5 +165,6 @@ Points of discipline:
   step artifact is the mounted `result.json`, and captured output exists for
   the failure record and debugging, not data threading.
 - **Always returns.** Success, failure, or kill, `Run` returns to its caller,
-  which is what guarantees BindingSet teardown hooks (agent shutdown, secret
-  shredding) run after every attempt.
+  which is what guarantees BindingSet teardown hooks (agent shutdown; file-mode
+  secrets need none — they die with the container tmpfs) run after every
+  attempt.

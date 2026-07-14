@@ -69,8 +69,8 @@ func (d *dockerCLI) Load(ctx context.Context, tarball string) (string, error) {
 	return tag, nil
 }
 
-func (d *dockerCLI) ContainerRun(ctx context.Context, args []string, output io.Writer) (int, error) {
-	code, err := d.cli.runStreaming(ctx, output, args...)
+func (d *dockerCLI) ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
+	code, err := d.cli.runStreaming(ctx, output, stdin, args...)
 	if err != nil {
 		return code, err
 	}

@@ -28,7 +28,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Container run primitive",
-      "description": "Run one step container: assemble the docker run argv from the image, resource limits, the ordered binding contributions supplied by the security module, mounts (result dir, hook scripts, the read-only /faber/skills mount when the template declares a skills leg), and environment; start, stream logs, wait, and return exit code plus captured output. Supports kill on context cancellation. --rm by default; one container per step invocation, no reuse."
+      "description": "Run one step container: assemble the docker run argv from the image, resource limits, the ordered binding contributions supplied by the security module, mounts (result dir, hook scripts, the read-only /faber/skills mount when the template declares a skills leg), and environment; when the binding set carries a file-mode secrets payload, attach the container's stdin (-i) and stream that payload in; start, stream logs, wait, and return exit code plus captured output. Supports kill on context cancellation. --rm by default; one container per step invocation, no reuse."
     },
     {
       "id": "7b7ad52d9123",
@@ -57,7 +57,7 @@
     {
       "id": "965b42338998",
       "name": "ContainerRunner",
-      "description": "The single-step container lifecycle: argv assembly from image, limits, binding contributions, mounts, and env; run, wait, capture, kill-on-cancel. The only place a docker run is ever constructed.",
+      "description": "The single-step container lifecycle: argv assembly from image, limits, binding contributions, mounts, and env; the optional file-mode secrets payload streamed on the container's stdin; run, wait, capture, kill-on-cancel. The only place a docker run is ever constructed.",
       "content": "arch_container_runner.md",
       "implements": ["0c82c6478856"],
       "uses": ["136258cbf6a9"]

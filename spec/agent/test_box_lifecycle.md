@@ -45,10 +45,18 @@ mounts, and the env contract is set directly.)
    aborts at the hostkey phase before clone; with `FABER_HOST_KEY` set, the
    known-hosts file contains the pinned line and `GIT_SSH_COMMAND` says
    `StrictHostKeyChecking=yes`.
-7. **Secrets reach hooks, never the handoff.** A file at
-   `/run/secrets/service_token` (scratch equivalent): the hook's dumped
-   environment contains `SERVICE_TOKEN=<value>`; `handoff.json` from a forced
-   later failure contains the `FABER_INPUT_*` map and no trace of the value.
+7. **Secrets from stdin, reaching hooks, never the handoff.** With
+   `FABER_SECRETS_STDIN=1` and stdin fed the single JSON object
+   `{"service_token":"<base64(value)>"}`, the secrets phase writes
+   `<secrets-dir>/service_token` (the scratch stand-in for `/run/secrets`) at
+   mode `0600` with the decoded bytes, then exports it: the hook's dumped
+   environment contains `SERVICE_TOKEN=<value>`. `handoff.json` from a forced
+   later failure contains the `FABER_INPUT_*` map and no trace of the value,
+   and the raw token appears in no log line. A malformed stdin payload (not a
+   JSON object, or a non-base64 value) aborts at the secrets phase with reason
+   `secrets` before any hook runs. Unset `FABER_SECRETS_STDIN` with a
+   pre-placed file in the secrets dir still exports it (the origin-agnostic
+   second step), and stdin is left unread.
 8. **Fallback record.** Agent exits 0 writing no `output.json`: with an
    all-optional output schema, `result.json` is ok, empty payload,
    `fallback: true`; with a required field, it is failed with reason

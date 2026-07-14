@@ -15,8 +15,9 @@
 //   - IdentityBinding — an ephemeral single-key ssh-agent per step, with only
 //     the socket forwarded and guaranteed teardown on every exit path.
 //   - CredentialBroker — credential handles, never contents: proxy endpoints,
-//     helper config passthrough, and the degraded opt-in raw-token file mount
-//     (tmpfs-backed, 0600, shredded after the run).
+//     helper config passthrough, and the degraded opt-in raw-token file mode
+//     (streamed over the container's stdin into a container tmpfs, 0600, dies
+//     with the container — no host file, no shred).
 //   - the isolation runtime knob — an optional --runtime=<value> flag.
 //
 // Everything opinionated — the proxy's allow-list, the gateway's push
@@ -25,6 +26,6 @@
 //
 // Secrets are opaque: resolver output is typed as Secret, whose every
 // formatting and marshalling path yields "[redacted]". Raw bytes are
-// reachable only inside this package, and only the file handle mode uses
-// them, at the moment of writing the mount source.
+// reachable only inside this package, and only the stdin-payload encoder uses
+// them, at the single moment of encoding the file-mode secrets payload.
 package security

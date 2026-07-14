@@ -25,8 +25,15 @@ type Binding interface {
 // Contribution is one binding's share of the docker-run argv: complete,
 // internally ordered tokens consumed verbatim (env vars ride inside Args as
 // "-e" pairs, mounts as "-v" pairs — one flat fragment, no merge step).
+//
+// Secrets carries file-mode credential tokens (name→Secret); only the
+// credentials binding ever sets it, and only its file mode. The tokens never
+// enter Args — the binding puts one "--tmpfs <ContainerSecretsDir>" in Args
+// (once) and the tokens leave the security module only as the encoded
+// Assembled.SecretsStdin payload streamed on the container's stdin.
 type Contribution struct {
 	Args     []string
+	Secrets  map[string]Secret
 	Teardown func(ctx context.Context) error
 }
 

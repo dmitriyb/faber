@@ -18,20 +18,24 @@ acceptance environment only.
 
 1. **Golden argv.** A fully populated RunSpec (limits, every engine mount kind —
    a result bind rw, `:ro` hook + entry binds, a `:ro` `/faber/skills` bind, a
-   `/workspace` volume, a `/tmp` tmpfs — three env keys, a representative
-   binding fragment containing
-   `--network`, an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a `:ro` secret
-   mount, and `--runtime`) assembles to the golden argv byte-for-byte: fixed
-   section order, a bind as `-v Host:Container[:ro]`, a volume as bare
+   `/workspace` volume, a `/tmp` tmpfs — three env keys, a `StdinSecrets`
+   payload, a representative binding fragment containing
+   `--network`, an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a
+   `--tmpfs /run/secrets`, and `--runtime`) assembles to the golden argv
+   byte-for-byte: fixed section order, `-i` immediately after `--rm` (because
+   `StdinSecrets` is set), a bind as `-v Host:Container[:ro]`, a volume as bare
    `-v Container`, a tmpfs as `--tmpfs Container`, sorted env, the fragment
-   contiguous and verbatim at its slot, image then entry argv last.
+   contiguous and verbatim at its slot, image then entry argv last. The same
+   spec with `StdinSecrets` empty assembles identically except no `-i` appears.
 2. **Argv discipline (property).** Over randomized RunSpecs (fuzzed env,
-   mounts, fragments), the assembled argv never contains a docker-socket
-   mount, `--privileged`, `--user`, `--network=host`, or any `-v`/`--tmpfs` not
-   present in the spec's mounts or fragment; `--rm` and `--name` are always
-   present; declared memory/cpus always surface as flags, absent resources emit
-   none. A RunSpec with no skills mount emits no `/faber/skills` `-v`; one with
-   it emits the bind exactly once, always `:ro`.
+   mounts, fragments, `StdinSecrets`), the assembled argv never contains a
+   docker-socket mount, `--privileged`, `--user`, `--network=host`, or any
+   `-v`/`--tmpfs` not present in the spec's mounts or fragment; `--rm` and
+   `--name` are always present; declared memory/cpus always surface as flags,
+   absent resources emit none; `-i` appears exactly when `StdinSecrets` is
+   non-empty and never otherwise, and the token bytes never appear anywhere in
+   the argv. A RunSpec with no skills mount emits no `/faber/skills` `-v`; one
+   with it emits the bind exactly once, always `:ro`.
 3. **Tag determinism.** Same packages shuffled → identical tag; one package
    added, one overlay byte changed, or the pin rev bumped → different tag;
    the tag is computed with zero adapter calls (pure, no nix).
@@ -66,6 +70,13 @@ acceptance environment only.
 10. **Non-zero exit is data.** Entry `["false"]` (fake and integration):
     `Run` returns `err == nil`, `ExitCode == 1`, output attached — the
     classification boundary belongs to the failure module.
+11. **Stdin secrets delivery.** With a `StdinSecrets` payload, the fake
+    `DockerClient.ContainerRun` records a non-nil stdin reader whose full
+    contents equal the payload bytes and observes EOF; the payload is never
+    logged and never appears in the recorded argv. With empty `StdinSecrets`,
+    the recorded stdin reader is nil and no `-i` is in the argv. (Integration:
+    entry `["cat", "/dev/stdin"]` echoes the exact payload bytes back through
+    captured output, proving the byte stream reached the container intact.)
 
 ## Edge cases
 
