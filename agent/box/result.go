@@ -12,7 +12,7 @@ import (
 	"github.com/dmitriyb/faber/agent/contract"
 )
 
-// emitResult is phase 9: read the skill-written output file, validate it
+// emitResult is phase 10: read the skill-written output file, validate it
 // against the template's declared output schema (all violations collected),
 // verify the bundle's declared side-effects against the gateway, and write
 // the single ok attempt record. Every failure returns through the fail-stop

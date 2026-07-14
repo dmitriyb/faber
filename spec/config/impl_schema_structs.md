@@ -46,8 +46,16 @@ type TemplateDef struct {
     Run    RunDef              `yaml:"run"`
     Skill  string              `yaml:"skill"`
     Hooks  HookSet             `yaml:"hooks"`
+    Skills *SkillsDef          `yaml:"skills"` // nil = no skills leg (current behavior)
     Inputs map[string]ParamDef `yaml:"inputs"`
     Output map[string]FieldDef `yaml:"output"`
+}
+
+// SkillsDef delivers skill definitions into the box. A pointer so absence is
+// distinguishable from a zero value; when present, both fields are required.
+type SkillsDef struct {
+    Dir  string `yaml:"dir"`  // CWD-relative host dir of skill defs (SKILL.md tree), resolved like hook/overlay paths
+    Link string `yaml:"link"` // in-box path relative to $HOME where THIS agent discovers skills; agent-specific, opaque to faber
 }
 
 type BuildDef struct {
@@ -151,7 +159,11 @@ surrounding text (no string templating in v1 — concatenation belongs in hooks)
 Single pass over the struct tree appending `fieldErr(path, msg)` to a slice,
 `errors.Join` at the end. Path building mirrors YAML addressing
 (`templates.review.output.verdict`). The check catalog is arch_loader.md's list;
-each check is a small named function so tests assert them independently.
+each check is a small named function so tests assert them independently. Among
+them: when `templates.<t>.skills` is present, both `skills.dir` and
+`skills.link` must be non-empty (an all-or-nothing pair, field-pathed like the
+rest); its contents are never read at load time — `dir` is an opaque path and
+`link` an opaque agent-specific string.
 
 ## Params typing (internal/config/params.go)
 

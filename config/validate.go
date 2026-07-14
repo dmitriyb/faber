@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -27,6 +28,17 @@ var serviceModes = map[string]bool{"proxy": true, "file": true, "helper": true}
 var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 var memoryPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[bkmgBKMG]?$`)
+
+// hasDotDotSegment reports whether p contains a ".." path segment (either
+// slash separator), i.e. a component that would climb out of its base dir.
+func hasDotDotSegment(p string) bool {
+	for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
 
 // Validate runs every schema-level check that can be phrased against the YAML
 // alone: structural rules, name discipline, name-level cross-references, and
@@ -154,6 +166,24 @@ func (v *validator) checkTemplates() {
 		}
 		if t.Run.Resources.CPUs < 0 {
 			v.addf(path+".run.resources.cpus", "must be >= 0")
+		}
+		// The skills leg is an all-or-nothing pair: when declared, both the host
+		// dir and the in-box link must be non-empty. Contents are never read at
+		// load time — dir is an opaque path, link an opaque agent-specific string.
+		if t.Skills != nil {
+			if t.Skills.Dir == "" {
+				v.addf(path+".skills.dir", "required when skills is present")
+			}
+			// link is resolved as $HOME/<link> in the box, so it must stay under
+			// $HOME: reject an absolute path or any ".." segment that would escape.
+			switch link := t.Skills.Link; {
+			case link == "":
+				v.addf(path+".skills.link", "required when skills is present")
+			case filepath.IsAbs(link):
+				v.addf(path+".skills.link", "must be relative to $HOME, not absolute: %q", link)
+			case hasDotDotSegment(link):
+				v.addf(path+".skills.link", "must not contain a %q path segment: %q", "..", link)
+			}
 		}
 		v.checkParamDefs(path+".inputs", t.Inputs)
 		v.checkParamDefs(path+".output", t.Output)

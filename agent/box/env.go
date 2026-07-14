@@ -69,6 +69,11 @@ type BoxEnv struct {
 	// --reference-if-able so it borrows objects instead of duplicating history.
 	GitCache string
 
+	// SkillsLink is the $HOME-relative path the skills phase symlinks to the
+	// read-only skills mount (contract.ContainerSkillsDir). Empty means the
+	// template declares no skills leg and the phase is a no-op.
+	SkillsLink string
+
 	// rawSchema, rawAttempt and rawTOFU hold the undecoded values for the
 	// env phase.
 	rawSchema  string
@@ -106,6 +111,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		SecretsDir:       withDefault(get(contract.EnvSecretsDir), security.ContainerSecretsDir),
 		WorkspaceDir:     withDefault(get(contract.EnvWorkspaceDir), contract.ContainerWorkspace),
 		GitCache:         get(contract.EnvGitCache),
+		SkillsLink:       get(contract.EnvSkillsLink),
 		rawSchema:        get(contract.EnvOutputSchema),
 		rawAttempt:       get(contract.EnvAttempt),
 		rawTOFU:          get(security.EnvHostKeyTOFU),

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -106,10 +107,81 @@ func TestBuildRunSpecContract(t *testing.T) {
 		t.Errorf("mounts = %v, want %v", mounts, want)
 	}
 	// Optional pass-throughs stay absent when unset.
-	for _, key := range []string{contract.EnvEffort, contract.EnvMaxBudget, contract.EnvExtraInstruction} {
+	for _, key := range []string{contract.EnvEffort, contract.EnvMaxBudget, contract.EnvExtraInstruction, contract.EnvSkillsLink} {
 		if _, ok := rs.Env[key]; ok {
 			t.Errorf("env unexpectedly carries %s", key)
 		}
+	}
+	// No skills leg on this template: no /faber/skills mount and no
+	// FABER_SKILLS_LINK — hook-only templates are unchanged.
+	for _, m := range rs.Mounts {
+		if m.Container == contract.ContainerSkillsDir {
+			t.Errorf("mounts unexpectedly carry the skills bind %+v", m)
+		}
+	}
+}
+
+// Verifies 93ba0858d75f: a template with a skills leg adds the read-only
+// /faber/skills bind (a sibling of the hook binds, before the writable engine
+// mounts) and emits FABER_SKILLS_LINK; the mount is present exactly once and
+// always :ro.
+func TestBuildRunSpecSkillsLeg(t *testing.T) {
+	spec := validSpec()
+	spec.SkillsDir = "/host/skills"
+	spec.SkillsLink = ".claude/skills"
+	rs, err := BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.Env[contract.EnvSkillsLink] != ".claude/skills" {
+		t.Errorf("env[%s] = %q, want the link verbatim", contract.EnvSkillsLink, rs.Env[contract.EnvSkillsLink])
+	}
+	var skills []infra.Mount
+	for _, m := range rs.Mounts {
+		if m.Container == contract.ContainerSkillsDir {
+			skills = append(skills, m)
+		}
+	}
+	if len(skills) != 1 {
+		t.Fatalf("skills mounts = %v, want exactly one", skills)
+	}
+	m := skills[0]
+	if m.Kind != infra.KindBind || m.Host != "/host/skills" || !m.ReadOnly {
+		t.Fatalf("skills mount = %+v, want a read-only bind of /host/skills", m)
+	}
+	// It sits after the hook binds and before the writable workspace volume.
+	idxSkills := slices.IndexFunc(rs.Mounts, func(x infra.Mount) bool { return x.Container == contract.ContainerSkillsDir })
+	idxWorkspace := slices.IndexFunc(rs.Mounts, func(x infra.Mount) bool { return x.Container == contract.ContainerWorkspace })
+	idxPrelude := slices.IndexFunc(rs.Mounts, func(x infra.Mount) bool {
+		return x.Container == contract.ContainerHooksDir+"/"+contract.HookPrelude
+	})
+	if !(idxPrelude < idxSkills && idxSkills < idxWorkspace) {
+		t.Fatalf("skills mount order wrong: prelude=%d skills=%d workspace=%d", idxPrelude, idxSkills, idxWorkspace)
+	}
+}
+
+// Verifies 93ba0858d75f: the skills leg is an all-or-nothing pair — a
+// BoxSpec with exactly one of SkillsDir/SkillsLink set is a broken run (a mount
+// with no link, or a link to a missing mount) and BuildRunSpec rejects it.
+func TestBuildRunSpecSkillsLegOneSided(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mut  func(*BoxSpec)
+	}{
+		{"dir without link", func(s *BoxSpec) { s.SkillsDir = "/host/skills" }},
+		{"link without dir", func(s *BoxSpec) { s.SkillsLink = ".claude/skills" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := validSpec()
+			tc.mut(&spec)
+			_, err := BuildRunSpec(spec)
+			if err == nil {
+				t.Fatal("want an error for a one-sided skills leg, got nil")
+			}
+			if !strings.Contains(err.Error(), "skills: dir and link must be set together") {
+				t.Fatalf("error = %v, want the pairing violation", err)
+			}
+		})
 	}
 }
 

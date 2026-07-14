@@ -7,7 +7,7 @@
       "preq_id": "4267f6b0c531",
       "type": "functional",
       "title": "Workflow schema definition",
-      "description": "Define the orchestrator.yaml schema: templates (name, packages, identity, network, skill, context/prelude hook paths, inputs, output schema), workflows (typed params, steps, sources), and steps (use: template or workflow, with: slot bindings, when: condition, loop sugar, depends_on for pure ordering). Go structs map 1:1 to YAML sections with yaml tags. The schema contains no domain-specific field names."
+      "description": "Define the orchestrator.yaml schema: templates (name, packages, identity, network, skill, context/prelude hook paths, skill-definition delivery (skills: {dir, link}), inputs, output schema), workflows (typed params, steps, sources), and steps (use: template or workflow, with: slot bindings, when: condition, loop sugar, depends_on for pure ordering). Go structs map 1:1 to YAML sections with yaml tags. The schema contains no domain-specific field names."
     },
     {
       "id": "255893ae16eb",

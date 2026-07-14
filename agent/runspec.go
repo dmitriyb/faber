@@ -58,6 +58,15 @@ type BoxSpec struct {
 	ContextHook string
 	PreludeHook string
 
+	// SkillsDir and SkillsLink are the template's optional skills leg (from
+	// Template.Skills). SkillsDir is the host directory bind-mounted read-only
+	// at ContainerSkillsDir; SkillsLink is the agent-specific $HOME-relative
+	// path the box symlinks to it (emitted as FABER_SKILLS_LINK). Both empty
+	// means no skills leg — no mount, no env, and the box's skills phase is a
+	// no-op.
+	SkillsDir  string
+	SkillsLink string
+
 	// AgentCLI is the agent CLI binary name inside the box (from the
 	// template's package set). Opaque user config: faber defaults no vendor.
 	// May be omitted when the template's env already carries FABER_AGENT_CLI.
@@ -106,6 +115,12 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	check(tpl.Skill != "", "template skill: required")
 	check(spec.AgentCLI != "" || tpl.Env[contract.EnvAgentCLI] != "",
 		"agent cli: required (no vendor default); set BoxSpec.AgentCLI or the template env "+contract.EnvAgentCLI)
+	// The skills leg is an all-or-nothing pair: the /faber/skills mount rides on
+	// SkillsDir and FABER_SKILLS_LINK on SkillsLink, and one without the other is
+	// a broken run — a mount with no link, or a link to a missing mount. Config
+	// validation already pairs them upstream; this guards direct BoxSpec callers.
+	check((spec.SkillsDir == "") == (spec.SkillsLink == ""),
+		"skills: dir and link must be set together")
 
 	// Template env is opaque user config for the box's own toolchain — it may
 	// never set engine- or security-owned names (the FABER_ namespace, the
@@ -175,6 +190,7 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	setIf(contract.EnvGitName, spec.GitName)
 	setIf(contract.EnvGitEmail, spec.GitEmail)
 	setIf(contract.EnvGitCache, spec.GitCache)
+	setIf(contract.EnvSkillsLink, spec.SkillsLink)
 	// The box starts as root and drops to the host user: its uid:gid so the
 	// files the box writes to the result bind stay host-owned.
 	env[contract.EnvRunUID] = strconv.Itoa(os.Getuid())
@@ -195,6 +211,14 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	if spec.PreludeHook != "" {
 		mounts = append(mounts, infra.Mount{
 			Host: spec.PreludeHook, Container: contract.ContainerHooksDir + "/" + contract.HookPrelude, ReadOnly: true,
+		})
+	}
+	// The skills leg: a per-template read-only capability at the fixed neutral
+	// path, a sibling of the hooks mounts — deliberately not under the writable
+	// per-run bundle tmpfs. Present only when the template declares a skills leg.
+	if spec.SkillsDir != "" {
+		mounts = append(mounts, infra.Mount{
+			Host: spec.SkillsDir, Container: contract.ContainerSkillsDir, ReadOnly: true,
 		})
 	}
 	// Writable engine mounts: the disk-backed clone volume and the tmpfs scratch

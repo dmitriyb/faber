@@ -6,22 +6,24 @@ inside the sealed container.
 
 ```
 host: step spec (resolved template + bound inputs)
-        │  box contract: FABER_* env, result-dir mount, hook mounts,
-        │  faber-box mount; binding fragments (network/remote/identity/
-        │  credentials) composed by security, argv assembled by infra
+        │  box contract: FABER_* env (incl. FABER_SKILLS_LINK), result-dir
+        │  mount, hook mounts, ro /faber/skills mount, faber-box mount;
+        │  binding fragments (network/remote/identity/credentials) composed
+        │  by security, argv assembled by infra
         ▼
 ──────────────── container start ───────────────────────────────
- 1 env contract check          FABER_INPUT_*, FABER_SKILL, dirs
- 2 /run/secrets/*  ──►  process env (uppercased basenames)
- 3 host-key policy             pinned │ tofu │ abort
- 4 git clone gateway/<repo>    only when the repo input is bound
- 5 signing config              ssh-add -L ──► git config key::<pub>
- 6 context hook  ─┐
- 7 prelude hook  ─┴──►  bundle dir: CONTEXT.md + bundle.env + sidecars
- 8 agent          prompt = /<skill> + CONTEXT.md [+ extra instruction]
+ 1 skills link                 $HOME/<link> ──► /faber/skills (no-op if unset)
+ 2 env contract check          FABER_INPUT_*, FABER_SKILL, dirs
+ 3 /run/secrets/*  ──►  process env (uppercased basenames)
+ 4 host-key policy             pinned │ tofu │ abort
+ 5 git clone gateway/<repo>    only when the repo input is bound
+ 6 signing config              ssh-add -L ──► git config key::<pub>
+ 7 context hook  ─┐
+ 8 prelude hook  ─┴──►  bundle dir: CONTEXT.md + bundle.env + sidecars
+ 9 agent          prompt = /<skill> + CONTEXT.md [+ extra instruction]
         │         side-effects: repo mutations, pushed via the gateway
         ▼         output.json into the result dir
- 9 extract ──► validate (output schema) ──► verify (declared effects)
+10 extract ──► validate (output schema) ──► verify (declared effects)
         │
         └──► result.json (one attempt record)      [any failed phase:
                                                     handoff.json + failed

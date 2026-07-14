@@ -64,8 +64,18 @@ type TemplateDef struct {
 	Run    RunDef              `yaml:"run,omitempty"`
 	Skill  string              `yaml:"skill,omitempty"`
 	Hooks  HookSet             `yaml:"hooks,omitempty"`
+	Skills *SkillsDef          `yaml:"skills,omitempty"` // nil = no skills leg (current behavior)
 	Inputs map[string]ParamDef `yaml:"inputs,omitempty"`
 	Output map[string]FieldDef `yaml:"output,omitempty"`
+}
+
+// SkillsDef delivers skill definitions into the box. A pointer so absence is
+// distinguishable from a zero value; when present, both fields are required.
+// Dir is the delivery seam for the definition behind Skill, Link is where this
+// agent discovers it — agent-specific and opaque to faber.
+type SkillsDef struct {
+	Dir  string `yaml:"dir,omitempty"`  // CWD-relative host dir of skill defs (SKILL.md tree), resolved like hook/overlay paths
+	Link string `yaml:"link,omitempty"` // in-box path relative to $HOME where THIS agent discovers skills; agent-specific, opaque to faber
 }
 
 // BuildDef pins the image: the package list IS the environment.

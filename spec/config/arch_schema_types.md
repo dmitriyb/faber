@@ -35,9 +35,20 @@ TemplateDef
 │   └── Volumes   map[string]string   named volume -> mount path (e.g. pre-warmed dep cache)
 ├── Skill     string               agent skill invoked headlessly in the box
 ├── Hooks     HookSet              context, prelude, on_failure — opaque script paths
+├── Skills    *SkillsDef           optional skill-definition delivery (dir, link) — absent ⇒ no skills leg
 ├── Inputs    map[string]ParamDef  typed slots
 └── Output    map[string]FieldDef  typed output schema (validated at the boundary)
 ```
+
+`Skills` is the delivery seam for the *definition* behind `Skill`: `Skill` names
+which skill the box invokes (`/<skill>`), while `Skills` optionally ships the
+skill definitions themselves into the box. It has exactly two subfields, both
+required when `skills` is present: `dir` — a CWD-relative host directory of skill
+definitions (a `SKILL.md` tree), resolved like the hook/overlay paths — and
+`link` — the in-box path (relative to `$HOME`) where *this* agent discovers
+skills. `link` is agent-specific and opaque to faber: a claude box sets it to
+`.claude/skills`, a different agent sets whatever it reads; faber never learns
+`.claude`. Absent `Skills` preserves current behavior (no skills leg).
 
 ```
 WorkflowDef

@@ -32,6 +32,7 @@ type BoxEnv struct {
     OutputSchema         config.OutputSchema // decoded from FABER_OUTPUT_SCHEMA
     RunUID, RunGID       int               // FABER_RUN_UID/GID; the preamble drops to these; 0/0 = no drop
     GitCache             string            // FABER_GIT_CACHE; ro object cache for clone --reference-if-able, empty = none
+    SkillsLink           string            // FABER_SKILLS_LINK; $HOME-relative path to symlink at /faber/skills, empty = no skills leg
 }
 
 func ParseEnv(environ []string) (*BoxEnv, error) // collects ALL violations
@@ -49,6 +50,7 @@ type Phase struct {
 }
 
 var phases = []Phase{
+    {"skills", (*Box).linkSkills},    // $HOME/<link> -> /faber/skills, no-op when unset
     {"env", (*Box).checkEnv},         // required slots present, dirs writable
     {"secrets", (*Box).loadSecrets},  // /run/secrets/* -> process env
     {"hostkey", (*Box).applyHostKeyPolicy},
@@ -96,6 +98,48 @@ func (b *Box) enterRunUser() error {
     if err := syscall.Setgroups([]int{b.Env.RunGID}); err != nil { return err }
     if err := syscall.Setgid(b.Env.RunGID); err != nil { return err }
     if err := syscall.Setuid(b.Env.RunUID); err != nil { return err } // all-thread since Go 1.16
+    return nil
+}
+```
+
+`linkSkills` is the skills leg (arch phase 1): the one agent-specific
+translation, driven entirely by config so faber never hardcodes `.claude`. It
+resolves `HOME` from the **box environment** (`b.lookupEnv("HOME")`, which scans
+`b.Environ` like `setEnv`), never `os.Getenv`: the preamble sets `HOME=/home/box`
+via `b.setEnv`, which mutates only `b.Environ` (the no-global-state policy), so
+on the production drop path the process `HOME` still reads `/root` while the box
+`HOME` is the writable tmpfs — and the link must land on the box scratch the
+agent and hooks below also use. On the no-drop local path (non-root or
+`RunUID==0`, e.g. the box-lifecycle tests running the binary as a plain process)
+`b.Environ`'s `HOME` is whatever the caller/harness put there. It is a no-op
+when no `skills` leg was declared:
+
+```go
+// lookupEnv scans b.Environ for key= (mirrors setEnv); the box env, not the
+// process env, is authoritative for HOME and every other phase value.
+func (b *Box) lookupEnv(key string) string {
+    prefix := key + "="
+    for _, kv := range b.Environ {
+        if strings.HasPrefix(kv, prefix) {
+            return kv[len(prefix):]
+        }
+    }
+    return ""
+}
+
+func (b *Box) linkSkills(ctx context.Context) error {
+    if b.Env.SkillsLink == "" {
+        return nil // no skills leg on this template
+    }
+    link := filepath.Join(b.lookupEnv("HOME"), b.Env.SkillsLink)
+    if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+        return fmt.Errorf("skills: mkdir %s: %w", filepath.Dir(link), err)
+    }
+    // os.Symlink, not a shell command: the image is shell-less. The target is
+    // the read-only engine mount; the link name is opaque agent config.
+    if err := os.Symlink(contract.ContainerSkillsDir, link); err != nil {
+        return fmt.Errorf("skills: symlink %s -> %s: %w", link, contract.ContainerSkillsDir, err)
+    }
     return nil
 }
 ```

@@ -124,6 +124,8 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		EntryBinary: b.EntryBinary,
 		ContextHook: box.Template.Hooks.Context,
 		PreludeHook: box.Template.Hooks.Prelude,
+		SkillsDir:   skillsDir(box.Template),
+		SkillsLink:  skillsLink(box.Template),
 		GitName:     b.GitName,
 		GitEmail:    b.GitEmail,
 	})
@@ -245,6 +247,22 @@ func stringifyInputs(inputs map[string]any) (map[string]string, error) {
 		out[slot] = s
 	}
 	return out, nil
+}
+
+// skillsDir and skillsLink read the template's optional skills leg, returning
+// "" when the template declares none (absence = current behavior).
+func skillsDir(t *config.ResolvedTemplate) string {
+	if t.Skills == nil {
+		return ""
+	}
+	return t.Skills.Dir
+}
+
+func skillsLink(t *config.ResolvedTemplate) string {
+	if t.Skills == nil {
+		return ""
+	}
+	return t.Skills.Link
 }
 
 // pathToken maps a node id onto a filesystem-safe directory name. A short

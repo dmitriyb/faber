@@ -218,6 +218,47 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 			},
 			"credentials.services.tok:ro: invalid service name",
 		},
+		{
+			// The skills leg is an all-or-nothing pair: a link without a dir
+			// fails, field-pathed like the rest.
+			"skills present with a missing dir",
+			func(c *Config) {
+				tp := c.Templates["box"]
+				tp.Skills = &SkillsDef{Link: ".claude/skills"}
+				c.Templates["box"] = tp
+			},
+			"templates.box.skills.dir: required when skills is present",
+		},
+		{
+			"skills present with a missing link",
+			func(c *Config) {
+				tp := c.Templates["box"]
+				tp.Skills = &SkillsDef{Dir: "./skills"}
+				c.Templates["box"] = tp
+			},
+			"templates.box.skills.link: required when skills is present",
+		},
+		{
+			// link is resolved as $HOME/<link> in the box, so an absolute link
+			// escapes $HOME and is rejected.
+			"skills link is absolute",
+			func(c *Config) {
+				tp := c.Templates["box"]
+				tp.Skills = &SkillsDef{Dir: "./skills", Link: "/etc/skills"}
+				c.Templates["box"] = tp
+			},
+			"templates.box.skills.link: must be relative to $HOME, not absolute",
+		},
+		{
+			// A ".." segment climbs out of $HOME and is rejected.
+			"skills link escapes with ..",
+			func(c *Config) {
+				tp := c.Templates["box"]
+				tp.Skills = &SkillsDef{Dir: "./skills", Link: "../../etc/skills"}
+				c.Templates["box"] = tp
+			},
+			`templates.box.skills.link: must not contain a ".." path segment`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -229,6 +270,32 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 				t.Fatalf("want exactly one violation, got %d: %v", n, err)
 			}
 		})
+	}
+}
+
+// Verifies 23a6be447cc8: a well-formed skills leg validates and desugars onto
+// the ResolvedTemplate verbatim (dir and link carried like the hook/overlay
+// paths), so the run phase never re-reads the YAML for it.
+func TestSchemaSkillsLegResolved(t *testing.T) {
+	cfg := minimalConfig()
+	tp := cfg.Templates["box"]
+	tp.Skills = &SkillsDef{Dir: "./skills", Link: ".claude/skills"}
+	cfg.Templates["box"] = tp
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("well-formed skills must validate: %v", err)
+	}
+	ir, err := Desugar(cfg, "flow")
+	if err != nil {
+		t.Fatalf("desugar: %v", err)
+	}
+	var got *SkillsDef
+	for _, n := range ir.Nodes {
+		if n.Template != nil {
+			got = n.Template.Skills
+		}
+	}
+	if got == nil || got.Dir != "./skills" || got.Link != ".claude/skills" {
+		t.Fatalf("resolved skills = %+v, want {Dir: ./skills, Link: .claude/skills}", got)
 	}
 }
 

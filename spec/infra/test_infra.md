@@ -17,8 +17,9 @@ acceptance environment only.
 ## Scenarios
 
 1. **Golden argv.** A fully populated RunSpec (limits, every engine mount kind —
-   a result bind rw, `:ro` hook + entry binds, a `/workspace` volume, a `/tmp`
-   tmpfs — three env keys, a representative binding fragment containing
+   a result bind rw, `:ro` hook + entry binds, a `:ro` `/faber/skills` bind, a
+   `/workspace` volume, a `/tmp` tmpfs — three env keys, a representative
+   binding fragment containing
    `--network`, an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a `:ro` secret
    mount, and `--runtime`) assembles to the golden argv byte-for-byte: fixed
    section order, a bind as `-v Host:Container[:ro]`, a volume as bare
@@ -29,7 +30,8 @@ acceptance environment only.
    mount, `--privileged`, `--user`, `--network=host`, or any `-v`/`--tmpfs` not
    present in the spec's mounts or fragment; `--rm` and `--name` are always
    present; declared memory/cpus always surface as flags, absent resources emit
-   none.
+   none. A RunSpec with no skills mount emits no `/faber/skills` `-v`; one with
+   it emits the bind exactly once, always `:ro`.
 3. **Tag determinism.** Same packages shuffled → identical tag; one package
    added, one overlay byte changed, or the pin rev bumped → different tag;
    the tag is computed with zero adapter calls (pure, no nix).

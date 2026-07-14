@@ -14,7 +14,7 @@ type RunSpec struct {
     Name      string            // deterministic: faber-<run-id>-<slug(step-id)>-a<attempt>
     Image     string            // the tag ImageBuilder produced
     Resources config.ResourceDef
-    Mounts    []Mount           // engine mounts: result bind, ro hooks + box entry, workspace volume, tmpfs writables
+    Mounts    []Mount           // engine mounts: result bind, ro hooks + box entry, ro skills (when the template declares them), workspace volume, tmpfs writables
     Env       map[string]string // engine env; contract values, never secrets
     Bindings  []string          // ordered argv fragment from security.BindingSet
     Entry     []string          // in-container entry argv
@@ -87,10 +87,14 @@ Pure function, no I/O — the golden-argv tests in test_infra.md exercise it
 directly. Sorted env keys keep the argv deterministic for a given spec; the
 binding fragment's internal order is BindingSet's contract, preserved
 byte-for-byte. The engine mounts a spec carries are the result bind (rw), the
-read-only hook scripts and box entry binary, the disk-backed `/workspace`
-volume, and the tmpfs writables (`/faber/bundle`, `/tmp`, `HOME`); everything
-else — agent socket, secret file, cache volume, `--network`, `--runtime` —
-arrives inside `Bindings`. There is no code path that could emit a docker-socket
+read-only hook scripts and box entry binary, the read-only skills directory
+(`contract.ContainerSkillsDir` = `/faber/skills`, present only when the template
+declares a `skills` leg), the disk-backed `/workspace` volume, and the tmpfs
+writables (`/faber/bundle`, `/tmp`, `HOME`); everything else — agent socket,
+secret file, cache volume, `--network`, `--runtime` — arrives inside `Bindings`.
+`/faber/skills` is a sibling of `/faber/hooks`: per-template, read-only, static
+capabilities, deliberately not nested under the box-writable per-run bundle
+tmpfs. There is no code path that could emit a docker-socket
 mount, `--privileged`, or `--user`: no field of `RunSpec` maps to them, and the
 non-root drop is the box's own job, driven by the `FABER_RUN_UID`/`FABER_RUN_GID`
 engine env, not a docker flag.

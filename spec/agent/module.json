@@ -7,7 +7,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Fixed box phase order",
-      "description": "Every agent step executes the same internal sequence: environment setup (delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent, then result emission and verification. The order is engine-owned and not configurable; there is no in-container DAG."
+      "description": "Every agent step executes the same internal sequence: environment setup (an agent-specific skills-link phase when the template declares one, delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent, then result emission and verification. The order is engine-owned and not configurable; there is no in-container DAG."
     },
     {
       "id": "b880aa49b3b9",

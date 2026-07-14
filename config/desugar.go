@@ -519,6 +519,7 @@ func (d *desugarer) resolveTemplate(name, sp string) *ResolvedTemplate {
 		Volumes:   t.Run.Volumes,
 		Skill:     t.Skill,
 		Hooks:     t.Hooks,
+		Skills:    t.Skills,
 		Inputs:    d.normalizeDefs(t.Inputs, sp),
 		Output:    d.normalizeDefs(t.Output, sp),
 	}

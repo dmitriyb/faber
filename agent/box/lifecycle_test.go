@@ -284,8 +284,9 @@ func phasesFromLog(t *testing.T, log string) []string {
 }
 
 // Scenario 1. Verifies 93ba0858d75f, ae434449cac9 and ff8e85704b0a: the full
-// run drives exactly env/secrets/hostkey/clone/signing/context/prelude/
-// agent/result; the stub's recorded prompt is /<skill> + blank line + the
+// run drives exactly skills/env/secrets/hostkey/clone/signing/context/prelude/
+// agent/result (skills is a no-op when the fixture declares no skills leg); the
+// stub's recorded prompt is /<skill> + blank line + the
 // exact CONTEXT.md bytes; result.json is ok with the validated payload and
 // attempt echoing FABER_ATTEMPT.
 func TestLifecycle_HappyPathFixedOrder(t *testing.T) {
@@ -301,7 +302,7 @@ func TestLifecycle_HappyPathFixedOrder(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d\n%s", code, log)
 	}
-	want := []string{"env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "result"}
+	want := []string{"skills", "env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "result"}
 	if got := phasesFromLog(t, log); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
 	}
@@ -459,7 +460,7 @@ func TestLifecycle_HostKeyPolicy(t *testing.T) {
 			t.Fatalf("handoff = %+v", h)
 		}
 		phases := phasesFromLog(t, log)
-		if fmt.Sprint(phases) != fmt.Sprint([]string{"env", "secrets", "hostkey"}) {
+		if fmt.Sprint(phases) != fmt.Sprint([]string{"skills", "env", "secrets", "hostkey"}) {
 			t.Fatalf("phases = %v, want to stop at hostkey", phases)
 		}
 	})

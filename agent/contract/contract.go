@@ -79,6 +79,11 @@ const (
 	// when set, the clone borrows objects via --reference-if-able. Empty = none.
 	EnvGitCache = "FABER_GIT_CACHE"
 
+	// EnvSkillsLink is the $HOME-relative path the skills phase symlinks to the
+	// read-only skills mount (ContainerSkillsDir). Opaque agent-specific config;
+	// absent means the template declares no skills leg and the phase is a no-op.
+	EnvSkillsLink = "FABER_SKILLS_LINK"
+
 	// InputEnvPrefix prefixes one variable per bound input slot:
 	// FABER_INPUT_<SLOT>, the typed-inputs contract for hooks and agent.
 	InputEnvPrefix = "FABER_INPUT_"
@@ -96,6 +101,12 @@ const (
 	// ContainerHooksDir is where hook executables are bind-mounted
 	// read-only, one file per phase name (context, prelude).
 	ContainerHooksDir = "/faber/hooks"
+
+	// ContainerSkillsDir is the fixed neutral path the host bind-mounts the
+	// template's skill-definition directory read-only — a sibling of the hooks
+	// dir, and like it a per-template, static, read-only capability. The skills
+	// phase symlinks the agent-specific EnvSkillsLink to it.
+	ContainerSkillsDir = "/faber/skills"
 
 	// ContainerEntry is where the faber-box binary is bind-mounted read-only
 	// and set as the container command.

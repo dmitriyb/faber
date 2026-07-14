@@ -14,12 +14,12 @@ import (
 	"github.com/dmitriyb/faber/agent/contract"
 )
 
-// runContextHook is phase 6: the first user-filled phase.
+// runContextHook is phase 7: the first user-filled phase.
 func (b *Box) runContextHook(ctx context.Context) error {
 	return b.runHook(ctx, contract.HookContext)
 }
 
-// runPreludeHook is phase 7: the second user-filled phase, followed by the
+// runPreludeHook is phase 8: the second user-filled phase, followed by the
 // bundle postcondition — the agent never starts on a missing bundle. A
 // hook-less template gets a synthesized minimal bundle so the agent phase
 // sees one shape regardless of template.

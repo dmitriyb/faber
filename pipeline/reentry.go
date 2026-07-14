@@ -105,6 +105,8 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		EntryBinary: r.EntryBinary,
 		ContextHook: node.Template.Hooks.Context,
 		PreludeHook: node.Template.Hooks.Prelude,
+		SkillsDir:   skillsDir(node.Template),
+		SkillsLink:  skillsLink(node.Template),
 	})
 	if err != nil {
 		return err

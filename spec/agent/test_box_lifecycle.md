@@ -23,8 +23,9 @@ mounts, and the env contract is set directly.)
 
 1. **Happy path, fixed order.** Full run with the happy hooks and a stub
    emitting a valid payload: phase order is exactly
-   env/secrets/hostkey/clone/signing/context/prelude/agent/result (asserted
-   from the structured log); the stub's recorded prompt is `/<skill>` + blank
+   skills/env/secrets/hostkey/clone/signing/context/prelude/agent/result
+   (asserted from the structured log; `skills` is a no-op when the fixture
+   declares no skills leg); the stub's recorded prompt is `/<skill>` + blank
    line + the exact `CONTEXT.md` bytes; `result.json` is status ok with the
    validated payload and `attempt` echoing `FABER_ATTEMPT`.
 2. **Prelude failure aborts before the agent.** Failing prelude: the agent
@@ -68,6 +69,21 @@ mounts, and the env contract is set directly.)
     the same record; over a truncated `result.json` returns the synthesized
     `box-vanished` failure; over a record whose payload was hand-edited to
     break the schema, a failed record — the host never threads it.
+
+14. **Skills leg links a read-only tree, under the box `HOME` not the process
+    `HOME`.** The phase resolves `HOME` from the box environment (`b.Environ`),
+    never `os.Getenv` — the preamble sets `HOME=/home/box` only in `b.Environ`,
+    so on the drop path the process `HOME` diverges. The test makes them diverge
+    deliberately: it puts a scratch `HOME` in the box env, points the process
+    `HOME` (via `t.Setenv`) at a **different** scratch dir, and asserts the
+    symlink lands under the **box** `HOME` — with the pre-fix `os.Getenv("HOME")`
+    code it would land under the process `HOME` and the test fails. With
+    `FABER_SKILLS_LINK=.claude/skills`, the skills phase creates
+    `$HOME/.claude/skills` (under the box `HOME`, parent `.claude` dir created) as
+    a symlink to the fixed read-only `/faber/skills` mount, and nothing appears
+    under the process `HOME`; unset, no `$HOME/.claude` is created and the phase
+    is a no-op. The `link` value is honored verbatim — nothing asserts `.claude`
+    beyond the fixture's own config.
 
 ## Edge cases
 

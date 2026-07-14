@@ -39,9 +39,10 @@ type CondSpec struct {
 ```
 
 `ResolvedTemplate` embeds everything the executor needs (image spec = packages +
-overlay hash, hooks, identity, resources, runtime, I/O schemas) so the run phase
-never consults the YAML again. `GenSpec` carries the source command/args, the
-target workflow *name* (expansion is run-time), and the item binding template.
+overlay hash, hooks, the optional skills leg `{dir, link}`, identity, resources,
+runtime, I/O schemas) so the run phase never consults the YAML again. `GenSpec`
+carries the source command/args, the target workflow *name* (expansion is
+run-time), and the item binding template.
 `SelSpec` lists the coalesced candidates newest-first.
 
 ## Algorithm

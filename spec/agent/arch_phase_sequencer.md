@@ -14,8 +14,8 @@ identity's turn.
 
 ## The fixed order
 
-Phases 1–5 are deterministic engine code (environment setup), 6–8 are the
-user-filled phases, 9 is the container-boundary phase. Each phase either
+Phases 1–6 are deterministic engine code (environment setup), 7–9 are the
+user-filled phases, 10 is the container-boundary phase. Each phase either
 completes or the box fail-stops — no phase ever runs after a failed one.
 
 0. **Privileged preamble (drop to the run user).** The container starts as root
@@ -31,25 +31,45 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    preamble is a no-op. This is the same root-entry-then-drop shape the network
    binding uses; it is the *only* moment `faber-box` holds privilege.
 
-1. **Env contract.** The box's inputs arrive as environment: `FABER_SKILL`,
+1. **Skills link.** When `FABER_SKILLS_LINK` is set, the box creates the
+   agent-specific symlink `$HOME/<link> → /faber/skills` (`contract.ContainerSkillsDir`),
+   `os.MkdirAll`-ing the link's parent under `$HOME` first. `HOME` is read from
+   the **box environment** (`b.Environ`), not the process env: the preamble sets
+   `HOME=/home/box` via `b.setEnv`, which mutates only `b.Environ` (the
+   no-global-state policy), so on the production drop path the box `HOME` is that
+   writable tmpfs even though the process `HOME` still reads `/root` — and the
+   agent and hooks below resolve `HOME` from `b.Environ` too, so the link must
+   land there. On the no-drop local path (a non-root or `RunUID==0` invocation,
+   e.g. the box-lifecycle harness) `b.Environ`'s `HOME` is whatever the
+   caller/harness put there, which is why that harness points the box `HOME` at a
+   scratch dir rather than clobbering the real one. This is the one agent-specific
+   translation in the box, and it is Go,
+   not a shell command, because the image is shell-less. `link` is opaque config
+   (a claude box passes `.claude/skills`); faber never hardcodes it. The mount at
+   `/faber/skills` is read-only, so the link points a read-only tree into the
+   place *this* agent looks for skill definitions. Absent `FABER_SKILLS_LINK` (no
+   `skills` leg on the template) the phase is a no-op — current behavior. See the
+   Skills leg subsection below.
+2. **Env contract.** The box's inputs arrive as environment: `FABER_SKILL`,
    `FABER_IDENTITY`, `FABER_RESULT_DIR` (a host-mounted directory),
-   `FABER_BUNDLE_DIR`, `FABER_OUTPUT_SCHEMA`, and one `FABER_INPUT_<SLOT>` per
-   bound input slot. Every required slot of the template must be present and
-   non-empty; a violation aborts immediately with reason `env-contract`.
-2. **Delegated secrets.** Each file under `/run/secrets/` (the credential
+   `FABER_BUNDLE_DIR`, `FABER_OUTPUT_SCHEMA`, the optional `FABER_SKILLS_LINK`,
+   and one `FABER_INPUT_<SLOT>` per bound input slot. Every required slot of the
+   template must be present and non-empty; a violation aborts immediately with
+   reason `env-contract`.
+3. **Delegated secrets.** Each file under `/run/secrets/` (the credential
    binding's degraded file mode) is exported into the *process* environment
    under its uppercased basename. Secrets never cross the docker boundary as
    `-e` env — that rule is the host-side binding's; this phase is the in-box
    convenience that makes the mounted handle reachable by hooks and agent.
-3. **Host-key policy.** Pinned key material (`FABER_HOST_KEY`) is written to a
+4. **Host-key policy.** Pinned key material (`FABER_HOST_KEY`) is written to a
    known-hosts file with `StrictHostKeyChecking=yes` (fail closed); else an
    explicit TOFU opt-in (`FABER_HOST_KEY_TOFU=1`) selects `accept-new`
    (sandbox only); else the box aborts before any network use.
-4. **Clone.** `repo` is the one reserved slot name the engine interprets: when
+5. **Clone.** `repo` is the one reserved slot name the engine interprets: when
    bound, the sequencer clones `<FABER_REMOTE_URL>/<repo>.git` — the gateway,
    the box's only reachable remote — into `/workspace/<repo>`, the working
    directory for every later phase. When absent (a gateless step), later
-   phases run in a scratch directory and phases 4–5 are skipped.
+   phases run in a scratch directory and phases 5–6 are skipped.
 
    *Shared object cache (the large-repo seam).* A cross-container git worktree
    is rejected: a shared `.git` is mutable state shared between untrusted
@@ -60,7 +80,7 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    `.git` and working tree but borrows objects (the bulk — history) from the
    shared cache via alternates, so N parallel boxes pay N× only for the working
    checkout, never N× for history. The cache is never written by the box.
-5. **Signing config.** The public key is read from the forwarded agent socket
+6. **Signing config.** The public key is read from the forwarded agent socket
    (`ssh-add -L` over `SSH_AUTH_SOCK`); exactly one key must be listed — zero
    or several is an identity-binding violation and aborts. Then:
    `git config gpg.format ssh`, `user.signingkey key::<pub>`,
@@ -69,14 +89,41 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    `faber-<identity>@box.invalid`. The same key signs commits and
    authenticates SSH — one fingerprint, one role; enforcement of what that
    fingerprint may do belongs to the user's gate service, never to the box.
-6. **Context hook.** First user-filled phase, under the PreludeHooks contract.
-7. **Prelude hook.** Second user-filled phase, same contract. After both, the
+7. **Context hook.** First user-filled phase, under the PreludeHooks contract.
+8. **Prelude hook.** Second user-filled phase, same contract. After both, the
    context bundle must exist in the bundle directory or the step aborts —
    the agent never starts on a missing bundle.
-8. **Agent.** Delegated to AgentInvoker: one headless skill invocation, the
+9. **Agent.** Delegated to AgentInvoker: one headless skill invocation, the
    only nondeterministic phase in the box.
-9. **Result.** Delegated to ResultExtractor: extraction, schema validation,
+10. **Result.** Delegated to ResultExtractor: extraction, schema validation,
    declared side-effect verification, and emission of the attempt record.
+
+## The skills leg
+
+A template names a `skill` (the leading `/<skill>` of the agent prompt), but the
+skill *definition* — a claude `SKILL.md` tree, for instance — is neither baked
+into the image (the image is a pure function of the toolset) nor carried by the
+hooks (those deliver the per-run context bundle). The skills leg fills that gap
+with two engine-owned pieces and nothing agent-specific baked into faber:
+
+- **A read-only mount.** When the template declares `skills: {dir, link}`, faber
+  bind-mounts the host `dir` read-only at the fixed neutral path
+  `/faber/skills` (`contract.ContainerSkillsDir`) — a sibling of `/faber/hooks`,
+  and like it a per-template, static, read-only capability, deliberately *not*
+  nested under the box-writable per-run `/faber/bundle` tmpfs.
+- **A single symlink.** The host passes the config `link` to the box as
+  `FABER_SKILLS_LINK`; the skills-link phase creates `$HOME/<link> → /faber/skills`.
+  This is the whole agent-specific translation, and it is driven entirely by
+  config: faber never learns `.claude`. A claude box discovers skills natively at
+  `$HOME/.claude/skills/<name>/SKILL.md` (no `CLAUDE_CONFIG_DIR` needed: on the
+  production drop path `$HOME` is the writable `/home/box` tmpfs the preamble set,
+  and on a no-drop local run it is the ambient/overridden `HOME`), and claude
+  follows the symlink into the read-only tree — empirically confirmed. A different
+  agent just sets a different
+  `link`; the mount path stays neutral.
+
+Absent a `skills` leg, no mount and no `FABER_SKILLS_LINK` are emitted and the
+symlink phase is a no-op, so hook-only and skill-less templates are unchanged.
 
 ## Fail-stop and the handoff record
 

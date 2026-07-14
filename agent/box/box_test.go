@@ -195,7 +195,7 @@ func loggedPhases(t *testing.T, log *bytes.Buffer) []string {
 }
 
 // Verifies 93ba0858d75f: every agent step executes the same engine-owned
-// internal sequence — env, secrets, hostkey, clone, signing, context,
+// internal sequence — skills, env, secrets, hostkey, clone, signing, context,
 // prelude, agent, result — with no in-container DAG.
 func TestFixedPhaseOrderHappyPath(t *testing.T) {
 	d := newTestDirs(t)
@@ -222,7 +222,7 @@ func TestFixedPhaseOrderHappyPath(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 
-	want := []string{"env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "result"}
+	want := []string{"skills", "env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "result"}
 	got := loggedPhases(t, &logBuf)
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
@@ -702,6 +702,64 @@ func TestFailStopWritesHandoffAndRecord(t *testing.T) {
 	if len(fr.calls) != 1 {
 		t.Fatalf("phases after the failed clone ran: %v", fr.argvs())
 	}
+}
+
+// Verifies 93ba0858d75f (scenario 14): the skills leg links a read-only tree,
+// and it resolves HOME from the BOX environment (b.Environ), not the process
+// env. The preamble sets HOME=/home/box only in b.Environ (the no-os.Setenv
+// policy), so on the drop path the process HOME diverges — here the test makes
+// them diverge deliberately: b.Environ's HOME is a scratch dir, the process
+// HOME (t.Setenv) is a DIFFERENT one, and the symlink must land under the box
+// HOME. With FABER_SKILLS_LINK=.claude/skills the phase creates
+// $HOME/.claude/skills (parent .claude dir created) as a symlink to the fixed
+// read-only mount path; the link value is honored verbatim. Unset, no
+// $HOME/.claude is created and the phase is a no-op.
+func TestLinkSkills(t *testing.T) {
+	t.Run("links the read-only tree under the box HOME, not the process HOME", func(t *testing.T) {
+		d := newTestDirs(t)
+		boxHome := t.TempDir()
+		procHome := t.TempDir()
+		// Make the process env HOME diverge from the box env HOME: the old
+		// os.Getenv("HOME") code would land the link under procHome and fail.
+		t.Setenv("HOME", procHome)
+		b := newTestBox(t, d, map[string]string{
+			"HOME":                 boxHome,
+			contract.EnvSkillsLink: ".claude/skills",
+		}, &fakeRunner{})
+		if err := b.linkSkills(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		// The link lands under the box HOME; the process HOME is untouched.
+		if fi, err := os.Stat(filepath.Join(boxHome, ".claude")); err != nil || !fi.IsDir() {
+			t.Fatalf(".claude parent not created under the box HOME: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(procHome, ".claude")); !os.IsNotExist(err) {
+			t.Fatalf("link leaked into the process HOME %s: err = %v", procHome, err)
+		}
+		link := filepath.Join(boxHome, ".claude", "skills")
+		fi, err := os.Lstat(link)
+		if err != nil {
+			t.Fatalf("lstat link: %v", err)
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s is not a symlink (mode %v)", link, fi.Mode())
+		}
+		// The link name is opaque config; the target is the fixed neutral mount.
+		if target, err := os.Readlink(link); err != nil || target != contract.ContainerSkillsDir {
+			t.Fatalf("readlink = %q (err %v), want %q", target, err, contract.ContainerSkillsDir)
+		}
+	})
+	t.Run("no skills leg is a no-op", func(t *testing.T) {
+		d := newTestDirs(t)
+		home := t.TempDir()
+		b := newTestBox(t, d, map[string]string{"HOME": home}, &fakeRunner{})
+		if err := b.linkSkills(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+			t.Fatalf("no-skills phase touched HOME: err = %v", err)
+		}
+	})
 }
 
 // envLookup finds key in a KEY=VALUE list.

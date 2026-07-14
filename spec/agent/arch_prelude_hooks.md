@@ -12,7 +12,8 @@ their postcondition: the context bundle.
 
 ## Inputs: the environment
 
-A hook inherits the box environment as assembled by phases 1–5:
+A hook inherits the box environment as assembled by the setup phases
+(env-contract through signing):
 
 - `FABER_INPUT_<SLOT>` for every bound input slot, values stringified per the
   slot's declared type — this is how the step's typed inputs reach user code.

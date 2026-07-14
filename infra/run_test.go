@@ -18,9 +18,10 @@ import (
 func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // fullRunSpec is the golden-argv fixture: limits, every engine mount kind (a
-// result bind rw, a :ro hook bind, a workspace volume, a /tmp tmpfs), three env
-// keys, and a representative binding fragment (--network, agent-socket -v,
-// SSH_AUTH_SOCK, proxy env, :ro secret mount, --runtime).
+// result bind rw, a :ro hook bind, a :ro /faber/skills bind, a workspace
+// volume, a /tmp tmpfs), three env keys, and a representative binding fragment
+// (--network, agent-socket -v, SSH_AUTH_SOCK, proxy env, :ro secret mount,
+// --runtime).
 func fullRunSpec() RunSpec {
 	return RunSpec{
 		Name:      "faber-r1-impl-a1",
@@ -29,6 +30,7 @@ func fullRunSpec() RunSpec {
 		Mounts: []Mount{
 			{Host: "/runs/r1/impl", Container: "/result"},
 			{Host: "/proj/hooks", Container: "/hooks", ReadOnly: true},
+			{Host: "/proj/skills", Container: "/faber/skills", ReadOnly: true},
 			{Kind: KindVolume, Container: "/workspace"},
 			{Kind: KindTmpfs, Container: "/tmp"},
 		},
@@ -59,6 +61,7 @@ func TestGoldenArgv(t *testing.T) {
 		"--memory=8g", "--cpus=4",
 		"-v", "/runs/r1/impl:/result",
 		"-v", "/proj/hooks:/hooks:ro",
+		"-v", "/proj/skills:/faber/skills:ro",
 		"-v", "/workspace",
 		"--tmpfs", "/tmp",
 		"-e", "ANSWER=42",

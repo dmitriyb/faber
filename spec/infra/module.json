@@ -28,7 +28,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Container run primitive",
-      "description": "Run one step container: assemble the docker run argv from the image, resource limits, the ordered binding contributions supplied by the security module, mounts (result dir, hook scripts), and environment; start, stream logs, wait, and return exit code plus captured output. Supports kill on context cancellation. --rm by default; one container per step invocation, no reuse."
+      "description": "Run one step container: assemble the docker run argv from the image, resource limits, the ordered binding contributions supplied by the security module, mounts (result dir, hook scripts, the read-only /faber/skills mount when the template declares a skills leg), and environment; start, stream logs, wait, and return exit code plus captured output. Supports kill on context cancellation. --rm by default; one container per step invocation, no reuse."
     },
     {
       "id": "7b7ad52d9123",

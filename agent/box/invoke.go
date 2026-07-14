@@ -46,7 +46,7 @@ func (i Invocation) Argv() []string {
 	return argv
 }
 
-// runAgent is phase 8. The child environment is the box environment plus the
+// runAgent is phase 9. The child environment is the box environment plus the
 // bundle's sidecar values, so anything the prelude derived is visible to the
 // skill. stdout and stderr stream to the container log and are never parsed:
 // the result file is the only machine-readable channel out of this phase.

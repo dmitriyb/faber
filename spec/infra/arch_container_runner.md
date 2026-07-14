@@ -20,6 +20,7 @@ docker run --rm --name <deterministic-step-name>
   -v <result-host-dir>:<result-path>             # engine bind, rw (survives the container)
   -v <hook-scripts-dir>:<hooks-path>:ro          # engine bind, read-only
   -v <box-entry-binary>:<entry-path>:ro          # engine bind, read-only
+  -v <skills-dir>:/faber/skills:ro               # engine bind, read-only, only if the template declares skills
   -v <workspace-path>                            # engine anonymous volume, disk-backed
   --tmpfs <bundle-path> --tmpfs /tmp --tmpfs <home>   # engine tmpfs, RAM
   -e KEY=VALUE ...                               # engine env, sorted keys, no secrets
@@ -47,9 +48,11 @@ Mirroring the proven harness's run shape, the assembled argv never contains:
 - a docker socket mount (the box cannot reach the daemon);
 - any mount beyond the declared ones — the result-dir bind, the read-only hook
   scripts, the read-only box entry binary (the agent module's sequencer,
-  mounted and set as the entry argv), the disk-backed `/workspace` volume, the
-  tmpfs writables (bundle, tmp, home), and whatever the binding fragment
-  declares (agent socket, secret file, cache volume);
+  mounted and set as the entry argv), the read-only skills directory at
+  `/faber/skills` (a sibling of `/faber/hooks`, present only when the template
+  declares a `skills` leg), the disk-backed `/workspace` volume, the tmpfs
+  writables (bundle, tmp, home), and whatever the binding fragment declares
+  (agent socket, secret file, cache volume);
 - `--privileged`, `--user`, host networking, or host PID/IPC namespaces (the
   box runs as root only until its entry program drops to the run user);
 - a secret in `-e` form — engine env carries step-contract values only

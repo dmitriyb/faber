@@ -1,10 +1,10 @@
 // Package box is the in-container half of the agent module: the phase
 // sequencer the faber-box binary runs as every step container's entry
-// program. It owns the fixed, engine-defined phase order — env contract,
-// delegated secrets, host-key policy, gateway clone, signing config, context
-// hook, prelude hook, agent invocation, result emission — with fail-stop
-// between phases and one attempt record on every exit path. There is no
-// in-container DAG and nothing here is configurable per template.
+// program. It owns the fixed, engine-defined phase order — skills link, env
+// contract, delegated secrets, host-key policy, gateway clone, signing config,
+// context hook, prelude hook, agent invocation, result emission — with
+// fail-stop between phases and one attempt record on every exit path. There is
+// no in-container DAG and nothing here is configurable per template.
 //
 // The package holds no resolver and fetches no secret (the host delegated
 // handles before the container existed), applies no policy, and never
@@ -81,6 +81,7 @@ type phase struct {
 // literally this slice. It is package data, not configuration: no template,
 // env value, or flag reorders it.
 var phases = []phase{
+	{"skills", (*Box).linkSkills},
 	{"env", (*Box).checkEnv},
 	{"secrets", (*Box).loadSecrets},
 	{"hostkey", (*Box).applyHostKeyPolicy},
@@ -262,7 +263,48 @@ func (b *Box) setEnv(key, val string) {
 	b.Environ = append(b.Environ, prefix+val)
 }
 
-// checkEnv is phase 1: the env contract. Every violation is collected, the
+// lookupEnv returns the value of key in the child environment (b.Environ), or
+// "" when unset. It scans b.Environ the same way setEnv does — the box's own
+// environment, not the process env, is authoritative for every phase (the
+// preamble's HOME=/home/box lives only here, by the no-os.Setenv policy).
+func (b *Box) lookupEnv(key string) string {
+	prefix := key + "="
+	for _, kv := range b.Environ {
+		if strings.HasPrefix(kv, prefix) {
+			return kv[len(prefix):]
+		}
+	}
+	return ""
+}
+
+// linkSkills is the skills leg (phase 1): the one agent-specific translation,
+// driven entirely by config so faber never hardcodes an agent's skills path. It
+// joins the box environment's HOME — on the production drop path the preamble
+// has already set HOME=/home/box (the writable tmpfs) via b.setEnv, so the link
+// lands on the box's own scratch; on the no-drop local path (non-root or
+// RunUID==0, e.g. the box-lifecycle tests running the binary as a plain
+// process) HOME is whatever the caller/harness put in b.Environ. It reads
+// b.Environ, never os.Getenv: the preamble mutates only b.Environ (the
+// no-global-state policy), so the process HOME can diverge, and the agent and
+// hooks below all resolve HOME from b.Environ too. It is a no-op when no skills
+// leg was declared. os.Symlink, not a shell command: the image is shell-less.
+// The target is the read-only engine mount; the link name is opaque agent
+// config.
+func (b *Box) linkSkills(ctx context.Context) error {
+	if b.Env.SkillsLink == "" {
+		return nil // no skills leg on this template
+	}
+	link := filepath.Join(b.lookupEnv("HOME"), b.Env.SkillsLink)
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		return fmt.Errorf("skills: mkdir %s: %w", filepath.Dir(link), err)
+	}
+	if err := os.Symlink(contract.ContainerSkillsDir, link); err != nil {
+		return fmt.Errorf("skills: symlink %s -> %s: %w", link, contract.ContainerSkillsDir, err)
+	}
+	return nil
+}
+
+// checkEnv is phase 2: the env contract. Every violation is collected, the
 // bundle directory is created, and the result directory must be usable —
 // without it no record could reach the host.
 func (b *Box) checkEnv(ctx context.Context) error {
@@ -278,7 +320,7 @@ func (b *Box) checkEnv(ctx context.Context) error {
 	return nil
 }
 
-// loadSecrets is phase 2: each regular file under the secrets directory (the
+// loadSecrets is phase 3: each regular file under the secrets directory (the
 // credential binding's file mode) is exported into the child environment
 // under its uppercased basename. The values exist only in this process tree —
 // never in a docker argv, a log record, or the handoff.
@@ -305,7 +347,7 @@ func (b *Box) loadSecrets(ctx context.Context) error {
 	return nil
 }
 
-// applyHostKeyPolicy is phase 3: pinned key material is installed into a
+// applyHostKeyPolicy is phase 4: pinned key material is installed into a
 // known-hosts file with StrictHostKeyChecking=yes (fail closed); an explicit
 // TOFU opt-in selects accept-new; an ssh remote with neither aborts before
 // any network use. Non-ssh remotes (the local-path gateway of the sandbox
@@ -438,7 +480,7 @@ func remoteHostPort(url string) (host, port string) {
 	return rest, ""
 }
 
-// clone is phase 4: the gateway is the box's only reachable remote, and its
+// clone is phase 5: the gateway is the box's only reachable remote, and its
 // URL (with the repo already spliced in by the host) is the whole clone
 // spec. Absence of the remote env means a gateless step: later phases run in
 // a scratch directory and the signing phase is skipped.
@@ -490,7 +532,7 @@ func repoDirName(url string) string {
 	return name
 }
 
-// configureSigning is phase 5: the public key is read from the forwarded
+// configureSigning is phase 6: the public key is read from the forwarded
 // agent socket; exactly one key must be listed — zero or several is an
 // identity-binding violation. The same key signs commits and authenticates
 // SSH: one fingerprint, one role. What that fingerprint may do is the user's

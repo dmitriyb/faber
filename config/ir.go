@@ -126,6 +126,7 @@ type ResolvedTemplate struct {
 	Volumes   map[string]string   `json:"volumes,omitempty"`
 	Skill     string              `json:"skill"`
 	Hooks     HookSet             `json:"hooks"`
+	Skills    *SkillsDef          `json:"skills,omitempty"` // optional skill-definition delivery; nil = no skills leg
 	Inputs    map[string]ParamDef `json:"inputs"`
 	Output    map[string]FieldDef `json:"output"`
 }
