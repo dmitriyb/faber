@@ -9,9 +9,9 @@ resolved step (IR node + params)
         │            │             │              │             │
         ▼            ▼             ▼              ▼             │
   NetworkBinding RemoteBinding IdentityBinding CredentialBroker│
-   (preflight:    (read host    (spawn agent,   (get_token     │
-    net exists)    key line)     load 1 key)     host-side →    │
-        │            │             │             Secrets map)  │
+   (preflight:    (read host    (resolve key,   (get_token     │
+    net exists)    key line)     spawn agent,    host-side →    │
+        │            │           load 1 key)     Secrets map)  │
         └────────────┴──────┬──────┴──────────────┴────────────┘
                             ▼   fixed order: network, remote,
                      BindingSet.Prepare   identity, credentials, runtime

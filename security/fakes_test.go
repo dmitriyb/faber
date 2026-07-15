@@ -73,6 +73,11 @@ type fakeAgent struct {
 	startErr error
 	addErr   error
 	listFn   func(socket string) ([]string, error) // overrides the tracked keys
+	// fpBySource maps a keySource to the real fingerprint the loaded key
+	// reports, mirroring how a correct pub/private pair yields its pinned
+	// fingerprint. When a keySource is absent the fake synthesizes one from the
+	// basename (the path-form default, where no fingerprint is pinned).
+	fpBySource map[string]string
 }
 
 func newFakeAgent() *fakeAgent {
@@ -99,7 +104,11 @@ func (f *fakeAgent) AddKey(_ context.Context, socket, keySource string) error {
 	if f.addErr != nil {
 		return f.addErr
 	}
-	f.keys[socket] = append(f.keys[socket], "256 SHA256:fp-"+filepath.Base(keySource)+" (ED25519)")
+	line := "256 SHA256:fp-" + filepath.Base(keySource) + " (ED25519)"
+	if fp, ok := f.fpBySource[keySource]; ok {
+		line = "256 " + fp + " " + filepath.Base(keySource) + " (ED25519)"
+	}
+	f.keys[socket] = append(f.keys[socket], line)
 	return nil
 }
 

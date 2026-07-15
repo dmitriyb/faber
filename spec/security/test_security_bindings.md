@@ -73,6 +73,36 @@ skip otherwise.
    still applies and fails Prepare with the network name when the fake
    docker reports no such network.
 
+9. **Registry round-trip + idempotency.** `add-key` on a fresh (missing)
+   registry creates `roles.json` (dir 0700, file 0600) with one entry;
+   `list-keys` prints it. Re-running the identical `add-key` writes nothing
+   (asserted via mtime or a write counter) and exits 0. `add-key` for the
+   same role with a *different* fingerprint is refused (error names role +
+   both fingerprints) unless `--force`, which overwrites. A malformed
+   fingerprint (`SHA256:` wrong length, missing prefix, illegal char) and a
+   malformed role (path separator, space, empty) are rejected before any
+   write, leaving the registry untouched. `list-keys` on a missing registry
+   prints the empty note and exits 0. Marshaled bytes are stable
+   (sorted keys) across repeated saves.
+10. **Fingerprint resolution + precedence.** With a fake `KeyLocator` keyed
+    by fingerprint: an identity whose `key` is a path resolves to that path
+    verbatim (no registry read, no locator call) — the existing golden
+    fragment is unchanged. An identity whose `key` is `SHA256:…` resolves
+    straight through the locator. An identity with no inline key resolves
+    role → registry fingerprint → locator → key source, and the agent then
+    holds exactly that one key. A role absent from the registry fails
+    Prepare with an error naming the role; a fingerprint the locator cannot
+    match fails Prepare naming the role and the fingerprint — in both cases
+    before any agent is spawned (asserted: no socket dir created, no
+    container started).
+11. **Locator search order.** Against a fake host exposing a key at more
+    than one source, the locator returns the running-agent match before the
+    `~/.ssh/*.pub` match before the YubiKey resident match; `~/.ssh/*.pub`
+    is walked in sorted order so the chosen match is deterministic. The
+    locator reads only public material — the test asserts no private key
+    file is opened by faber (only `.pub` reads and the path handed to
+    `AddKey`).
+
 ## Edge cases
 
 - Empty BindingSet (no remote, no services, no identity, no runtime):

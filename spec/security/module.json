@@ -57,6 +57,13 @@
       "type": "functional",
       "title": "Deferred: gateless trust boundary",
       "description": "Backlog (design edge case 13): workflows with no push target (research runs) have nothing for a gateway to validate — define the trust boundary and the durable home for terminal outputs when the remote binding is absent."
+    },
+    {
+      "id": "b145ab5182f4",
+      "preq_id": "4ed3587b51f5",
+      "type": "functional",
+      "title": "Role-fingerprint identity registry",
+      "description": "faber keeps a global role→fingerprint registry (roles.json under faber's config home) that the user populates with `faber add-key` and inspects with `faber list-keys`. faber never creates or stores key material — only the fingerprint (SHA256:…) plus an optional label. A template's `identity: <name>` with no inline key path resolves role→fingerprint via the registry, then fingerprint→a live host key (running ssh-agent, then ~/.ssh/*.pub, then YubiKey resident keys), producing the keySource the ephemeral agent loads. An explicit identities.<name>.key (path or SHA256:…) takes precedence, so existing configs are byte-identical. Resolution failure — role absent, or no local key matches the fingerprint — is a clear prepare-time error naming the role and fingerprint. The private key never enters the box."
     }
   ],
   "components": [
@@ -79,7 +86,15 @@
       "name": "IdentityBinding",
       "description": "The ephemeral ssh-agent lifecycle: spawn with a private socket, load exactly one key for the template's identity via the resolver, contribute the socket mount and SSH_AUTH_SOCK env, and guarantee teardown on step exit.",
       "content": "arch_identity_binding.md",
-      "implements": ["e47a00273f03"]
+      "implements": ["e47a00273f03"],
+      "uses": ["d212912ff029"]
+    },
+    {
+      "id": "d212912ff029",
+      "name": "RoleRegistry",
+      "description": "The global role→fingerprint registry (roles.json under faber's config home): the add-key/list-keys operations, fingerprint and role validation, atomic writes, and the fingerprint resolution (role→fingerprint via the registry, then fingerprint→a live host key via the KeyLocator over the running agent, ~/.ssh/*.pub, and YubiKey resident keys) that feeds the IdentityBinding, with explicit-key-path precedence for backward compatibility.",
+      "content": "arch_role_registry.md",
+      "implements": ["b145ab5182f4"]
     },
     {
       "id": "8608d80a273e",
@@ -109,6 +124,12 @@
       "name": "Resolver and handle shapes",
       "content": "impl_credential_handles.md",
       "describes": ["8608d80a273e"]
+    },
+    {
+      "id": "2007cf7a01bf",
+      "name": "Role registry store, operations, and resolution",
+      "content": "impl_role_registry.md",
+      "describes": ["d212912ff029"]
     }
   ],
   "data_flows": [
@@ -125,7 +146,7 @@
       "id": "3f4341161bba",
       "name": "Security binding tests",
       "content": "test_security_bindings.md",
-      "describes": ["dae6b6a1caec", "ff26f2559558", "948717b7fe5b", "8608d80a273e", "1c902a659dfe"]
+      "describes": ["dae6b6a1caec", "ff26f2559558", "948717b7fe5b", "8608d80a273e", "1c902a659dfe", "d212912ff029"]
     }
   ]
 }

@@ -67,6 +67,13 @@ type IdentityBinding struct {
 	// socket's group ownership blocks the box's non-root user (the macOS VM
 	// case). Empty on platforms that need nothing.
 	SocketGroup string
+
+	// Registry (role→fingerprint) and Locator (fingerprint→live key) resolve
+	// an identity that carries no explicit key path. Both are consulted only
+	// when ResolveIdentity falls through to the registry hop, so a path-form
+	// identity — every existing config — needs neither and both may be nil.
+	Registry Registry
+	Locator  KeyLocator
 }
 
 // NewIdentityBinding wires the ephemeral-agent lifecycle to an
@@ -89,8 +96,12 @@ func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribut
 	if step.Identity == nil {
 		return Contribution{}, nil
 	}
-	if step.Identity.Key == "" {
-		return Contribution{}, errors.New("identity declares no key source")
+	// Resolve the key source before anything is spawned: explicit path wins
+	// (byte-identical to today), else the registry+locator hop. A role that
+	// resolves to nothing fails here, with no agent left behind.
+	keySource, expectFP, err := ResolveIdentity(ctx, b.Registry, b.Locator, step.IdentityRole, *step.Identity)
+	if err != nil {
+		return Contribution{}, err
 	}
 	if step.ScratchDir == "" {
 		return Contribution{}, errors.New("identity binding requires a per-step scratch dir")
@@ -133,7 +144,7 @@ func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribut
 		return Contribution{}, err
 	}
 
-	if err := b.agents.AddKey(ctx, sock, step.Identity.Key); err != nil {
+	if err := b.agents.AddKey(ctx, sock, keySource); err != nil {
 		return fail(fmt.Errorf("load identity key: %w", err))
 	}
 	fingerprints, err := b.agents.ListKeys(ctx, sock)
@@ -146,6 +157,22 @@ func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribut
 	case len(fingerprints) > 1:
 		b.logger.WarnContext(ctx, "agent holds more than one key; role isolation degraded",
 			"node", step.NodeID, "fingerprints", fingerprints)
+	}
+	// The fingerprint is the entire cross-system join: the registry pins a role
+	// to a fingerprint, the gate authorizes signatures by fingerprint. Resolving
+	// a *.pub to its private counterpart trusts a naming convention, so once the
+	// key is actually loaded we confirm the agent holds the pinned fingerprint —
+	// a stale, mismatched, or planted pub/private pair fails closed here, at
+	// prepare time with a clear error, rather than late at the gate after a
+	// wasted box run. expectFP is "" only for the explicit-path branch, where no
+	// fingerprint was pinned and there is nothing to check against.
+	if expectFP != "" && !fingerprintHeld(fingerprints, expectFP) {
+		role := step.IdentityRole
+		if role == "" {
+			role = "(inline fingerprint)"
+		}
+		return fail(fmt.Errorf("identity role %q: agent loaded a key whose fingerprint is not the pinned one: expected %s, agent holds %v",
+			role, expectFP, fingerprints))
 	}
 
 	args := []string{

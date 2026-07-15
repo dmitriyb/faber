@@ -23,14 +23,15 @@ type Contribution struct {
 }
 
 type StepSpec struct { // the resolved slice of config one step needs
-    NodeID     string
-    Network    *config.NetworkDef
-    Remote     *config.RemoteDef
-    Identity   *config.IdentityDef // nil when the template declares none
-    Services   map[string]config.ServiceDef
-    Runtime    string            // "" = platform default
-    Repo       string            // resolved repo input; "" = repo-less step
-    ScratchDir string            // per-step private dir, 0700
+    NodeID       string
+    Network      *config.NetworkDef
+    Remote       *config.RemoteDef
+    Identity     *config.IdentityDef // nil when the template declares none
+    IdentityRole string              // resolved template's identity name; "" when none — the registry lookup key
+    Services     map[string]config.ServiceDef
+    Runtime      string              // "" = platform default
+    Repo         string              // resolved repo input; "" = repo-less step
+    ScratchDir   string              // per-step private dir, 0700
 }
 ```
 
@@ -64,11 +65,20 @@ restated per binding.
   or `Remote == nil`. Pinned mode reads `host_key_file` at Prepare time
   (os.ReadFile, trimmed single line; empty or unreadable ⇒ error), so a
   bad key fails the step before launch, not inside the box.
-- **identity.Prepare** shells `ssh-agent -a <ScratchDir>/agent.sock`
-  through the exec adapter, loads the one key via the identity's resolver
-  seam, then lists keys: 0 ⇒ error, >1 ⇒ `slog.Warn` with fingerprints.
-  Teardown kills the agent PID and removes the socket directory,
-  independent errors joined with `errors.Join`.
+- **identity.Prepare** first resolves the key source via
+  `ResolveIdentity(ctx, reg, loc, step.IdentityRole, *step.Identity)` —
+  explicit path verbatim, else registry+locator (see
+  `impl_role_registry.md`); an empty inline key now triggers registry
+  resolution rather than an immediate error. It then shells
+  `ssh-agent -a <ScratchDir>/agent.sock` through the exec adapter, loads the
+  one resolved key, then lists keys: 0 ⇒ error, >1 ⇒ `slog.Warn` with
+  fingerprints. When resolution pinned a fingerprint (every branch but the
+  explicit path), it then asserts the agent holds that fingerprint and fails
+  closed otherwise — a mismatched pub/private pair is caught here, not at the
+  gate. Teardown kills the agent PID and removes the socket directory,
+  independent errors joined with `errors.Join`. Resolution runs before the
+  spawn, so a role that resolves to nothing fails without leaving an agent
+  behind.
 
 ## BindingSet (internal/security/set.go)
 

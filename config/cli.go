@@ -74,12 +74,30 @@ type JournalStore interface {
 	LoadHeader(runID string) (JournalHeader, error)
 }
 
+// RegistryController manages the global role→fingerprint registry (security
+// module). The CLI dispatches add-key/list-keys through this seam so the config
+// package never imports security. AddKey returns a *RegistryUsageError for a
+// bad flag value (exit 2); any other non-nil error is operational (exit 1).
+type RegistryController interface {
+	AddKey(role, fingerprint, comment string, force bool) error
+	ListKeys(stdout, stderr io.Writer) error
+}
+
+// RegistryUsageError wraps an add-key failure that is a usage error (a
+// malformed --fingerprint or --role), mapping it to exit 2. Every other
+// registry error is operational and maps to exit 1.
+type RegistryUsageError struct{ Err error }
+
+func (e *RegistryUsageError) Error() string { return e.Err.Error() }
+func (e *RegistryUsageError) Unwrap() error { return e.Err }
+
 // Deps injects the future modules' capabilities into the CLI.
 type Deps struct {
 	Prover   PackageProver
 	Builder  ImageBuilder
 	Executor Executor
 	Journal  JournalStore
+	Registry RegistryController
 }
 
 // Run is the faber CLI: subcommand dispatch, exit-code contract, and logging
@@ -105,6 +123,10 @@ func RunWithDeps(args []string, stdout, stderr io.Writer, deps Deps) int {
 		return cmdRun(rest, stderr, deps)
 	case "resume":
 		return cmdResume(rest, stderr, deps)
+	case "add-key":
+		return cmdAddKey(rest, stderr, deps)
+	case "list-keys":
+		return cmdListKeys(rest, stdout, stderr, deps)
 	default:
 		fmt.Fprintf(stderr, "faber: unknown command %q\n", cmd)
 		usage(stderr)
@@ -120,8 +142,12 @@ commands:
   build      build template images
   run        execute a workflow: faber run <workflow> --param k=v ...
   resume     re-enter a journaled run: faber resume <run-id>
+  add-key    register a role→fingerprint in the global registry:
+             faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--force]
+  list-keys  print the global role→fingerprint registry
 
 common flags: --config path (default orchestrator.yaml), --log-level level, --log-format auto|json|text
+add-key/list-keys touch no orchestrator.yaml and take only --log-level/--log-format
 `)
 }
 
@@ -435,6 +461,73 @@ func cmdResume(args []string, stderr io.Writer, deps Deps) int {
 		Targets: targets, Config: cfg,
 	}
 	if err := deps.Executor.Execute(ctx, ir, params, opts, logger.With("component", "pipeline")); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// logFlags registers only --log-level/--log-format on fs, for the registry
+// subcommands that touch no orchestrator.yaml and take no --config. These
+// thin-dispatch commands build no logger and do no logging, so the parsed
+// values are inert — the flags are accepted for CLI symmetry with the other
+// subcommands (a `faber add-key --log-level debug` is not rejected), not
+// because they take effect.
+func addLogFlags(fs *flag.FlagSet) *commonFlags {
+	c := &commonFlags{}
+	fs.StringVar(&c.logLevel, "log-level", "info", "debug|info|warn|error")
+	fs.StringVar(&c.logFormat, "log-format", "auto", "auto|json|text")
+	return c
+}
+
+// cmdAddKey is thin dispatch over the security RoleRegistry: parse flags,
+// call the injected controller, map the error kind to an exit code. It touches
+// only the registry file and never key material — just a fingerprint string
+// and an optional label.
+func cmdAddKey(args []string, stderr io.Writer, deps Deps) int {
+	fs := flag.NewFlagSet("add-key", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	addLogFlags(fs)
+	role := fs.String("role", "", "role name (a bare identifier)")
+	fingerprint := fs.String("fingerprint", "", "key fingerprint (SHA256:…)")
+	comment := fs.String("comment", "", "optional human label")
+	force := fs.Bool("force", false, "re-point an existing role at a different fingerprint")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *role == "" || *fingerprint == "" {
+		fmt.Fprintln(stderr, "usage: faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--force]")
+		return 2
+	}
+	if deps.Registry == nil {
+		fmt.Fprintln(stderr, "faber add-key: registry management requires the security module, which is not wired into this binary yet")
+		return 1
+	}
+	if err := deps.Registry.AddKey(*role, *fingerprint, *comment, *force); err != nil {
+		fmt.Fprintln(stderr, err)
+		var usage *RegistryUsageError
+		if errors.As(err, &usage) {
+			return 2
+		}
+		return 1
+	}
+	return 0
+}
+
+// cmdListKeys prints the registry, sorted by role. A missing registry reads as
+// empty (a one-line note to stderr), never an error.
+func cmdListKeys(args []string, stdout, stderr io.Writer, deps Deps) int {
+	fs := flag.NewFlagSet("list-keys", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	addLogFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if deps.Registry == nil {
+		fmt.Fprintln(stderr, "faber list-keys: registry management requires the security module, which is not wired into this binary yet")
+		return 1
+	}
+	if err := deps.Registry.ListKeys(stdout, stderr); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

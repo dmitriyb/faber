@@ -45,12 +45,13 @@ type Contribution struct {
 // sound, and it is also what gives retries a new socket path and a fresh
 // resolver invocation.
 type StepSpec struct {
-	NodeID     string
-	Network    *config.NetworkDef
-	Remote     *config.RemoteDef
-	Identity   *config.IdentityDef // nil when the template declares none
-	Services   map[string]config.ServiceDef
-	Runtime    string // "" = platform default runtime
-	Repo       string // resolved repo input; "" = repo-less step
-	ScratchDir string // per-attempt private dir, 0700
+	NodeID       string
+	Network      *config.NetworkDef
+	Remote       *config.RemoteDef
+	Identity     *config.IdentityDef // nil when the template declares none
+	IdentityRole string              // resolved template's identity name; "" when none — the registry lookup key
+	Services     map[string]config.ServiceDef
+	Runtime      string // "" = platform default runtime
+	Repo         string // resolved repo input; "" = repo-less step
+	ScratchDir   string // per-attempt private dir, 0700
 }

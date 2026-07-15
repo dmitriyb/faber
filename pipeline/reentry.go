@@ -132,13 +132,14 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	// streamed. Deliberately no Services here — the credential broker is not
 	// composed for re-entry; an operator who needs a secret sets it by hand.
 	asm, err := r.Bindings.Prepare(ctx, security.StepSpec{
-		NodeID:     t.StepID,
-		Network:    r.Network,
-		Remote:     r.Remote,
-		Identity:   identity,
-		Runtime:    node.Template.Runtime,
-		Repo:       handoff.Inputs["repo"],
-		ScratchDir: scratchDir,
+		NodeID:       t.StepID,
+		Network:      r.Network,
+		Remote:       r.Remote,
+		Identity:     identity,
+		IdentityRole: node.Template.Identity,
+		Runtime:      node.Template.Runtime,
+		Repo:         handoff.Inputs["repo"],
+		ScratchDir:   scratchDir,
 	})
 	if err != nil {
 		return err

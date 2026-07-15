@@ -151,14 +151,15 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		}
 	}
 	asm, err := b.Bindings.Prepare(ctx, security.StepSpec{
-		NodeID:     box.NodeID,
-		Network:    b.Network,
-		Remote:     b.Remote,
-		Identity:   identity,
-		Services:   b.Services,
-		Runtime:    box.Template.Runtime,
-		Repo:       inputs["repo"],
-		ScratchDir: scratchDir,
+		NodeID:       box.NodeID,
+		Network:      b.Network,
+		Remote:       b.Remote,
+		Identity:     identity,
+		IdentityRole: box.Template.Identity,
+		Services:     b.Services,
+		Runtime:      box.Template.Runtime,
+		Repo:         inputs["repo"],
+		ScratchDir:   scratchDir,
 	})
 	if err != nil {
 		return BoxResult{}, err
