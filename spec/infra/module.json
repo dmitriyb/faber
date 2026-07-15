@@ -14,7 +14,7 @@
       "preq_id": "67c87e1854ba",
       "type": "functional",
       "title": "Nix image build",
-      "description": "Build a template's image with Nix dockerTools.buildLayeredImage from its pinned package list; load the result into the docker daemon with a deterministic tag derived from the template name and toolset hash. Custom binaries enter via a user-supplied overlay of derivations. No Dockerfile; no repository content in the image; packages are root-owned and immutable at runtime."
+      "description": "Build a template's image with Nix dockerTools.buildLayeredImage from its pinned package list; load the result into the docker daemon with a deterministic tag derived from the template name and toolset hash. The nixpkgs pin is resolved per build — the toolset's optional pin, else faber's compiled-in default — and the resolved pin folds into the toolset hash, the rendered expression, and the resolution proof (a pin-less build is byte-identical to the default). Custom binaries enter via a user-supplied overlay of derivations. No Dockerfile; no repository content in the image; packages are root-owned and immutable at runtime."
     },
     {
       "id": "b329adcbbfe4",
@@ -49,7 +49,7 @@
     {
       "id": "8ecba60614b3",
       "name": "ImageBuilder",
-      "description": "The Nix build pipeline: renders the buildLayeredImage expression from a template's package list and overlay, evaluates package resolution at validate time, builds and loads the image, and computes the deterministic tag. Owns the deferred GC/retention seam.",
+      "description": "The Nix build pipeline: renders the buildLayeredImage expression from a template's package list, overlay, and resolved nixpkgs pin (the toolset's optional per-image pin, else the compiled-in default, mapped config.PinDef -> infra.NixpkgsPin at the boundary), evaluates package resolution at validate time, builds and loads the image, and computes the deterministic tag. Owns the deferred GC/retention seam.",
       "content": "arch_image_builder.md",
       "implements": ["0acac696dcf1", "b329adcbbfe4", "7b7ad52d9123"],
       "uses": ["136258cbf6a9"]

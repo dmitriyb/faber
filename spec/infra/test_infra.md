@@ -36,9 +36,22 @@ acceptance environment only.
    non-empty and never otherwise, and the token bytes never appear anywhere in
    the argv. A RunSpec with no skills mount emits no `/faber/skills` `-v`; one
    with it emits the bind exactly once, always `:ro`.
-3. **Tag determinism.** Same packages shuffled → identical tag; one package
-   added, one overlay byte changed, or the pin rev bumped → different tag;
-   the tag is computed with zero adapter calls (pure, no nix).
+3. **Tag determinism and pin resolution.** Same packages shuffled → identical
+   tag; one package added, one overlay byte changed, or the default pin bumped →
+   different tag. Two builds identical except for a per-build `pin` produce
+   **different** tags (the resolved pin folds into the hash); a build with **no**
+   `pin` resolves to the compiled-in `defaultPin` and produces the **same** tag as
+   today (goldens byte-stable), and its rendered expression fetches the default
+   snapshot. The tag is computed with zero adapter calls (pure, no nix).
+3b. **Run-time tag equals build-time tag across the `imageTagger` seam.** For a
+   **pinned** toolset, the tag `ImageBuilder.ImageTag` computes from the resolved
+   `BuildDef` (the `faber build` path) equals the tag recomputed from the derived
+   `ResolvedTemplate` via the `imageTagger` reconstruction
+   (`BuildDef{Packages, Overlay, Pin: template.Pin}` — the run/resume path). This is
+   the regression that catches a dropped `template.Pin`: without the pin the
+   reconstruction falls back to `defaultPin` and the two tags diverge. A **pin-less**
+   template's two tags likewise match (nil → default both times) — necessary but not
+   sufficient, which is why the pinned case is the one that must be asserted.
 4. **Build skip and single-flight.** Fake docker reports the tag exists →
    `Build` returns the tag with no `NixClient.Build` call. Two goroutines
    building the same tag through the per-tag lock produce exactly one nix

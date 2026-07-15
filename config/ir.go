@@ -121,6 +121,7 @@ type ResolvedTemplate struct {
 	Name      string              `json:"name"`
 	Packages  []string            `json:"packages"`
 	Overlay   string              `json:"overlay,omitempty"`
+	Pin       *PinDef             `json:"pin,omitempty"` // optional resolved nixpkgs pin; nil ⇒ omitted ⇒ IR byte-stable when absent
 	Identity  string              `json:"identity,omitempty"`
 	Resources ResourceDef         `json:"resources"`
 	Runtime   string              `json:"runtime,omitempty"`

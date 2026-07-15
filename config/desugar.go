@@ -518,6 +518,7 @@ func (d *desugarer) resolveTemplate(name, sp string) *ResolvedTemplate {
 		Name:      name,
 		Packages:  append([]string(nil), build.Packages...),
 		Overlay:   build.Overlay,
+		Pin:       build.Pin, // flat *PinDef, json "pin,omitempty"; nil ⇒ omitted ⇒ byte-identical IR
 		Identity:  resolveIdentity(t),
 		Resources: t.Run.Resources,
 		Runtime:   t.Run.Runtime,
@@ -542,7 +543,10 @@ func ResolveBuild(cfg *Config, t TemplateDef) (BuildDef, bool) {
 	}
 	if t.Image != "" {
 		if img, ok := cfg.Images[t.Image]; ok {
-			return BuildDef{Packages: img.Packages, Overlay: img.Overlay}, true
+			// ImageDef and BuildDef are distinct types, so the named form must
+			// COPY img.Pin → build.Pin explicitly; omit it and a named image:'s
+			// pin is silently dropped before it reaches the IR or infra.
+			return BuildDef{Packages: img.Packages, Overlay: img.Overlay, Pin: img.Pin}, true
 		}
 	}
 	return BuildDef{}, false

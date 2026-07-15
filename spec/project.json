@@ -7,7 +7,7 @@
       "id": "4267f6b0c531",
       "type": "functional",
       "title": "Declarative workflow configuration",
-      "description": "Configuration is composed from five named component libraries — images (a Nix package set + overlay), skills (a SKILL.md tree), hooks (an executable), templates (composition nodes referencing the former by name, plus run bindings and typed I/O), and workflows — assembled by a project config that carries substrate (version/network/remote/credentials/identities) and a transitive include: list; file paths resolve relative to the declaring file. Templates accept named references or the equivalent inline forms (dual-mode). Workflows declare typed params (name/type/required/default; repo is an optional param, never baked) and steps binding template input slots from a closed set of sources. The whole assembly is loaded, merged, and validated before anything runs.",
+      "description": "Configuration is composed from five named component libraries — images (a Nix package set + overlay + optional nixpkgs pin), skills (a SKILL.md tree), hooks (an executable), templates (composition nodes referencing the former by name, plus run bindings and typed I/O), and workflows — assembled by a project config that carries substrate (version/network/remote/credentials/identities) and a transitive include: list; file paths resolve relative to the declaring file. Templates accept named references or the equivalent inline forms (dual-mode). Workflows declare typed params (name/type/required/default; repo is an optional param, never baked) and steps binding template input slots from a closed set of sources. The whole assembly is loaded, merged, and validated before anything runs.",
       "priority": 1
     },
     {
@@ -30,7 +30,7 @@
       "id": "67c87e1854ba",
       "type": "functional",
       "title": "Immutable toolset images",
-      "description": "A template's tools: list is a pinned Nix package set built into an immutable image via dockerTools.buildLayeredImage; packages are root-owned and immutable at runtime. No repository content is ever baked into an image; one image serves any repo. Custom binaries arrive via a user-supplied overlay of derivations.",
+      "description": "A template's tools: list is a pinned Nix package set built into an immutable image via dockerTools.buildLayeredImage; packages are root-owned and immutable at runtime. A toolset may pin its own nixpkgs snapshot (optional per-image pin) overriding faber's compiled-in default, so different projects can pin different toolchains; a toolset with no pin builds byte-identically to the default. No repository content is ever baked into an image; one image serves any repo. Custom binaries arrive via a user-supplied overlay of derivations.",
       "priority": 1
     },
     {

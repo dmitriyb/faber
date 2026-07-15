@@ -158,7 +158,10 @@ type imageTagger struct {
 }
 
 func (t imageTagger) Tag(template *config.ResolvedTemplate) (string, error) {
-	return t.b.ImageTag(template.Name, config.BuildDef{Packages: template.Packages, Overlay: template.Overlay})
+	// Carry template.Pin into the reconstructed BuildDef so the run/resume tag
+	// resolves the SAME pin as `faber build`. Drop it and a pinned toolset's tag
+	// falls back to the default pin and diverges from the built image's tag.
+	return t.b.ImageTag(template.Name, config.BuildDef{Packages: template.Packages, Overlay: template.Overlay, Pin: template.Pin})
 }
 
 // terminalRunner is the interactive TTY variant of the container run: the

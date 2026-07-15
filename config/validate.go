@@ -29,6 +29,14 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 var memoryPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[bkmgBKMG]?$`)
 
+// pinCharset restricts a per-toolset nixpkgs pin's rev/sha256 to a splice-safe
+// charset. Because a pin may now be user-supplied YAML that is spliced into
+// infra's rendered fetchTarball call, its fields are validated here at the
+// Loader — config owns the authoritative check; the infra splice keeps a
+// matching guard purely as defense-in-depth. Config never imports infra, so the
+// charset lives on both sides independently but must stay in sync.
+var pinCharset = regexp.MustCompile(`^[A-Za-z0-9:+/=._-]+$`)
+
 // hasDotDotSegment reports whether p contains a ".." path segment (either
 // slash separator), i.e. a component that would climb out of its base dir.
 func hasDotDotSegment(p string) bool {
@@ -81,6 +89,7 @@ func Validate(cfg *Config, viols []AssemblyViolation) error {
 	v.checkRemote()
 	v.checkCredentials()
 	v.checkNameDiscipline()
+	v.checkImages()
 	v.checkTemplates()
 	v.checkWorkflows()
 	return errors.Join(v.errs...)
@@ -183,6 +192,35 @@ func (v *validator) checkNameDiscipline() {
 	}
 }
 
+// checkImages validates each library image's optional nixpkgs pin. A
+// fully-empty pin: {} was already normalized to nil at load, so a non-nil pin
+// here has at least one field set and must be complete and charset-clean.
+func (v *validator) checkImages() {
+	for _, name := range sortedKeys(v.cfg.Images) {
+		v.checkPin("images."+name+".pin", v.cfg.Images[name].Pin)
+	}
+}
+
+// checkPin enforces the per-toolset pin's completeness and charset, field-pathed
+// and collected. A nil pin is absent (legal — it selects faber's default). A
+// present pin needs both rev and sha256 (a partial pin is the completeness
+// error at path), and each present value must match the splice-safe charset
+// (an off-charset value is its own field-pathed error at path.rev / path.sha256).
+func (v *validator) checkPin(path string, pin *PinDef) {
+	if pin == nil {
+		return
+	}
+	if pin.Rev == "" || pin.SHA256 == "" {
+		v.addf(path, "rev and sha256 are both required")
+	}
+	if pin.Rev != "" && !pinCharset.MatchString(pin.Rev) {
+		v.addf(path+".rev", "invalid characters (allowed: %s)", pinCharset)
+	}
+	if pin.SHA256 != "" && !pinCharset.MatchString(pin.SHA256) {
+		v.addf(path+".sha256", "invalid characters (allowed: %s)", pinCharset)
+	}
+}
+
 func (v *validator) checkTemplates() {
 	for _, name := range sortedKeys(v.cfg.Templates) {
 		t := v.cfg.Templates[name]
@@ -191,6 +229,9 @@ func (v *validator) checkTemplates() {
 			v.addf(path+".skill", "required")
 		}
 		v.checkToolset(path, t)
+		if t.Build != nil {
+			v.checkPin(path+".build.pin", t.Build.Pin)
+		}
 		v.checkIdentity(path, t)
 		v.checkHooks(path, t)
 		v.checkSkills(path, t)

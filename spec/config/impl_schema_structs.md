@@ -24,12 +24,25 @@ type Config struct {
 type ImageDef struct {
     Packages []string `yaml:"packages"` // pinned Nix package names — identical to today's BuildDef
     Overlay  string   `yaml:"overlay"`  // optional overlay of derivations
+    Pin      *PinDef  `yaml:"pin"`      // optional nixpkgs snapshot; nil ⇒ faber's compiled-in default
 }
 type SkillDef struct {
     Dir string `yaml:"dir"` // ONE skill's tree — SKILL.md at its root, no <name>/ wrapper
 }
 type HookDef struct {
     Path string `yaml:"path"` // opaque hook executable
+}
+
+// PinDef is an optional per-toolset nixpkgs snapshot, attachable to both ImageDef
+// and the inline BuildDef (dual-mode parity). It is config's OWN type: config must
+// NOT import the infra package (dependency direction is infra→config). The infra
+// adapter maps config.PinDef → infra.NixpkgsPin at the config→infra boundary (see
+// spec/infra/impl_nix_build.md). A fully-empty pin: {} normalizes to nil (absent).
+// When present, BOTH fields are required and each is charset-validated at the Loader
+// (user-supplied splice material); nil selects faber's compiled-in default pin.
+type PinDef struct {
+    Rev    string `yaml:"rev"`    // nixpkgs revision (commit or release tag); Loader-charset-checked
+    SHA256 string `yaml:"sha256"` // fetchTarball hash; Loader-charset-checked
 }
 
 type NetworkDef struct {
@@ -105,6 +118,7 @@ type SkillsDef struct {
 type BuildDef struct {
     Packages []string `yaml:"packages"`
     Overlay  string   `yaml:"overlay"`
+    Pin      *PinDef  `yaml:"pin"` // optional nixpkgs snapshot; nil ⇒ faber's default (dual-mode parity with ImageDef)
 }
 
 type RunDef struct {
@@ -270,6 +284,23 @@ so tests assert them independently. The dual-mode and library checks:
   `skills.link` must be non-empty (the all-or-nothing pair, unchanged). Contents
   are never read at load time — `dir` is an opaque path, `link`/`skills_link` an
   opaque agent-specific string.
+- **Pin normalization, completeness, and charset.** A fully-empty `pin: {}`
+  unmarshals to a non-nil `&PinDef{}`; the Loader normalizes a **fully-empty** pin
+  (both fields blank) back to `nil` (absent), because only a nil pin serializes to
+  the `omitempty`-absent IR that keeps a pin-less toolset byte-stable — a present
+  `&PinDef{}` would not. A pin with **exactly one** field set is *not* normalized:
+  it is the completeness error below. When an `images.<name>.pin` or a template's
+  inline `build.pin` is present (any field set), both `rev` and `sha256` must be
+  non-empty — a partial pin is a field-pathed violation (`images.go-box.pin: rev and
+  sha256 are both required`) — **and** each present value must match the splice-safe
+  charset `^[A-Za-z0-9:+/=._-]+$`, because `rev`/`sha256` are spliced into infra's
+  rendered `fetchTarball` call; an off-charset value is its own field-pathed
+  violation (`images.go-box.pin.rev: invalid characters`). An absent (or normalized-
+  away) `pin` is legal — it selects faber's default. Like every other check here,
+  partial and off-charset pins are collected, not reported first-error-only. The pin
+  values are otherwise opaque, never dereferenced or fetched at load time; the infra
+  splice keeps a matching guard as defense-in-depth (see
+  `spec/infra/impl_nix_build.md`).
 - **Substrate placement.** A substrate key on an included (non-root) file is a
   violation (`<file>: included files may only contribute libraries`).
 

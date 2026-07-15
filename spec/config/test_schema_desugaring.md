@@ -84,6 +84,22 @@ code; these are the module-level behaviors that must hold.)
     double-nest. Run-prep staging (per-attempt copy of real files for `Sources`,
     direct mount for `Root`) is exercised in the pipeline module's tests.
 
+15. **Per-image pin — validation and carry-through.** An `images.go-box.pin:
+    {rev: "25.11", sha256: "…"}` desugars onto the resolved flat
+    `ResolvedTemplate.Pin` unchanged; the inline `build.pin` form carries
+    identically (dual-mode parity). A named `image:`'s pin survives `ResolveBuild`'s
+    `ImageDef → BuildDef` projection (the explicit `img.Pin` copy is exercised: a
+    named toolset with a pin must NOT resolve to `Pin == nil`). A template whose
+    toolset declares no pin resolves to `ResolvedTemplate.Pin == nil` — the engine
+    default is applied later in infra, never baked into the IR, so (the field being
+    flat and `omitempty`) its IR is byte-identical to today. A **partial** pin
+    (`rev` without `sha256`, or vice-versa) is a Loader field-path violation naming
+    `….pin`; a fully-empty `pin: {}` normalizes to absent (`Pin == nil`) and passes;
+    both-absent and both-present pins pass; a both-present pin with an off-charset
+    `rev`/`sha256` is a Loader field-path violation. Two configs differing only in
+    whether the toolset arrives via `image:` (a library entry with a pin) or inline
+    `build:` (with the same pin) desugar to byte-identical `ResolvedTemplate.Pin`.
+
 ## Edge cases
 
 - Empty `steps:` — Loader error, not a desugar panic.

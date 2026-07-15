@@ -18,8 +18,19 @@ resolve; desugar performs the resolution, not the checking.
    up its references in the assembled libraries, so the IR the executor consumes
    is unchanged. Both the named and inline forms collapse to the same result:
 
-   - **image**: `image: <name>` → `images[<name>]` → `Build{packages, overlay}`;
-     inline `build:` → the same `Build` directly.
+   - **image**: `image: <name>` → `images[<name>]` → `BuildDef{packages, overlay,
+     pin}`; inline `build:` → the same `BuildDef` directly. The shared `ResolveBuild`
+     (see `impl_desugaring.md`) does the projection; because `ImageDef` and `BuildDef`
+     are distinct types, its named branch **copies `img.Pin → BuildDef.Pin`**
+     explicitly. The pin then lands on the **flat** `ResolvedTemplate.Pin` field
+     (`*PinDef`, json `pin,omitempty`) — there is no `ResolvedTemplate.Build`
+     sub-struct, so it is `ResolvedTemplate.Pin`, never `ResolvedTemplate.Build.Pin`.
+     Desugar is mechanical and does NOT substitute the engine default; the default is
+     resolved later, in infra, per build. Because that field is `omitempty` and nil
+     when the toolset declares no pin, it serializes to nothing — that is precisely
+     what makes the IR of a pin-less toolset byte-for-byte what it is today. Only a
+     single flat omitempty carrier makes the "absent ⇒ byte-identical IR" argument
+     close.
    - **hooks**: for each of `context`/`prelude`/`on_failure`, a bare name →
      `hooks[<name>].path`; a path form → that path verbatim. Both yield the
      resolved absolute hook path already carried today.

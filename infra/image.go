@@ -18,13 +18,13 @@ import (
 	"github.com/dmitriyb/faber/config"
 )
 
-// NixpkgsPin identifies the exact nixpkgs snapshot every image is built from:
-// a revision plus the fetchTarball hash of its archive. The pin is
-// engine-owned (a compiled-in default, bumped deliberately with faber
-// releases) — the config schema has no nixpkgs field, and the overlay is the
-// user seam for anything the pin lacks. Because the pin participates in the
-// toolset hash, bumping it retags and rebuilds every image, never silently
-// mutates one.
+// NixpkgsPin identifies the exact nixpkgs snapshot an image is built from: a
+// revision plus the fetchTarball hash of its archive. A toolset may declare its
+// own pin (config.BuildDef.Pin); ImageBuilder resolves the effective pin per
+// build — the build's pin when set, else the compiled-in default (bumped
+// deliberately with faber releases). Because the pin participates in the toolset
+// hash, a per-image pin yields a distinct tag/image and bumping either pin
+// retags and rebuilds, never silently mutates one.
 type NixpkgsPin struct {
 	Rev    string // e.g. a nixpkgs commit or release tag
 	SHA256 string // fetchTarball hash of the archive
@@ -69,37 +69,50 @@ const stagedOverlayName = "overlay.nix"
 // the tarball via NixClient, and loads it via DockerClient under a
 // deterministic tag. It also owns the validate-time package resolution proof.
 type ImageBuilder struct {
-	docker   DockerClient
-	nix      NixClient
-	pin      NixpkgsPin
-	stateDir string // manifest home; empty disables the GC-seam manifest
-	logger   *slog.Logger
+	docker     DockerClient
+	nix        NixClient
+	defaultPin NixpkgsPin // compiled-in FALLBACK: used when a build declares no pin
+	stateDir   string     // manifest home; empty disables the GC-seam manifest
+	logger     *slog.Logger
 
 	mu       sync.Mutex
 	tagLocks map[string]*sync.Mutex
 }
 
-// NewImageBuilder constructs the build pipeline. stateDir hosts the
-// append-only image manifest (the deferred-GC seam); empty disables it.
+// NewImageBuilder constructs the build pipeline. pin is the compiled-in default
+// nixpkgs snapshot, now the fallback a toolset's own pin overrides. stateDir
+// hosts the append-only image manifest (the deferred-GC seam); empty disables it.
 func NewImageBuilder(docker DockerClient, nix NixClient, pin NixpkgsPin, stateDir string, logger *slog.Logger) *ImageBuilder {
 	return &ImageBuilder{
-		docker:   docker,
-		nix:      nix,
-		pin:      pin,
-		stateDir: stateDir,
-		logger:   ensureLogger(logger).With("component", "image-builder"),
-		tagLocks: map[string]*sync.Mutex{},
+		docker:     docker,
+		nix:        nix,
+		defaultPin: pin,
+		stateDir:   stateDir,
+		logger:     ensureLogger(logger).With("component", "image-builder"),
+		tagLocks:   map[string]*sync.Mutex{},
 	}
+}
+
+// resolvePin maps a build's optional config pin into the infra pin, falling back
+// to the compiled-in default when the toolset declares none. This is the only
+// place config.PinDef and infra.NixpkgsPin meet; the mapping direction respects
+// infra→config (config never imports infra).
+func (b *ImageBuilder) resolvePin(build config.BuildDef) NixpkgsPin {
+	if build.Pin != nil {
+		return NixpkgsPin{Rev: build.Pin.Rev, SHA256: build.Pin.SHA256}
+	}
+	return b.defaultPin
 }
 
 // ImageTag computes the deterministic image tag faber/<name>:<toolset-hash>
 // without building and with zero adapter calls. The hash covers exactly the
-// inputs that determine image content: the pin revision, the sorted package
+// inputs that determine image content: the resolved pin revision, the sorted package
 // list, and the overlay file's content hash (bytes, not path).
 func (b *ImageBuilder) ImageTag(name string, build config.BuildDef) (string, error) {
+	pin := b.resolvePin(build) // build's pin, else the compiled-in default
 	h := sha256.New()
 	fmt.Fprintln(h, imageSchemaVersion)
-	fmt.Fprintln(h, b.pin.Rev)
+	fmt.Fprintln(h, pin.Rev)
 	for _, p := range slices.Sorted(slices.Values(build.Packages)) {
 		fmt.Fprintln(h, p)
 	}
@@ -126,7 +139,8 @@ func (b *ImageBuilder) ProvePackages(ctx context.Context, tpl string, build conf
 	if err := checkSpliceNames(tpl, build); err != nil {
 		return err
 	}
-	exprFile, cleanup, err := b.stageExpr(renderProofExpr(b.pin, build.Overlay != "", build.Packages), build.Overlay)
+	pin := b.resolvePin(build) // build's pin, else the compiled-in default
+	exprFile, cleanup, err := b.stageExpr(renderProofExpr(pin, build.Overlay != "", build.Packages), build.Overlay)
 	if err != nil {
 		return err
 	}
@@ -181,8 +195,9 @@ func (b *ImageBuilder) Build(ctx context.Context, tpl string, build config.Build
 		return tag, nil
 	}
 
+	pin := b.resolvePin(build) // build's pin, else the compiled-in default
 	hash := tag[strings.LastIndexByte(tag, ':')+1:]
-	exprFile, cleanup, err := b.stageExpr(renderImageExpr(b.pin, tpl, hash, build.Packages, build.Overlay != ""), build.Overlay)
+	exprFile, cleanup, err := b.stageExpr(renderImageExpr(pin, tpl, hash, build.Packages, build.Overlay != ""), build.Overlay)
 	if err != nil {
 		return "", err
 	}
@@ -281,11 +296,12 @@ func renderPinnedPkgs(pin NixpkgsPin, withOverlay bool) string {
 `, sanitizePin(pin.Rev), sanitizePin(pin.SHA256), overlays)
 }
 
-// sanitizePin guards the two engine-owned pin fields at the splice point.
+// sanitizePin guards the two pin fields at the splice point as defense-in-depth.
+// The authoritative charset check is the Loader's (config validates a
+// user-supplied pin field-pathed before this point); this guard only ensures a
+// value that somehow bypassed it cannot inject into the rendered expression.
 func sanitizePin(v string) string {
 	if !pinRE.MatchString(v) {
-		// The pin is compiled in; a bad value is a programming error surfaced
-		// as an unresolvable expression rather than silent injection.
 		return "invalid-pin-value"
 	}
 	return v

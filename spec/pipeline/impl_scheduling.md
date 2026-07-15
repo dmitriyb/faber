@@ -113,7 +113,11 @@ func (s *Scheduler) Run(ctx context.Context) error {
    `settle(id, SkippedCondition)`.
 2. **Journal**: `journal.Lookup(id, inputHash(id))` returning an `ok` record ⇒
    `settle(id, cached(rec))`. `inputHash` covers resolved input values,
-   template identity, and image tag — the failure module's key contract.
+   template identity, and image tag — the failure module's key contract. The image
+   tag is recomputed here from the node's `ResolvedTemplate` via the `imageTagger`
+   seam, which must carry the template's pin into its reconstructed `BuildDef`, so a
+   pinned toolset's resume tag matches the one `faber build` produced (see
+   `spec/infra/impl_nix_build.md`, "Run-time tag reconstruction").
 3. **Selector**: resolve newest `ok` candidate; exhaustion condition true on
    the final iteration ⇒ settle `failed(loop-exhausted)`, else adopt payload.
 4. Otherwise spawn a worker: acquire a slot, `meter.Estimate` ⇒ on

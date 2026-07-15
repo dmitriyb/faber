@@ -14,7 +14,13 @@ The config redesign's library cross-references — `template.image ∈ images`,
 mode only) `template.skills[*] ∈ skills` with `template.skill ∈ template.skills` —
 plus dual-mode exclusivity, are **name-level** checks resolvable against the
 assembled `Config` alone, so they belong to the Loader (see `arch_loader.md`) and
-run *before* desugaring. The duplicate-name-across-includes and substrate-placement
+run *before* desugaring. The optional per-image nixpkgs pin's both-fields-or-neither
+completeness (`images.<name>.pin` / inline `build.pin` requires both `rev` and
+`sha256`), its fully-empty-`{}`→absent normalization, and its per-field charset
+validation (`rev`/`sha256` restricted to the splice-safe charset, since they are
+user-supplied splice material) are likewise Loader schema checks — within-node
+field rules like inline-skills pairing, resolvable against the assembled `Config` —
+not dataflow checks, so the WiringChecker never sees them. The duplicate-name-across-includes and substrate-placement
 violations are recorded at Assemble and merged into the Loader's collected report;
 an include cycle (or unreadable file) hard-stops Assemble before any of this. (When
 `skills` is inline or absent, `template.skill` is a free-form prompt token, checked

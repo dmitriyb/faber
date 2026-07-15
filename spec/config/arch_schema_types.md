@@ -36,14 +36,52 @@ Config
 ```
 ImageDef                      # a pure Nix toolset — exactly today's TemplateDef.Build
 ├── Packages []string         pinned Nix package names — the toolset IS the env
-└── Overlay  string           optional path to a user overlay of derivations
+├── Overlay  string           optional path to a user overlay of derivations
+└── Pin      *PinDef          NEW: optional {rev, sha256} nixpkgs snapshot; omitted ⇒ faber's compiled-in default
 
 SkillDef                      # a skill definition (a SKILL.md tree)
 └── Dir      string           host dir of ONE skill's tree — SKILL.md sits at its root
 
 HookDef                       # a hook executable
 └── Path     string           opaque host script path
+
+PinDef                        # an optional per-toolset nixpkgs snapshot
+├── Rev      string           nixpkgs revision (commit or release tag)
+└── SHA256   string           fetchTarball hash
 ```
+
+### Optional per-image nixpkgs pin
+
+An `ImageDef` (and the inline `BuildDef`, below) may carry an optional
+`pin: {rev, sha256}` — the nixpkgs snapshot the toolset builds against, overriding
+faber's compiled-in default. Different projects need different toolchains: a box
+whose `spex` needs Go 1.25 requires a newer nixpkgs than the default (24.05 → go
+1.22) ships. Because the component-library model makes an image a reusable
+*toolset*, the nixpkgs pin belongs on the toolset, not hardcoded in the engine.
+Omitting `pin` selects faber's default pin, so an image with no pin builds
+byte-identically to today.
+
+```yaml
+images:
+  go-box:
+    packages: [go, git, spex, br, claude-code]
+    overlay: ./overlay.nix
+    pin: { rev: "25.11", sha256: "…" }   # optional; omitted ⇒ faber's default pin
+```
+
+`pin` is config's **own** `PinDef{Rev, SHA256}` type. Config **must not** import the
+infra package — the dependency direction is infra→config — so faber keeps a
+`config.PinDef` distinct from `infra.NixpkgsPin`; the infra adapter maps
+`config.PinDef → infra.NixpkgsPin` at the config→infra boundary, where the resolved
+build crosses into ImageBuilder (see `spec/infra/impl_nix_build.md`). The
+compiled-in default is *not* removed: ImageBuilder resolves the effective pin per
+build — the build's `pin` when set, else the engine default. A fully-empty `pin: {}`
+normalizes to absent (nil) — only a nil pin yields the `omitempty`-absent IR that
+keeps a pin-less toolset byte-stable. If `pin` has any field set, **both** `rev` and
+`sha256` are required (a partial pin is a field-pathed Loader error), and — because
+the pin is now **user-supplied splice material** fed into infra's `fetchTarball`
+call — each value is charset-validated at the Loader (restricted to a safe charset),
+a field-pathed error on violation. See `impl_schema_structs.md`.
 
 `Images`, `Skills`, and `Hooks` are keyed by name; templates reference them by
 name. A library entry is inert data — faber never reads a `Dir`/`Path`/`Overlay`
@@ -100,7 +138,7 @@ working unchanged.
 
 ```
 TemplateDef  (inline form — current schema, still accepted)
-├── Build     *BuildDef            inline {packages, overlay}     (instead of Image)
+├── Build     *BuildDef            inline {packages, overlay, pin}  (instead of Image)
 ├── Hooks     HookSet              values are PATHS (instead of hook names)
 ├── Skills    *SkillsDef           inline {dir, link}             (instead of a name list + SkillsLink)
 │                                    dir = a skills-ROOT holding <name>/SKILL.md subtrees (see below)
@@ -114,7 +152,7 @@ Exclusivity — a template may not mix inline and named for the *same aspect*
 
 | Aspect | Named form | Inline form | Conflict error |
 |--------|-----------|-------------|----------------|
-| image | `image: <name>` | `build: {packages, overlay}` | both `image:` and `build:` set |
+| image | `image: <name>` | `build: {packages, overlay, pin}` | both `image:` and `build:` set |
 | skills | `skills: [<name>…]` (+ `skills_link`) | `skills: {dir, link}` | `skills` list *and* mapping — impossible in one node; `skills_link` set alongside inline `{dir,link}`; **`skills_link` set with an empty/absent `skills` leg** (a dangling discovery path with nothing to deliver) |
 | hooks (per field) | bare name → Hooks | path (contains `/`, or begins `.`/`~`/`/`) | a bare name that resolves to no hook is a dangling-ref error, never a silent path |
 | identity | top-level `identity: <name>` | `run.identity: <name>` | both set |

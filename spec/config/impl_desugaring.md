@@ -39,9 +39,19 @@ type CondSpec struct {
 ```
 
 `ResolvedTemplate` embeds everything the executor needs (image spec = packages +
-overlay hash, resolved hook paths, the optional skills leg, identity, resources,
-runtime, I/O schemas) so the run phase never consults the YAML again — and its
+overlay hash + the optional per-toolset nixpkgs pin, resolved hook paths, the
+optional skills leg, identity, resources, runtime, I/O schemas) so the run phase never consults the YAML again — and its
 shape is preserved by the config redesign (see arch_desugarer.md "IR stability").
+
+`ResolvedTemplate` is **flat** — there is no `Build` sub-struct — so the toolset
+lives directly as `Packages []string`, `Overlay string`, and now the nixpkgs pin
+as `Pin *PinDef` (json `pin,omitempty`). The pin is therefore `ResolvedTemplate.Pin`,
+never `ResolvedTemplate.Build.Pin`. It is nil when the toolset declares no pin, and
+because the field is `omitempty` a nil pin serializes to nothing: that is exactly
+what makes a pin-less template's IR byte-identical to today. The
+`omitempty`→nil ⇒ byte-identical-IR-when-absent property only closes because the
+carrier is this single flat, omitempty field.
+
 The one field that widens is the skills leg, from a single `{dir, link}` to the
 resolved delivery set:
 
@@ -135,7 +145,15 @@ holds):
 ```
 resolveTemplate(cfg, name):
   t := cfg.Templates[name]
-  build   := cfg.Images[t.Image]   if t.Image != "" else *t.Build       # -> {Packages, Overlay(abs)}
+  build   := ResolveBuild(cfg, t)   # inline *t.Build verbatim, else the named
+                                     # cfg.Images[t.Image] PROJECTED into a BuildDef.
+                                     # ImageDef and BuildDef are DISTINCT types, so the
+                                     # named form must COPY img.Pin -> build.Pin explicitly
+                                     # (a field copy, NOT struct passthrough); result:
+                                     # {Packages, Overlay(abs), Pin}. Pin is nil when the
+                                     # toolset declares none; the engine-default fallback
+                                     # is applied later, in infra.
+
   ident   := t.Identity            if t.Identity != "" else t.Run.Identity
   hooks   := for f in {context,prelude,on_failure}:
                isPath(v) ? v : cfg.Hooks[v].Path                        # v already absolute if a path
@@ -146,10 +164,23 @@ resolveTemplate(cfg, name):
                  ? ResolvedSkills{Root: t.Skills.Inline.Dir,           # inline: a skills-root mounted DIRECTLY
                                   Primary: t.Skill, Link: t.Skills.Inline.Link}
                  : nil                                                  # no skills leg
-  return ResolvedTemplate{Build: build, Identity: ident, Skill: t.Skill,
+  return ResolvedTemplate{Packages: build.Packages, Overlay: build.Overlay,
+                          Pin: build.Pin,          # flat *PinDef, json "pin,omitempty";
+                                                   # nil ⇒ omitted ⇒ byte-identical IR
+                          Identity: ident, Skill: t.Skill,
                           Hooks: hooks, Skills: skills, Run: t.Run,
                           Inputs: t.Inputs, Output: t.Output}
 ```
+
+`ResolveBuild(cfg, t)` is the shared toolset resolver — desugar and infra's build
+seam (`infra/seams.go`) both call it, so both see the same `BuildDef` regardless of
+how the toolset was declared. It returns the inline `*t.Build` verbatim when set,
+else projects the named `cfg.Images[t.Image]` into a fresh `BuildDef`. Because
+`ImageDef` and `BuildDef` are **distinct types**, the named branch must **copy
+`img.Pin → build.Pin`** explicitly (a field copy, not a struct passthrough) — omit
+that copy and a named `image:`'s pin is silently dropped before it ever reaches the
+`ResolvedTemplate` or infra. `ResolveBuild` returns `(BuildDef{}, false)` only when
+neither form is set (a Loader-reported error).
 
 `isPath(v)` is the same lexical test the schema uses (contains `/`, or begins
 `.`/`~`/`/`). No file is read; paths are already absolute from assembly.

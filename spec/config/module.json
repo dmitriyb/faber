@@ -7,7 +7,7 @@
       "preq_id": "4267f6b0c531",
       "type": "functional",
       "title": "Workflow schema definition",
-      "description": "Define the orchestrator.yaml schema as five named component libraries plus a project assembly. Libraries: images ({packages, overlay} — a pure Nix toolset), skills ({dir} — a SKILL.md tree), hooks ({path} — an executable), templates (composition nodes referencing images/identities/skills/hooks by name, plus run knobs and typed inputs/output), and workflows (DAGs). The project assembly carries substrate (version, network, remote, credentials, identities) and a top-level include: list; each included file is a partial config contributing library entries, merged as the union of the named maps. Dual-mode: a template may use named references OR the current inline forms (build: {packages, overlay}, hooks: {context: <path>}, skills: {dir, link}, run.identity), resolving to the same IR. Go structs map to YAML sections with yaml tags (custom UnmarshalYAML for the StepDef union and the skills sequence-or-mapping form). The schema contains no domain-specific field names."
+      "description": "Define the orchestrator.yaml schema as five named component libraries plus a project assembly. Libraries: images ({packages, overlay, optional pin} — a pure Nix toolset with an optional per-toolset nixpkgs pin), skills ({dir} — a SKILL.md tree), hooks ({path} — an executable), templates (composition nodes referencing images/identities/skills/hooks by name, plus run knobs and typed inputs/output), and workflows (DAGs). The project assembly carries substrate (version, network, remote, credentials, identities) and a top-level include: list; each included file is a partial config contributing library entries, merged as the union of the named maps. Dual-mode: a template may use named references OR the current inline forms (build: {packages, overlay, pin}, hooks: {context: <path>}, skills: {dir, link}, run.identity), resolving to the same IR. The optional image/build pin is config's own PinDef (config never imports infra); when present both rev and sha256 are required. Go structs map to YAML sections with yaml tags (custom UnmarshalYAML for the StepDef union and the skills sequence-or-mapping form). The schema contains no domain-specific field names."
     },
     {
       "id": "255893ae16eb",
@@ -66,7 +66,7 @@
     {
       "id": "36547319009b",
       "name": "SchemaTypes",
-      "description": "The Go struct tree mirroring orchestrator.yaml: Config (substrate + include + five library maps), the ImageDef/SkillDef/HookDef library entries, the dual-mode TemplateDef (named references or inline forms), WorkflowDef, StepDef, ParamDef, SourceDef, binding references. Owns the params typing vocabulary, the closed set of slot-binding source forms, the named-vs-inline disambiguation rules, and the declarer-relative path convention.",
+      "description": "The Go struct tree mirroring orchestrator.yaml: Config (substrate + include + five library maps), the ImageDef/SkillDef/HookDef library entries (ImageDef and inline BuildDef optionally carrying a per-toolset nixpkgs PinDef), the dual-mode TemplateDef (named references or inline forms), WorkflowDef, StepDef, ParamDef, SourceDef, binding references. Owns the params typing vocabulary, the closed set of slot-binding source forms, the named-vs-inline disambiguation rules, and the declarer-relative path convention.",
       "content": "arch_schema_types.md",
       "implements": ["23a6be447cc8", "255893ae16eb", "8a79b4f5c699"]
     },

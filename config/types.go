@@ -41,6 +41,46 @@ type Config struct {
 type ImageDef struct {
 	Packages []string `yaml:"packages,omitempty"` // pinned Nix package names
 	Overlay  string   `yaml:"overlay,omitempty"`  // optional overlay of derivations, declarer-relative
+	Pin      *PinDef  `yaml:"pin,omitempty"`      // optional nixpkgs snapshot; nil ⇒ faber's compiled-in default
+}
+
+// UnmarshalYAML decodes ImageDef via a shadow type, then normalizes a
+// fully-empty pin: {} down to nil so only nil ever means "absent" — the
+// property that keeps a pin-less toolset's IR byte-identical to today. A pin
+// with exactly one field set is left intact: that is the completeness error the
+// Loader reports, not something to silently drop.
+func (i *ImageDef) UnmarshalYAML(n *yaml.Node) error {
+	type raw ImageDef // shadow drops UnmarshalYAML (no recursion)
+	var r raw
+	if err := n.Decode(&r); err != nil {
+		return err
+	}
+	*i = ImageDef(r)
+	i.Pin = normalizePin(i.Pin)
+	return nil
+}
+
+// PinDef is an optional per-toolset nixpkgs snapshot, attachable to both
+// ImageDef and the inline BuildDef (dual-mode parity). It is config's OWN type:
+// config must NOT import the infra package (the dependency direction is
+// infra→config). The infra adapter maps config.PinDef → infra.NixpkgsPin at the
+// config→infra boundary. A fully-empty pin: {} normalizes to nil (absent). When
+// present, both fields are required and each is charset-validated at the Loader
+// (they are user-supplied splice material fed into infra's fetchTarball call);
+// nil selects faber's compiled-in default pin.
+type PinDef struct {
+	Rev    string `yaml:"rev,omitempty" json:"rev,omitempty"`       // nixpkgs revision (commit or release tag); Loader-charset-checked
+	SHA256 string `yaml:"sha256,omitempty" json:"sha256,omitempty"` // fetchTarball hash; Loader-charset-checked
+}
+
+// normalizePin folds a fully-empty pin (both fields blank) back to nil so the
+// omitempty carrier serializes to nothing — only nil is "absent". A partial pin
+// (exactly one field set) is preserved for the Loader's completeness check.
+func normalizePin(p *PinDef) *PinDef {
+	if p != nil && p.Rev == "" && p.SHA256 == "" {
+		return nil
+	}
+	return p
 }
 
 // SkillDef is a named skill definition: ONE skill's tree, SKILL.md at its root
@@ -142,6 +182,21 @@ type SkillsDef struct {
 type BuildDef struct {
 	Packages []string `yaml:"packages,omitempty"`
 	Overlay  string   `yaml:"overlay,omitempty"`
+	Pin      *PinDef  `yaml:"pin,omitempty"` // optional nixpkgs snapshot; nil ⇒ faber's default (dual-mode parity with ImageDef)
+}
+
+// UnmarshalYAML decodes BuildDef via a shadow type, then normalizes a
+// fully-empty pin: {} to nil — the same absent-⇒-nil rule as ImageDef, so the
+// inline and named forms carry the pin identically.
+func (b *BuildDef) UnmarshalYAML(n *yaml.Node) error {
+	type raw BuildDef // shadow drops UnmarshalYAML (no recursion)
+	var r raw
+	if err := n.Decode(&r); err != nil {
+		return err
+	}
+	*b = BuildDef(r)
+	b.Pin = normalizePin(b.Pin)
+	return nil
 }
 
 // UnmarshalYAML is the second custom unmarshaller (beside StepDef). It decodes
