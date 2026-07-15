@@ -40,14 +40,42 @@ func hasDotDotSegment(p string) bool {
 	return false
 }
 
-// Validate runs every schema-level check that can be phrased against the YAML
-// alone: structural rules, name discipline, name-level cross-references, and
-// binding syntax. All violations are collected — never fatal-first — and
-// joined, so a broken file is fixed in one round trip. Checks that need the
-// desugared graph (reference resolution, cycles, type flow) belong to
+// safeName reports whether name is usable as a single filesystem path segment.
+// Library keys and the referenced names that faber joins into a host path — most
+// sharply a skill name, staged under <stage>/<name>, but the same principle for
+// every image/hook/template/workflow/identity identifier — must not carry a
+// separator, a ".." segment, an absolute root, or a leading "." / "~", any of
+// which would let the joined path escape the dir it is anchored to. This is the
+// same discipline serviceNamePattern enforces on credential service names,
+// applied to every identifier that becomes a path component. A violation is a
+// validate-time error, never a mid-run surprise inside copyTree.
+func safeName(name string) bool {
+	if name == "" || filepath.IsAbs(name) {
+		return false
+	}
+	if name[0] == '.' || name[0] == '~' {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	return !hasDotDotSegment(name)
+}
+
+// Validate runs every schema-level check that can be phrased against the
+// assembled YAML alone: structural rules, name discipline, dual-mode
+// exclusivity, name-level library cross-references, and binding syntax. It also
+// folds in the AssemblyViolations Assemble recorded (duplicate library keys,
+// substrate on a non-root file) — the two cross-file rules the merged Config can
+// no longer express — so the user sees assembly and schema errors together in
+// one round trip. All violations are collected, never fatal-first, and joined.
+// Checks that need the desugared graph (typed reference flow, cycles) belong to
 // CheckWiring.
-func Validate(cfg *Config) error {
+func Validate(cfg *Config, viols []AssemblyViolation) error {
 	v := &validator{cfg: cfg}
+	for _, av := range viols {
+		v.errs = append(v.errs, &FieldError{Path: av.Path, Msg: av.Msg})
+	}
 	v.checkVersion()
 	v.checkNetwork()
 	v.checkRemote()
@@ -131,11 +159,20 @@ func (v *validator) checkNameDiscipline() {
 		{"identities", sortedKeys(v.cfg.Identities)},
 		{"templates", sortedKeys(v.cfg.Templates)},
 		{"workflows", sortedKeys(v.cfg.Workflows)},
+		{"images", sortedKeys(v.cfg.Images)},
+		{"skills", sortedKeys(v.cfg.Skills)},
+		{"hooks", sortedKeys(v.cfg.Hooks)},
 	}
 	for _, section := range sections {
 		for _, k := range section.keys {
-			if k == "" {
+			switch {
+			case k == "":
 				v.addf(section.name, "empty name")
+			case !safeName(k):
+				// The key is joined into a host path (a skills stage dir, a
+				// per-attempt tree), so it must be a safe single segment.
+				v.addf(fmt.Sprintf("%s.%q", section.name, k),
+					`name must be a safe identifier (no "/", "..", or leading ".")`)
 			}
 		}
 	}
@@ -153,40 +190,144 @@ func (v *validator) checkTemplates() {
 		if t.Skill == "" {
 			v.addf(path+".skill", "required")
 		}
-		if len(t.Build.Packages) == 0 {
-			v.addf(path+".build.packages", "must be non-empty (the toolset is the environment)")
-		}
-		if t.Run.Identity != "" {
-			if _, ok := v.cfg.Identities[t.Run.Identity]; !ok {
-				v.addf(path+".run.identity", "unknown identity %q", t.Run.Identity)
-			}
-		}
+		v.checkToolset(path, t)
+		v.checkIdentity(path, t)
+		v.checkHooks(path, t)
+		v.checkSkills(path, t)
 		if m := t.Run.Resources.Memory; m != "" && !memoryPattern.MatchString(m) {
 			v.addf(path+".run.resources.memory", "invalid memory string %q", m)
 		}
 		if t.Run.Resources.CPUs < 0 {
 			v.addf(path+".run.resources.cpus", "must be >= 0")
 		}
-		// The skills leg is an all-or-nothing pair: when declared, both the host
-		// dir and the in-box link must be non-empty. Contents are never read at
-		// load time — dir is an opaque path, link an opaque agent-specific string.
-		if t.Skills != nil {
-			if t.Skills.Dir == "" {
-				v.addf(path+".skills.dir", "required when skills is present")
-			}
-			// link is resolved as $HOME/<link> in the box, so it must stay under
-			// $HOME: reject an absolute path or any ".." segment that would escape.
-			switch link := t.Skills.Link; {
-			case link == "":
-				v.addf(path+".skills.link", "required when skills is present")
-			case filepath.IsAbs(link):
-				v.addf(path+".skills.link", "must be relative to $HOME, not absolute: %q", link)
-			case hasDotDotSegment(link):
-				v.addf(path+".skills.link", "must not contain a %q path segment: %q", "..", link)
-			}
-		}
 		v.checkParamDefs(path+".inputs", t.Inputs)
 		v.checkParamDefs(path+".output", t.Output)
+	}
+}
+
+// checkToolset enforces the image/build dual-mode: exactly one form, the named
+// image must exist in the Images library, and the effective package list must
+// be non-empty (the toolset is the environment).
+func (v *validator) checkToolset(path string, t TemplateDef) {
+	hasImage, hasBuild := t.Image != "", t.Build != nil
+	switch {
+	case hasImage && hasBuild:
+		v.addf(path, "image and build are mutually exclusive")
+	case !hasImage && !hasBuild:
+		v.addf(path, "a toolset is required: set image (a name) or build (inline)")
+	case hasBuild:
+		if len(t.Build.Packages) == 0 {
+			v.addf(path+".build.packages", "must be non-empty (the toolset is the environment)")
+		}
+	case hasImage:
+		img, ok := v.cfg.Images[t.Image]
+		if !ok {
+			v.addf(path+".image", "unknown image %q%s", t.Image, didYouMean(t.Image, sortedKeys(v.cfg.Images)))
+		} else if len(img.Packages) == 0 {
+			v.addf(path+".image", "image %q has no packages (the toolset is the environment)", t.Image)
+		}
+	}
+}
+
+// checkIdentity enforces the identity dual-mode: top-level identity: and
+// run.identity: are mutually exclusive aliases, and the chosen one must name a
+// declared identity.
+func (v *validator) checkIdentity(path string, t TemplateDef) {
+	if t.Identity != "" && t.Run.Identity != "" {
+		v.addf(path, "identity and run.identity are mutually exclusive")
+	}
+	ident, identPath := t.Run.Identity, path+".run.identity"
+	if t.Identity != "" {
+		ident, identPath = t.Identity, path+".identity"
+	}
+	if ident != "" {
+		if _, ok := v.cfg.Identities[ident]; !ok {
+			v.addf(identPath, "unknown identity %q%s", ident, didYouMean(ident, sortedKeys(v.cfg.Identities)))
+		}
+	}
+}
+
+// checkHooks resolves each hooks.<field>: a bare name (not a path) must name a
+// declared hook; a dangling bare name is a reference error, never a silent path.
+// Path forms are opaque and never checked for existence.
+func (v *validator) checkHooks(path string, t TemplateDef) {
+	fields := []struct{ name, value string }{
+		{"context", t.Hooks.Context},
+		{"prelude", t.Hooks.Prelude},
+		{"on_failure", t.Hooks.OnFailure},
+	}
+	for _, f := range fields {
+		if f.value == "" || isPath(f.value) {
+			continue
+		}
+		if _, ok := v.cfg.Hooks[f.value]; !ok {
+			v.addf(path+".hooks."+f.name, "unknown hook %q%s", f.value, didYouMean(f.value, sortedKeys(v.cfg.Hooks)))
+		}
+	}
+}
+
+// checkSkills enforces the skills dual-mode. Named mode (skills: [names]):
+// skills_link is required, every name and the primary skill resolve against the
+// Skills library, and the primary skill must be one of the delivered names.
+// Inline mode (skills: {dir, link}): the all-or-nothing dir/link pair, and the
+// primary skill is a free-form prompt token (no membership check). Absent: no
+// skills leg — and skills_link with no leg to deliver is a violation.
+func (v *validator) checkSkills(path string, t TemplateDef) {
+	named := len(t.Skills.Names) > 0
+	inline := t.Skills.Inline != nil
+
+	switch {
+	case named:
+		if t.SkillsLink == "" {
+			v.addf(path+".skills_link", "required when skills is a named list")
+		} else {
+			v.checkLink(path+".skills_link", t.SkillsLink)
+		}
+		for i, nm := range t.Skills.Names {
+			skPath := fmt.Sprintf("%s.skills[%d]", path, i)
+			// A referenced name is staged under <stage>/<name>; an unsafe name
+			// would let staging escape the per-attempt tree, so reject it before
+			// (and instead of) the membership check to avoid a noisy second error.
+			if !safeName(nm) {
+				v.addf(skPath, `skill name must be a safe identifier (no "/", "..", or leading "."): %q`, nm)
+				continue
+			}
+			if _, ok := v.cfg.Skills[nm]; !ok {
+				v.addf(skPath, "unknown skill %q%s", nm, didYouMean(nm, sortedKeys(v.cfg.Skills)))
+			}
+		}
+		if t.Skill != "" && !contains(t.Skills.Names, t.Skill) {
+			v.addf(path+".skill", "primary skill %q must be one of the delivered skills [%s]", t.Skill, strings.Join(t.Skills.Names, ", "))
+		}
+	case inline:
+		if t.SkillsLink != "" {
+			v.addf(path+".skills_link", "must not be set with an inline skills mapping (the link lives at skills.link)")
+		}
+		if t.Skills.Inline.Dir == "" {
+			v.addf(path+".skills.dir", "required when skills is present")
+		}
+		if t.Skills.Inline.Link == "" {
+			v.addf(path+".skills.link", "required when skills is present")
+		} else {
+			v.checkLink(path+".skills.link", t.Skills.Inline.Link)
+		}
+	default:
+		// No skills leg: a discovery path with nothing to deliver is a violation.
+		if t.SkillsLink != "" {
+			v.addf(path+".skills_link", "set without a skills leg (a discovery path with nothing to deliver)")
+		}
+	}
+}
+
+// checkLink verifies an in-box $HOME-relative discovery path stays under $HOME:
+// it is resolved as $HOME/<link> in the box, so an absolute path or a ".."
+// segment that would escape is rejected. Contents are otherwise opaque.
+func (v *validator) checkLink(fieldPath, link string) {
+	switch {
+	case filepath.IsAbs(link):
+		v.addf(fieldPath, "must be relative to $HOME, not absolute: %q", link)
+	case hasDotDotSegment(link):
+		v.addf(fieldPath, "must not contain a %q path segment: %q", "..", link)
 	}
 }
 

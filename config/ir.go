@@ -113,8 +113,10 @@ type SelSpec struct {
 	Exhausted  *CondSpec `json:"exhausted,omitempty"`
 }
 
-// ResolvedTemplate embeds everything the executor needs (image spec, hooks,
-// identity, resources, I/O schemas) so the run phase never re-reads the YAML.
+// ResolvedTemplate embeds everything the executor needs (image spec, resolved
+// hook paths, identity, resources, I/O schemas) so the run phase never re-reads
+// the YAML. Its shape is preserved by the config library redesign except the
+// skills leg, which widens from a single {dir, link} to ResolvedSkills.
 type ResolvedTemplate struct {
 	Name      string              `json:"name"`
 	Packages  []string            `json:"packages"`
@@ -126,9 +128,29 @@ type ResolvedTemplate struct {
 	Volumes   map[string]string   `json:"volumes,omitempty"`
 	Skill     string              `json:"skill"`
 	Hooks     HookSet             `json:"hooks"`
-	Skills    *SkillsDef          `json:"skills,omitempty"` // optional skill-definition delivery; nil = no skills leg
+	Skills    *ResolvedSkills     `json:"skills,omitempty"` // optional skill-definition delivery; nil = no skills leg
 	Inputs    map[string]ParamDef `json:"inputs"`
 	Output    map[string]FieldDef `json:"output"`
+}
+
+// ResolvedSkills is the resolved source side of a template's skills leg. Exactly
+// one of Sources / Root is populated: the named form yields Sources (an ordered,
+// name-deduped set of single-skill trees the pipeline run-prep stager farms
+// under <name>/); the inline {dir, link} form yields Root (a skills-root of
+// <name>/SKILL.md subtrees the stager mounts directly). The delivered contract
+// downstream is unchanged (one /faber/skills tree + one FABER_SKILLS_LINK); only
+// the source representation widens so run-prep can stage N dirs into that tree.
+type ResolvedSkills struct {
+	Sources []SkillSource `json:"sources,omitempty"` // NAMED form: ordered, name-deduped {Name, Dir}
+	Root    string        `json:"root,omitempty"`    // INLINE form: a skills-ROOT, mounted DIRECTLY
+	Primary string        `json:"primary"`           // == template.skill
+	Link    string        `json:"link"`              // in-box $HOME-relative discovery path
+}
+
+// SkillSource is one named skill's resolved single-skill tree.
+type SkillSource struct {
+	Name string `json:"name"`
+	Dir  string `json:"dir"`
 }
 
 // EncodeIR emits the canonical serialized form: nodes sorted by id, edges by

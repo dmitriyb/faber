@@ -70,7 +70,7 @@
     {
       "id": "d7f1415da14a",
       "name": "Scheduler",
-      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure propagation via dependent traversal, and defer(until) re-queueing. Consults the journal for resume skips and the meter for admission.",
+      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure propagation via dependent traversal, and defer(until) re-queueing. Consults the journal for resume skips and the meter for admission. Owns the host-side run-prep seam that assembles each infra.RunSpec, including staging the resolved skills leg into the single read-only /faber/skills mount — a per-attempt copy of real files for named skills (not a symlink farm, whose targets would dangle across the bind into the container), a direct mount for the inline skills-root.",
       "content": "arch_scheduler.md",
       "implements": ["8879dc1597d6", "a0f44481f57b", "ae796d2a1503", "93d829b3f3d3"],
       "uses": ["072cf2b54377", "b3b271a87136"]

@@ -96,6 +96,11 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		return fmt.Errorf("pipeline: interactive re-entry: %w", err)
 	}
 
+	skillsHost, skillsCleanup, err := stageSkills(node.Template.Skills, sessionDir)
+	if err != nil {
+		return fmt.Errorf("pipeline: interactive re-entry: stage skills: %w", err)
+	}
+	defer skillsCleanup()
 	spec, err := agent.BuildRunSpec(agent.BoxSpec{
 		RunID:       t.Header.RunID + "-interactive",
 		NodeID:      t.StepID,
@@ -107,7 +112,7 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		EntryBinary: r.EntryBinary,
 		ContextHook: node.Template.Hooks.Context,
 		PreludeHook: node.Template.Hooks.Prelude,
-		SkillsDir:   skillsDir(node.Template),
+		SkillsDir:   skillsHost,
 		SkillsLink:  skillsLink(node.Template),
 	})
 	if err != nil {

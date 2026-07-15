@@ -7,7 +7,7 @@
       "id": "4267f6b0c531",
       "type": "functional",
       "title": "Declarative workflow configuration",
-      "description": "One orchestrator.yaml declares lifecycle templates (build: Nix package set; run: bindings), workflows with typed params (name/type/required/default; repo is an optional param, never baked), and steps binding template input slots from a closed set of sources. The whole file is loaded and validated before anything runs.",
+      "description": "Configuration is composed from five named component libraries — images (a Nix package set + overlay), skills (a SKILL.md tree), hooks (an executable), templates (composition nodes referencing the former by name, plus run bindings and typed I/O), and workflows — assembled by a project config that carries substrate (version/network/remote/credentials/identities) and a transitive include: list; file paths resolve relative to the declaring file. Templates accept named references or the equivalent inline forms (dual-mode). Workflows declare typed params (name/type/required/default; repo is an optional param, never baked) and steps binding template input slots from a closed set of sources. The whole assembly is loaded, merged, and validated before anything runs.",
       "priority": 1
     },
     {
@@ -128,7 +128,7 @@
       "id": "51be984560a5",
       "name": "config",
       "path": "config",
-      "description": "The foundation: orchestrator.yaml schema, typed params interface, desugaring to the JSON IR (loop unrolling, $ref resolution, reference-to-edge compilation), wiring validation, CLI entry points, structured logging."
+      "description": "The foundation: the component-library schema (images/skills/hooks/templates/workflows) and project assembly, the transitive include: directive with declarer-relative paths and union-merge, dual-mode reference resolution, typed params interface, desugaring to the JSON IR (loop unrolling, $ref resolution, reference-to-edge compilation), cross-reference and wiring validation, CLI entry points, structured logging."
     },
     {
       "id": "5baa87e1c166",

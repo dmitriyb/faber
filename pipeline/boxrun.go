@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/dmitriyb/faber/agent"
 	"github.com/dmitriyb/faber/agent/contract"
@@ -113,6 +116,14 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	if err != nil {
 		return BoxResult{}, fmt.Errorf("pipeline: box %s: %w", box.NodeID, err)
 	}
+	// Run-prep stages the resolved skills leg into the single /faber/skills mount:
+	// a named Sources set is copied into a per-attempt tree of real files, an
+	// inline Root is mounted directly. The staging tree is torn down on the way out.
+	skillsHost, skillsCleanup, err := stageSkills(box.Template.Skills, attemptDir)
+	if err != nil {
+		return BoxResult{}, fmt.Errorf("pipeline: box %s: stage skills: %w", box.NodeID, err)
+	}
+	defer skillsCleanup()
 	spec, err := agent.BuildRunSpec(agent.BoxSpec{
 		RunID:       box.RunID,
 		NodeID:      box.NodeID,
@@ -124,7 +135,7 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		EntryBinary: b.EntryBinary,
 		ContextHook: box.Template.Hooks.Context,
 		PreludeHook: box.Template.Hooks.Prelude,
-		SkillsDir:   skillsDir(box.Template),
+		SkillsDir:   skillsHost,
 		SkillsLink:  skillsLink(box.Template),
 		GitName:     b.GitName,
 		GitEmail:    b.GitEmail,
@@ -258,15 +269,117 @@ func stringifyInputs(inputs map[string]any) (map[string]string, error) {
 	return out, nil
 }
 
-// skillsDir and skillsLink read the template's optional skills leg, returning
-// "" when the template declares none (absence = current behavior).
-func skillsDir(t *config.ResolvedTemplate) string {
-	if t.Skills == nil {
-		return ""
+// stageSkills collapses a resolved skills leg into the single host path bound
+// read-only at /faber/skills. An inline Root is bound directly (byte-identical
+// to today's single-dir mount — the root already has the <name>/SKILL.md shape);
+// a named Sources set is COPIED into a per-attempt tree <stage>/<name> of real
+// files under attemptDir. The copy (rather than a symlink farm) is load-bearing:
+// <stage> is bind-mounted read-only into the container, and a symlink's target
+// would be a host path that is not mounted — it would dangle inside the box and
+// /faber/skills/<name>/SKILL.md would silently vanish. A nil leg yields "" — no
+// /faber/skills mount, today's no-skills behavior. Whatever it returns is set as
+// the one Mount{Host} for /faber/skills, so infra's argv builder still sees
+// exactly one read-only bind. The returned cleanup removes any staging tree on
+// teardown.
+func stageSkills(rs *config.ResolvedSkills, attemptDir string) (hostPath string, cleanup func(), err error) {
+	noop := func() {}
+	if rs == nil {
+		return "", noop, nil
 	}
-	return t.Skills.Dir
+	if rs.Root != "" {
+		return rs.Root, noop, nil // inline: mount the skills-root directly, no <name> wrapper
+	}
+	stage := filepath.Join(attemptDir, "skills")
+	// Crash-safe: a reused session dir (interactive re-entry) can carry a leftover
+	// stage tree from a hard crash; clear it before restaging.
+	if err := os.RemoveAll(stage); err != nil {
+		return "", noop, err
+	}
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return "", noop, err
+	}
+	for _, src := range rs.Sources {
+		// Belt-and-suspenders: config.Validate already rejects unsafe skill names,
+		// but staging joins src.Name onto stage as a path component, so re-check
+		// here — a bypassed or hand-built ResolvedSkills must never write outside
+		// the per-attempt tree.
+		if !safeSegment(src.Name) {
+			_ = os.RemoveAll(stage)
+			return "", noop, fmt.Errorf("stage skill %q: unsafe name (must be a single path segment)", src.Name)
+		}
+		if err := copyTree(filepath.Join(stage, src.Name), src.Dir); err != nil {
+			_ = os.RemoveAll(stage)
+			return "", noop, fmt.Errorf("stage skill %q: %w", src.Name, err)
+		}
+	}
+	return stage, func() { _ = os.RemoveAll(stage) }, nil
 }
 
+// safeSegment reports whether name is a single filesystem path component safe to
+// join onto the stage dir: no separator, not "." / ".." / absolute, no leading
+// dot. Mirrors config.safeName (the validate-time gate) so staging enforces the
+// same discipline even if validation is ever bypassed.
+func safeSegment(name string) bool {
+	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) {
+		return false
+	}
+	if name[0] == '.' || name[0] == '~' {
+		return false
+	}
+	return !strings.ContainsAny(name, `/\`)
+}
+
+// copyTree recursively copies the source tree at src into dst as REAL files, so
+// the result survives the read-only bind into the container (a symlink would
+// point at an unmounted host path and dangle inside the box). The box's run user
+// is non-root and a :ro mount cannot be chowned by the box preamble, so every
+// node is made world-readable: directories 0o755, files 0o644. Non-regular
+// entries (nested symlinks, devices) are skipped — only real files travel.
+func copyTree(dst, src string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return copyFile(target, path)
+	})
+}
+
+// copyFile streams src into a fresh world-readable dst (0o644) rather than
+// slurping it whole, so a large skill file never spikes host memory. No size
+// ceiling is imposed: the skills tree is operator-authored.
+func copyFile(dst, src string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// skillsLink reads the template's optional skills-discovery path, returning ""
+// when the template declares no skills leg (absence = current behavior).
 func skillsLink(t *config.ResolvedTemplate) string {
 	if t.Skills == nil {
 		return ""

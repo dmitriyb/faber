@@ -432,8 +432,8 @@ func TestManifestSeam(t *testing.T) {
 // and joins the errors, so validate reports all missing names at once.
 func TestPackageProverSeam(t *testing.T) {
 	cfg := &config.Config{Templates: map[string]config.TemplateDef{
-		"review":    {Build: config.BuildDef{Packages: []string{"git", "custom-cli-a"}}},
-		"implement": {Build: config.BuildDef{Packages: []string{"git", "custom-cli-b"}}},
+		"review":    {Build: &config.BuildDef{Packages: []string{"git", "custom-cli-a"}}},
+		"implement": {Build: &config.BuildDef{Packages: []string{"git", "custom-cli-b"}}},
 	}}
 	nix := &fakeNix{evalResults: []json.RawMessage{
 		json.RawMessage(`{"git":true,"custom-cli-b":false}`), // implement (sorted first)
@@ -459,7 +459,7 @@ func TestPackageProverSeam(t *testing.T) {
 // template and rejects unknown names.
 func TestConfigBuilderSeam(t *testing.T) {
 	build := config.BuildDef{Packages: []string{"git"}}
-	cfg := &config.Config{Templates: map[string]config.TemplateDef{"merge": {Build: build}}}
+	cfg := &config.Config{Templates: map[string]config.TemplateDef{"merge": {Build: &build}}}
 	nix := &fakeNix{buildOut: []string{"/nix/store/fff-image.tar.gz"}}
 	probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
 	tag, err := probe.ImageTag("merge", build)

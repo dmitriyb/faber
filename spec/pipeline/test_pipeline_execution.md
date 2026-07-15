@@ -60,6 +60,18 @@ docker anywhere in this section.
     text and `--json` reports matching golden files byte-for-byte; the JSON
     report of a run reconstructed from the journal alone (fresh reporter, no
     scheduler state) is identical to the one produced at settle time.
+11. **Skills staging in run-prep.** The `steps` closure's `stageSkills` produces
+    the single `/faber/skills` mount for each `ResolvedSkills` shape (see
+    impl_scheduling.md "Skills staging"): a named-form template with
+    `Sources: [(a,→dirA),(b,→dirB)]` yields one read-only mount whose host tree is
+    a per-attempt copy of the sources into `a/`, `b/` (declared order) as real,
+    world-readable files — asserted to be real files, NOT symlinks, since a symlink
+    would dangle across the read-only bind into the container; an inline-form
+    template with `Root: dirR` yields one read-only mount of `dirR` **directly**
+    (no staged copy, no `<name>` wrapper); a template with no skills leg yields
+    **no** `/faber/skills` mount. In every case exactly one skills mount (or none)
+    reaches the RunSpec, so infra's argv builder sees the unchanged single-bind
+    contract.
 
 ## Edge cases
 

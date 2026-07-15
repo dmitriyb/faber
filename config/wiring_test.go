@@ -278,7 +278,7 @@ func TestWiringConditionDependencyCycle(t *testing.T) {
 			{ID: "b", Use: "box", When: `steps.a.result == "x"`, With: map[string]any{"input": "${params.subject}"}},
 		},
 	}
-	if err := Validate(cfg); err != nil {
+	if err := Validate(cfg, nil); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 	err := checkRef(t, cfg, "flow")

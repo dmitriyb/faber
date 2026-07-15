@@ -12,11 +12,11 @@ import (
 // safe to mutate.
 func loadRef(t *testing.T) *Config {
 	t.Helper()
-	cfg, err := Load("testdata/reference.yaml")
+	cfg, viols, err := Load("testdata/reference.yaml")
 	if err != nil {
 		t.Fatalf("load reference: %v", err)
 	}
-	if err := Validate(cfg); err != nil {
+	if err := Validate(cfg, viols); err != nil {
 		t.Fatalf("reference must be schema-valid: %v", err)
 	}
 	return cfg
@@ -77,7 +77,7 @@ func TestSchemaStepUnionEnforcement(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := minimalConfig()
 			cfg.Workflows["flow"] = WorkflowDef{Steps: []StepDef{tt.step}}
-			err := Validate(cfg)
+			err := Validate(cfg, nil)
 			wantErrContaining(t, err, "workflows.flow.steps[0]: step must have exactly one of use/loop/generate")
 			if n := errCount(err); n != 1 {
 				t.Fatalf("want exactly one violation, got %d: %v", n, err)
@@ -94,7 +94,7 @@ func minimalConfig() *Config {
 		Identities: map[string]IdentityDef{"worker": {Key: "./keys/worker"}},
 		Templates: map[string]TemplateDef{
 			"box": {
-				Build:  BuildDef{Packages: []string{"git"}},
+				Build:  &BuildDef{Packages: []string{"git"}},
 				Run:    RunDef{Identity: "worker"},
 				Skill:  "act",
 				Inputs: map[string]ParamDef{"input": {Type: "string", Required: true}},
@@ -224,7 +224,7 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 			"skills present with a missing dir",
 			func(c *Config) {
 				tp := c.Templates["box"]
-				tp.Skills = &SkillsDef{Link: ".claude/skills"}
+				tp.Skills = SkillsRef{Inline: &SkillsDef{Link: ".claude/skills"}}
 				c.Templates["box"] = tp
 			},
 			"templates.box.skills.dir: required when skills is present",
@@ -233,7 +233,7 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 			"skills present with a missing link",
 			func(c *Config) {
 				tp := c.Templates["box"]
-				tp.Skills = &SkillsDef{Dir: "./skills"}
+				tp.Skills = SkillsRef{Inline: &SkillsDef{Dir: "./skills"}}
 				c.Templates["box"] = tp
 			},
 			"templates.box.skills.link: required when skills is present",
@@ -244,7 +244,7 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 			"skills link is absolute",
 			func(c *Config) {
 				tp := c.Templates["box"]
-				tp.Skills = &SkillsDef{Dir: "./skills", Link: "/etc/skills"}
+				tp.Skills = SkillsRef{Inline: &SkillsDef{Dir: "./skills", Link: "/etc/skills"}}
 				c.Templates["box"] = tp
 			},
 			"templates.box.skills.link: must be relative to $HOME, not absolute",
@@ -254,7 +254,7 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 			"skills link escapes with ..",
 			func(c *Config) {
 				tp := c.Templates["box"]
-				tp.Skills = &SkillsDef{Dir: "./skills", Link: "../../etc/skills"}
+				tp.Skills = SkillsRef{Inline: &SkillsDef{Dir: "./skills", Link: "../../etc/skills"}}
 				c.Templates["box"] = tp
 			},
 			`templates.box.skills.link: must not contain a ".." path segment`,
@@ -264,7 +264,7 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := minimalConfig()
 			tt.mutate(cfg)
-			err := Validate(cfg)
+			err := Validate(cfg, nil)
 			wantErrContaining(t, err, tt.wantErr)
 			if n := errCount(err); n != 1 {
 				t.Fatalf("want exactly one violation, got %d: %v", n, err)
@@ -279,23 +279,25 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 func TestSchemaSkillsLegResolved(t *testing.T) {
 	cfg := minimalConfig()
 	tp := cfg.Templates["box"]
-	tp.Skills = &SkillsDef{Dir: "./skills", Link: ".claude/skills"}
+	tp.Skills = SkillsRef{Inline: &SkillsDef{Dir: "./skills", Link: ".claude/skills"}}
 	cfg.Templates["box"] = tp
-	if err := Validate(cfg); err != nil {
+	if err := Validate(cfg, nil); err != nil {
 		t.Fatalf("well-formed skills must validate: %v", err)
 	}
 	ir, err := Desugar(cfg, "flow")
 	if err != nil {
 		t.Fatalf("desugar: %v", err)
 	}
-	var got *SkillsDef
+	var got *ResolvedSkills
 	for _, n := range ir.Nodes {
 		if n.Template != nil {
 			got = n.Template.Skills
 		}
 	}
-	if got == nil || got.Dir != "./skills" || got.Link != ".claude/skills" {
-		t.Fatalf("resolved skills = %+v, want {Dir: ./skills, Link: .claude/skills}", got)
+	// The inline {dir, link} form resolves to a direct Root mount (no <name>
+	// wrapper, no Sources), byte-identical to today's single-dir delivery.
+	if got == nil || got.Root != "./skills" || got.Link != ".claude/skills" || len(got.Sources) != 0 {
+		t.Fatalf("resolved skills = %+v, want {Root: ./skills, Link: .claude/skills, Sources: []}", got)
 	}
 }
 
@@ -439,13 +441,13 @@ func TestSchemaNameDisciplineDeterministic(t *testing.T) {
 	build := func() *Config {
 		cfg := minimalConfig()
 		cfg.Identities[""] = IdentityDef{Key: "./keys/x"}
-		cfg.Templates[""] = TemplateDef{Build: BuildDef{Packages: []string{"git"}}, Skill: "act"}
+		cfg.Templates[""] = TemplateDef{Build: &BuildDef{Packages: []string{"git"}}, Skill: "act"}
 		cfg.Workflows[""] = WorkflowDef{Steps: []StepDef{{ID: "s", Use: "box"}}}
 		return cfg
 	}
-	first := Validate(build()).Error()
+	first := Validate(build(), nil).Error()
 	for i := 0; i < 50; i++ {
-		if got := Validate(build()).Error(); got != first {
+		if got := Validate(build(), nil).Error(); got != first {
 			t.Fatalf("error order changed across runs:\n%s\n---\n%s", first, got)
 		}
 	}
@@ -468,7 +470,7 @@ func TestSchemaNestedInterpolationRejected(t *testing.T) {
 		tp.Inputs = map[string]ParamDef{"input": {Type: "object", Required: true}}
 		cfg.Templates["box"] = tp
 		cfg.Workflows["flow"].Steps[0].With["input"] = map[string]any{"inner": "${params.subject}"}
-		err := Validate(cfg)
+		err := Validate(cfg, nil)
 		wantErrContaining(t, err, "workflows.flow.steps[0].with.input")
 		wantErrContaining(t, err, "only legal as a whole scalar binding value")
 	})
@@ -479,7 +481,7 @@ func TestSchemaNestedInterpolationRejected(t *testing.T) {
 		tp.Inputs = map[string]ParamDef{"input": {Type: "object", Required: true}}
 		cfg.Templates["box"] = tp
 		cfg.Workflows["flow"].Steps[0].With["input"] = []any{"plain", []any{"${steps.first.result}"}}
-		err := Validate(cfg)
+		err := Validate(cfg, nil)
 		wantErrContaining(t, err, "workflows.flow.steps[0].with.input")
 		wantErrContaining(t, err, "only legal as a whole scalar binding value")
 	})
@@ -490,7 +492,7 @@ func TestSchemaNestedInterpolationRejected(t *testing.T) {
 		tp.Inputs = map[string]ParamDef{"input": {Type: "object", Required: true}}
 		cfg.Templates["box"] = tp
 		cfg.Workflows["flow"].Steps[0].With["input"] = map[string]any{"inner": []any{"plain", 1}}
-		if err := Validate(cfg); err != nil {
+		if err := Validate(cfg, nil); err != nil {
 			t.Fatalf("plain compound literal must pass: %v", err)
 		}
 	})
@@ -519,7 +521,7 @@ func TestSchemaParamDefaultTyping(t *testing.T) {
 				"p":       tt.def,
 			}
 			cfg.Workflows["flow"] = wf
-			err := Validate(cfg)
+			err := Validate(cfg, nil)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)

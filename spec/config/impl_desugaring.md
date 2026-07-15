@@ -39,11 +39,34 @@ type CondSpec struct {
 ```
 
 `ResolvedTemplate` embeds everything the executor needs (image spec = packages +
-overlay hash, hooks, the optional skills leg `{dir, link}`, identity, resources,
-runtime, I/O schemas) so the run phase never consults the YAML again. `GenSpec`
-carries the source command/args, the target workflow *name* (expansion is
-run-time), and the item binding template.
-`SelSpec` lists the coalesced candidates newest-first.
+overlay hash, resolved hook paths, the optional skills leg, identity, resources,
+runtime, I/O schemas) so the run phase never consults the YAML again — and its
+shape is preserved by the config redesign (see arch_desugarer.md "IR stability").
+The one field that widens is the skills leg, from a single `{dir, link}` to the
+resolved delivery set:
+
+```go
+type ResolvedSkills struct {
+    // Exactly one of Sources / Root is populated (named vs inline form).
+    Sources []SkillSource `json:"sources,omitempty"` // NAMED form: ordered, name-deduped single-skill trees {Name, Dir(abs)}
+    Root    string        `json:"root,omitempty"`    // INLINE form: a skills-ROOT (<name>/SKILL.md subtrees), mounted DIRECTLY
+    Primary string        `json:"primary"`           // == template.skill (a Sources member in named mode; a free-form token in inline mode)
+    Link    string        `json:"link"`              // in-box $HOME-relative discovery path (unchanged)
+}
+type SkillSource struct { Name, Dir string }
+```
+
+The delivered contract is unchanged (one `/faber/skills` tree + one
+`FABER_SKILLS_LINK`); only the source representation widens so run-prep can stage
+N dirs into that one tree. The **named** form yields `Sources` (the pipeline
+run-prep stager farms them under `<name>/`); the **inline `{dir, link}`** form
+yields `Root` — the dir is already a `<name>/SKILL.md` root, so run-prep mounts it
+directly with no `<name>` wrapper, byte-identical to today. Emitting a wrapped
+one-entry `Sources` for the inline case would double-nest it
+(`/faber/skills/<name>/<name>/SKILL.md`); that is why the two forms resolve to
+different fields. `GenSpec` carries the source
+command/args, the target workflow *name* (expansion is run-time), and the item
+binding template. `SelSpec` lists the coalesced candidates newest-first.
 
 ## Algorithm
 
@@ -57,7 +80,8 @@ Desugar(cfg, wf):
 emit(cfg, wf, scope, params):
   for step in wf.Steps:
     switch step form:
-      use(template):  node(kind=agent, id=scope+"/"+step.ID)
+      use(template):  node(kind=agent, id=scope+"/"+step.ID,
+                           template=resolveTemplate(cfg, step.Use))
                       bindings/edges from step.With  (expandBinding per entry)
       use(workflow):  node(kind=sub-workflow, sub=emit(cfg, target, scope+"/"+step.ID, ...))
                       with: entries become the sub-IR's param bindings
@@ -101,6 +125,35 @@ expandBinding(slot, value):
 
 `resolveInScope` maps a step id to the current scope's instance (inside loop body
 iteration i => `X@i`; after the loop => the selector node `X`).
+
+### resolveTemplate
+
+Collapses a dual-mode `TemplateDef` into `ResolvedTemplate`; both forms produce
+the same value (Loader has already proven every reference resolves and exclusivity
+holds):
+
+```
+resolveTemplate(cfg, name):
+  t := cfg.Templates[name]
+  build   := cfg.Images[t.Image]   if t.Image != "" else *t.Build       # -> {Packages, Overlay(abs)}
+  ident   := t.Identity            if t.Identity != "" else t.Run.Identity
+  hooks   := for f in {context,prelude,on_failure}:
+               isPath(v) ? v : cfg.Hooks[v].Path                        # v already absolute if a path
+  skills  := t.Skills.Names != nil
+               ? ResolvedSkills{Sources: dedupOrdered(n -> {n, cfg.Skills[n].Dir}),
+                                Primary: t.Skill, Link: t.SkillsLink}   # named: N single-skill trees to farm
+               : t.Skills.Inline != nil
+                 ? ResolvedSkills{Root: t.Skills.Inline.Dir,           # inline: a skills-root mounted DIRECTLY
+                                  Primary: t.Skill, Link: t.Skills.Inline.Link}
+                 : nil                                                  # no skills leg
+  return ResolvedTemplate{Build: build, Identity: ident, Skill: t.Skill,
+                          Hooks: hooks, Skills: skills, Run: t.Run,
+                          Inputs: t.Inputs, Output: t.Output}
+```
+
+`isPath(v)` is the same lexical test the schema uses (contains `/`, or begins
+`.`/`~`/`/`). No file is read; paths are already absolute from assembly.
+`dedupOrdered` keeps first occurrence, preserving declared list order.
 
 ## Determinism
 

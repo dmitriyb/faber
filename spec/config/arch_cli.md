@@ -17,7 +17,11 @@ writes to the terminal directly.
 | `faber resume <run-id> [--fresh] [--interactive <step-id>]` | journal load -> recovery mode dispatch (failure module) | as `run` |
 
 Flags shared by all: `--config` (default `orchestrator.yaml`), `--log-level`
-(default `info`), `--log-format` (auto/json/text).
+(default `info`), `--log-format` (auto/json/text). `--config` names the **root
+project file**; `Load` transitively pulls its `include:` closure and merges the
+component libraries before validation (see `arch_loader.md`). A single-file config
+with no `include:` behaves exactly as before, so the default and every existing
+invocation are unchanged.
 
 Exit codes: 0 success; 1 validation or run failure (details already reported);
 2 usage error. `validate` reports *all* errors before exiting — the multi-error

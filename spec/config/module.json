@@ -1,13 +1,13 @@
 {
   "name": "config",
-  "description": "The foundation module: defines the orchestrator.yaml schema and its Go struct tree, loads and validates configuration, desugars the YAML frontend into the acyclic JSON IR, validates typed reference wiring over the IR, and provides the CLI entry points and structured logging.",
+  "description": "The foundation module: defines the orchestrator.yaml schema and its Go struct tree, composes configuration from five named component libraries (images, skills, hooks, templates, workflows) plus a project assembly via a transitive include: directive with declarer-relative paths, loads and validates the assembled configuration (dual-mode inline/named references, cross-reference resolution, duplicate-name and cycle detection), desugars the YAML frontend into the acyclic JSON IR, validates typed reference wiring over the IR, and provides the CLI entry points and structured logging.",
   "requirements": [
     {
       "id": "23a6be447cc8",
       "preq_id": "4267f6b0c531",
       "type": "functional",
       "title": "Workflow schema definition",
-      "description": "Define the orchestrator.yaml schema: templates (name, packages, identity, network, skill, context/prelude hook paths, skill-definition delivery (skills: {dir, link}), inputs, output schema), workflows (typed params, steps, sources), and steps (use: template or workflow, with: slot bindings, when: condition, loop sugar, depends_on for pure ordering). Go structs map 1:1 to YAML sections with yaml tags. The schema contains no domain-specific field names."
+      "description": "Define the orchestrator.yaml schema as five named component libraries plus a project assembly. Libraries: images ({packages, overlay} — a pure Nix toolset), skills ({dir} — a SKILL.md tree), hooks ({path} — an executable), templates (composition nodes referencing images/identities/skills/hooks by name, plus run knobs and typed inputs/output), and workflows (DAGs). The project assembly carries substrate (version, network, remote, credentials, identities) and a top-level include: list; each included file is a partial config contributing library entries, merged as the union of the named maps. Dual-mode: a template may use named references OR the current inline forms (build: {packages, overlay}, hooks: {context: <path>}, skills: {dir, link}, run.identity), resolving to the same IR. Go structs map to YAML sections with yaml tags (custom UnmarshalYAML for the StepDef union and the skills sequence-or-mapping form). The schema contains no domain-specific field names."
     },
     {
       "id": "255893ae16eb",
@@ -66,14 +66,14 @@
     {
       "id": "36547319009b",
       "name": "SchemaTypes",
-      "description": "The Go struct tree mirroring orchestrator.yaml: Config, TemplateDef, WorkflowDef, StepDef, ParamDef, SourceDef, binding references. Owns the params typing vocabulary and the closed set of slot-binding source forms.",
+      "description": "The Go struct tree mirroring orchestrator.yaml: Config (substrate + include + five library maps), the ImageDef/SkillDef/HookDef library entries, the dual-mode TemplateDef (named references or inline forms), WorkflowDef, StepDef, ParamDef, SourceDef, binding references. Owns the params typing vocabulary, the closed set of slot-binding source forms, the named-vs-inline disambiguation rules, and the declarer-relative path convention.",
       "content": "arch_schema_types.md",
       "implements": ["23a6be447cc8", "255893ae16eb", "8a79b4f5c699"]
     },
     {
       "id": "c21cc21b5668",
       "name": "Loader",
-      "description": "Reads orchestrator.yaml, unmarshals into SchemaTypes, and runs schema-level validation (required fields, enum values, name uniqueness, cross-references between steps/templates/workflows) with multi-error field-path reporting.",
+      "description": "Reads the root orchestrator.yaml, resolves its transitive include: closure (declarer-relative paths made absolute, union-merge of the library maps, duplicate-name and include-cycle detection, substrate root-only), unmarshals into SchemaTypes, and runs schema-level validation over the assembled Config: required fields, enum values, name uniqueness, dual-mode exclusivity, and library cross-reference existence (image/hooks/identity names always; skill/skills names and primary-skill-in-delivered-set only in named-skills mode, where `skill` is inline/absent it is a free-form prompt token), all with multi-error field-path reporting.",
       "content": "arch_loader.md",
       "implements": ["23a6be447cc8"],
       "uses": ["36547319009b"]
@@ -81,7 +81,7 @@
     {
       "id": "080a536721ed",
       "name": "Desugarer",
-      "description": "The frontend-to-IR compiler: unrolls bounded loops into conditional chains, resolves named sub-workflow references, expands compact with: bindings into explicit typed edges, and emits the deterministic JSON IR.",
+      "description": "The frontend-to-IR compiler: resolves each dual-mode template reference (image/hooks/identity/skills, named or inline) into the existing ResolvedTemplate shape, unrolls bounded loops into conditional chains, resolves named sub-workflow references, expands compact with: bindings into explicit typed edges, and emits the deterministic JSON IR. The resolved IR shape is preserved; the sole delta is the skills leg widening from a single {dir, link} to the resolved (name->dir) delivery set.",
       "content": "arch_desugarer.md",
       "implements": ["014aaac22619", "0ebbdd8f836b"],
       "uses": ["36547319009b", "0dd11f0c10bb"]

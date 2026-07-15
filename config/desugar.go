@@ -502,28 +502,104 @@ func (d *desugarer) resolveDependsOn(lvl *level, dep string) ([]string, error) {
 	return nil, fmt.Errorf("unknown step %q in depends_on", dep)
 }
 
+// resolveTemplate collapses a dual-mode TemplateDef into the ResolvedTemplate
+// the executor consumes; both the named and inline forms produce the same value.
+// The Loader has already proven every reference resolves and exclusivity holds,
+// so this only rearranges resolved values — it reads no files (paths are already
+// absolute from assembly).
 func (d *desugarer) resolveTemplate(name, sp string) *ResolvedTemplate {
 	t, ok := d.cfg.Templates[name]
 	if !ok {
 		d.addf(sp+".use", "unknown template %q", name)
 		return nil
 	}
+	build, _ := ResolveBuild(d.cfg, t)
 	rt := &ResolvedTemplate{
 		Name:      name,
-		Packages:  append([]string(nil), t.Build.Packages...),
-		Overlay:   t.Build.Overlay,
-		Identity:  t.Run.Identity,
+		Packages:  append([]string(nil), build.Packages...),
+		Overlay:   build.Overlay,
+		Identity:  resolveIdentity(t),
 		Resources: t.Run.Resources,
 		Runtime:   t.Run.Runtime,
 		Env:       t.Run.Env,
 		Volumes:   t.Run.Volumes,
 		Skill:     t.Skill,
-		Hooks:     t.Hooks,
-		Skills:    t.Skills,
+		Hooks:     resolveHooks(d.cfg, t.Hooks),
+		Skills:    resolveSkills(d.cfg, t),
 		Inputs:    d.normalizeDefs(t.Inputs, sp),
 		Output:    d.normalizeDefs(t.Output, sp),
 	}
 	return rt
+}
+
+// ResolveBuild returns the effective toolset for a template: its inline build:
+// if set, else the referenced image: from the Images library. The bool is false
+// only when neither is set (a validation error the Loader already reported). It
+// lets the desugarer and infra's build seam share one resolution.
+func ResolveBuild(cfg *Config, t TemplateDef) (BuildDef, bool) {
+	if t.Build != nil {
+		return *t.Build, true
+	}
+	if t.Image != "" {
+		if img, ok := cfg.Images[t.Image]; ok {
+			return BuildDef{Packages: img.Packages, Overlay: img.Overlay}, true
+		}
+	}
+	return BuildDef{}, false
+}
+
+// resolveIdentity picks the identity name from the top-level alias or run.identity.
+func resolveIdentity(t TemplateDef) string {
+	if t.Identity != "" {
+		return t.Identity
+	}
+	return t.Run.Identity
+}
+
+// resolveHooks resolves each hooks.<field>: a path form passes through verbatim
+// (already absolute from assembly), a bare name resolves to its Hooks-library
+// path. Both yield the resolved hook path the IR has always carried.
+func resolveHooks(cfg *Config, h HookSet) HookSet {
+	return HookSet{
+		Context:   resolveHook(cfg, h.Context),
+		Prelude:   resolveHook(cfg, h.Prelude),
+		OnFailure: resolveHook(cfg, h.OnFailure),
+	}
+}
+
+func resolveHook(cfg *Config, v string) string {
+	if v == "" || isPath(v) {
+		return v
+	}
+	if hd, ok := cfg.Hooks[v]; ok {
+		return hd.Path
+	}
+	return v // dangling bare name — the Loader already reported it
+}
+
+// resolveSkills projects the unmarshal-time SkillsRef into the resolved delivery
+// set. Named skills become an ordered, name-deduped Sources set (the run-prep
+// stager farms them under <name>/); an inline {dir, link} becomes Root (a
+// skills-root the stager mounts directly, no <name> wrapper); absent yields no
+// skills leg.
+func resolveSkills(cfg *Config, t TemplateDef) *ResolvedSkills {
+	switch {
+	case len(t.Skills.Names) > 0:
+		seen := map[string]bool{}
+		var srcs []SkillSource
+		for _, nm := range t.Skills.Names {
+			if seen[nm] {
+				continue
+			}
+			seen[nm] = true
+			srcs = append(srcs, SkillSource{Name: nm, Dir: cfg.Skills[nm].Dir})
+		}
+		return &ResolvedSkills{Sources: srcs, Primary: t.Skill, Link: t.SkillsLink}
+	case t.Skills.Inline != nil:
+		return &ResolvedSkills{Root: t.Skills.Inline.Dir, Primary: t.Skill, Link: t.Skills.Inline.Link}
+	default:
+		return nil
+	}
 }
 
 func (d *desugarer) normalizeDefs(defs map[string]ParamDef, sp string) map[string]ParamDef {

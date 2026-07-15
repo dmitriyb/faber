@@ -37,7 +37,7 @@ selector node? resolve newest ok candidate (pure wiring)          │
 | Scheduler -> ConditionEvaluator | node's `CondSpec` + settled payloads | activation `{steps: {name: {field: value}}, params: {...}}`; skipped dep ⇒ false without eval |
 | Scheduler -> Journal | `(step-id, input-hash)` | hash covers resolved inputs + template identity + image tag; ok hits skip the run; skip records are null-hash, never hits |
 | Scheduler -> Meter | step estimate | decision `admit \| defer(until) \| reject`; unit-tagged Cost |
-| Scheduler -> box | resolved node (template, bindings, identity) | one result record per attempt: `{status, payload\|error, timing, attempt}` |
+| Scheduler -> box | resolved node (template, bindings, identity) | one result record per attempt: `{status, payload\|error, timing, attempt}`; run-prep first stages the resolved skills leg (`ResolvedSkills.Sources` → per-attempt copy of real files, or inline `Root` → direct) into the single read-only `/faber/skills` mount (see impl_scheduling.md "Skills staging") |
 | GenerateExpander -> data source | argv via infra.CommandRunner | stdout `{"items":[{"id","deps",...}]}`; anything else = contract error |
 | GenerateExpander -> Scheduler | `Splice{nodes, edges}` | applied atomically on the loop goroutine before the generate node settles |
 | Journal -> RunReporter | header + append-only records | report is a pure function of journal + IR; in-memory state never consulted |

@@ -165,12 +165,12 @@ func cmdValidate(args []string, stdout, stderr io.Writer, deps Deps) int {
 	}
 	logger = logger.With("component", "cli")
 
-	cfg, err := Load(common.config)
+	cfg, viols, err := Load(common.config)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if err := Validate(cfg); err != nil {
+	if err := Validate(cfg, viols); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -235,12 +235,12 @@ func cmdBuild(args []string, stderr io.Writer, deps Deps) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	cfg, err := Load(common.config)
+	cfg, viols, err := Load(common.config)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if err := Validate(cfg); err != nil {
+	if err := Validate(cfg, viols); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -327,12 +327,12 @@ func cmdRun(args []string, stderr io.Writer, deps Deps) int {
 // checking. There is no code path that executes an IR that did not just pass
 // full validation in the same process.
 func runEntry(configPath, workflow string, supplied map[string]string, stderr io.Writer) (*Config, *IR, map[string]*IR, Params, int) {
-	cfg, err := Load(configPath)
+	cfg, viols, err := Load(configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return nil, nil, nil, nil, 1
 	}
-	if err := Validate(cfg); err != nil {
+	if err := Validate(cfg, viols); err != nil {
 		fmt.Fprintln(stderr, err)
 		return nil, nil, nil, nil, 1
 	}

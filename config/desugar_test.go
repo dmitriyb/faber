@@ -150,11 +150,11 @@ func TestDeterministicIREmission(t *testing.T) {
 		}
 	}
 
-	reordered, err := Load("testdata/reference_reordered.yaml")
+	reordered, _, err := Load("testdata/reference_reordered.yaml")
 	if err != nil {
 		t.Fatalf("load reordered: %v", err)
 	}
-	if err := Validate(reordered); err != nil {
+	if err := Validate(reordered, nil); err != nil {
 		t.Fatalf("validate reordered: %v", err)
 	}
 	for _, wf := range []string{"task", "epic"} {
@@ -266,7 +266,7 @@ func TestSubWorkflowInlining(t *testing.T) {
 		Params: map[string]ParamDef{"subject": {Type: "string", Required: true}},
 		Steps:  []StepDef{{ID: "nested", Use: "inner", With: map[string]any{"input": "${params.subject}"}}},
 	}
-	if err := Validate(cfg); err != nil {
+	if err := Validate(cfg, nil); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 	ir, err := Desugar(cfg, "flow")

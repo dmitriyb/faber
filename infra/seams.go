@@ -29,7 +29,10 @@ type proverSeam struct {
 func (p proverSeam) ProvePackages(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	var errs []error
 	for _, name := range slices.Sorted(maps.Keys(cfg.Templates)) {
-		if err := p.b.ProvePackages(ctx, name, cfg.Templates[name].Build); err != nil {
+		// Resolve the dual-mode toolset (inline build: or a named image:) so the
+		// prover sees the same BuildDef regardless of how it was declared.
+		build, _ := config.ResolveBuild(cfg, cfg.Templates[name])
+		if err := p.b.ProvePackages(ctx, name, build); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -51,7 +54,8 @@ func (s builderSeam) BuildImage(ctx context.Context, cfg *config.Config, templat
 	if !ok {
 		return fmt.Errorf("infra: unknown template %q", template)
 	}
-	tag, err := s.b.Build(ctx, template, tpl.Build)
+	build, _ := config.ResolveBuild(cfg, tpl)
+	tag, err := s.b.Build(ctx, template, build)
 	if err != nil {
 		return err
 	}
