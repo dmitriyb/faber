@@ -3,16 +3,20 @@
 The frontend pipeline every faber invocation runs before anything touches docker.
 
 ```
-orchestrator.yaml (bytes)
-        │  os.ReadFile + yaml.v3
+project.yaml (root) + include: closure (bytes)
+        │  os.ReadFile + yaml.v3 per file; declarer-relative
+        │  path resolution; union-merge of library maps;
+        │  dup-name + include-cycle detection
         ▼
-*Config (typed, unvalidated)                    Loader.Load
+*Config (typed, assembled, unvalidated)         Loader.Assemble / Load
         │  schema-level checks: unions, names,
-        │  name-level refs, binding syntax
+        │  dual-mode exclusivity, library-ref existence
+        │  (image/skill/skills/hooks/identity), binding syntax
         ▼
 *Config (schema-valid)                          Loader.Validate
-        │  reuse resolution, loop unrolling,
-        │  binding expansion, canonical emission
+        │  template-ref resolution (dual-mode ->
+        │  ResolvedTemplate), reuse resolution, loop
+        │  unrolling, binding expansion, canonical emission
         ▼
 IR (canonical JSON, per workflow)               Desugarer.Desugar
         │  resolution, slots, types, cycles,

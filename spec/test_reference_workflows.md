@@ -29,7 +29,7 @@ credentials:
   resolver: ./hooks/get-token      # get_token(service): opaque user command, host-side
   services:
     agent-api:
-      mode: file                   # degraded raw-token mode: ro tmpfs file mount, shredded after run
+      mode: file                   # degraded raw-token mode: resolved host-side, streamed on the container's stdin into a /run/secrets tmpfs (0600), no host file
       # mode: proxy                # preferred: unauthenticated local endpoint, proxy injects auth
       # endpoint: http://token-proxy:8402
 

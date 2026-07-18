@@ -1,0 +1,4 @@
+endpoints:
+  endpoint-a:
+    tier: reported
+    fields: {input_tokens: tokens}

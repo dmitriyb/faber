@@ -1,0 +1,6 @@
+endpoints:
+  endpoint-a:
+    tier: probe
+    probe:
+      command: [./hooks/probe, --check]
+      threshold: 0.9

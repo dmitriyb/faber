@@ -1,0 +1,30 @@
+{
+  "ir_version": 1,
+  "workflow": "epic",
+  "nodes": [
+    {
+      "id": "epic/tasks",
+      "kind": "generate",
+      "gen": {
+        "source": "members",
+        "command": "./hooks/list-members",
+        "args": [
+          "${params.group}"
+        ],
+        "workflow": "task",
+        "bindings": {
+          "item": {
+            "kind": "item",
+            "field": "id"
+          },
+          "repo": {
+            "kind": "param",
+            "name": "repo"
+          }
+        }
+      },
+      "bindings": {}
+    }
+  ],
+  "edges": []
+}

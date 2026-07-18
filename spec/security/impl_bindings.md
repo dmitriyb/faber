@@ -17,24 +17,30 @@ type Binding interface {
 }
 
 type Contribution struct {
-    Args     []string // docker run flags, internally ordered, consumed verbatim
+    Args     []string          // docker run flags, internally ordered, consumed verbatim
+    Secrets  map[string]Secret // file-mode tokens (name→Secret); nil except the credentials binding
     Teardown func(ctx context.Context) error
 }
 
 type StepSpec struct { // the resolved slice of config one step needs
-    NodeID     string
-    Network    *config.NetworkDef
-    Remote     *config.RemoteDef
-    Identity   *config.IdentityDef // nil when the template declares none
-    Services   map[string]config.ServiceDef
-    Runtime    string            // "" = platform default
-    Repo       string            // resolved repo input; "" = repo-less step
-    ScratchDir string            // per-step private dir, 0700
+    NodeID       string
+    Network      *config.NetworkDef
+    Remote       *config.RemoteDef
+    Identity     *config.IdentityDef // nil when the template declares none
+    IdentityRole string              // resolved template's identity name; "" when none — the registry lookup key
+    Services     map[string]config.ServiceDef
+    Runtime      string              // "" = platform default
+    Repo         string              // resolved repo input; "" = repo-less step
+    ScratchDir   string              // per-step private dir, 0700
 }
 ```
 
 Env vars ride inside `Args` as `-e` pairs; mounts as `-v` pairs — one flat,
-ordered fragment, no separate merge step to introduce nondeterminism.
+ordered fragment, no separate merge step to introduce nondeterminism. The
+credentials binding's file mode also puts one `--tmpfs <ContainerSecretsDir>`
+in `Args` (once) and its resolved tokens in `Secrets`; the tokens themselves
+never enter `Args` — they leave the security module only as the encoded
+`Assembled.SecretsStdin` payload.
 
 ## Per-binding argv shapes
 
@@ -59,11 +65,20 @@ restated per binding.
   or `Remote == nil`. Pinned mode reads `host_key_file` at Prepare time
   (os.ReadFile, trimmed single line; empty or unreadable ⇒ error), so a
   bad key fails the step before launch, not inside the box.
-- **identity.Prepare** shells `ssh-agent -a <ScratchDir>/agent.sock`
-  through the exec adapter, loads the one key via the identity's resolver
-  seam, then lists keys: 0 ⇒ error, >1 ⇒ `slog.Warn` with fingerprints.
-  Teardown kills the agent PID and removes the socket directory,
-  independent errors joined with `errors.Join`.
+- **identity.Prepare** first resolves the key source via
+  `ResolveIdentity(ctx, reg, loc, step.IdentityRole, *step.Identity)` —
+  explicit path verbatim, else registry+locator (see
+  `impl_role_registry.md`); an empty inline key now triggers registry
+  resolution rather than an immediate error. It then shells
+  `ssh-agent -a <ScratchDir>/agent.sock` through the exec adapter, loads the
+  one resolved key, then lists keys: 0 ⇒ error, >1 ⇒ `slog.Warn` with
+  fingerprints. When resolution pinned a fingerprint (every branch but the
+  explicit path), it then asserts the agent holds that fingerprint and fails
+  closed otherwise — a mismatched pub/private pair is caught here, not at the
+  gate. Teardown kills the agent PID and removes the socket directory,
+  independent errors joined with `errors.Join`. Resolution runs before the
+  spawn, so a role that resolves to nothing fails without leaving an agent
+  behind.
 
 ## BindingSet (internal/security/set.go)
 
@@ -71,13 +86,15 @@ restated per binding.
 type BindingSet struct{ bindings []Binding } // fixed order, set at construction
 
 type Assembled struct {
-    Args     []string
-    Teardown func(ctx context.Context) error // reverse order, always all of them
+    Args        []string
+    SecretsStdin []byte // framed JSON payload for the container's stdin; nil = no file-mode secret
+    Teardown    func(ctx context.Context) error // reverse order, always all of them
 }
 
 func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, error) {
     var args []string
     var undo []func(context.Context) error
+    secrets := map[string]Secret{}
     for _, b := range s.bindings {
         c, err := b.Prepare(ctx, step)
         if err != nil {
@@ -85,24 +102,40 @@ func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, err
             return Assembled{}, fmt.Errorf("binding %s: %w", b.Name(), err)
         }
         args = append(args, c.Args...)
+        for name, tok := range c.Secrets { // only the credentials binding sets any
+            secrets[name] = tok
+        }
         if c.Teardown != nil {
             undo = append(undo, c.Teardown)
         }
     }
-    return Assembled{Args: args, Teardown: reverseJoin(undo)}, nil
+    var payload []byte
+    if len(secrets) > 0 {
+        var err error
+        if payload, err = encodeSecretsPayload(secrets); err != nil {
+            runReverse(ctx, undo)
+            return Assembled{}, fmt.Errorf("binding credentials: %w", err)
+        }
+    }
+    return Assembled{Args: args, SecretsStdin: payload, Teardown: reverseJoin(undo)}, nil
 }
 ```
 
 `runReverse`/`reverseJoin` iterate the undo stack last-to-first, call every
 function even when earlier ones fail, and join errors. Teardown uses a
 context detached from step cancellation (`context.WithoutCancel` + a short
-deadline) so a user abort still kills agents and shreds files.
+deadline) so a user abort still kills agents. File mode adds no teardown —
+its secrets live only in the container's tmpfs and die with the container —
+so nothing host-side is left to shred. `encodeSecretsPayload` (the sole
+`Secret.reveal()` caller) is defined in "Resolver and handle shapes".
 
 The constructor wires the fixed order — network, remote, identity,
 credentials, runtime — and the runtime "binding" is a trivial inline
 Binding emitting `--runtime=` or nothing. ContainerRunner receives
 `Assembled.Args` and splices the fragment unchanged between its own
 resource/mount flags and the image name; it never parses or reorders it.
+`Assembled.SecretsStdin` rides alongside into `RunSpec.StdinSecrets`, where
+infra streams it on the container's stdin.
 
 ## Determinism
 

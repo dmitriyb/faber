@@ -16,20 +16,42 @@ acceptance environment only.
 
 ## Scenarios
 
-1. **Golden argv.** A fully populated RunSpec (limits, both engine mounts,
-   three env keys, a representative binding fragment containing `--network`,
-   an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a `:ro` secret mount, and
-   `--runtime`) assembles to the golden argv byte-for-byte: fixed section
-   order, sorted env, the fragment contiguous and verbatim at its slot,
-   image then entry argv last.
+1. **Golden argv.** A fully populated RunSpec (limits, every engine mount kind —
+   a result bind rw, `:ro` hook + entry binds, a `:ro` `/faber/skills` bind, a
+   `/workspace` volume, a `/tmp` tmpfs — three env keys, a `StdinSecrets`
+   payload, a representative binding fragment containing
+   `--network`, an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a
+   `--tmpfs /run/secrets`, and `--runtime`) assembles to the golden argv
+   byte-for-byte: fixed section order, `-i` immediately after `--rm` (because
+   `StdinSecrets` is set), a bind as `-v Host:Container[:ro]`, a volume as bare
+   `-v Container`, a tmpfs as `--tmpfs Container`, sorted env, the fragment
+   contiguous and verbatim at its slot, image then entry argv last. The same
+   spec with `StdinSecrets` empty assembles identically except no `-i` appears.
 2. **Argv discipline (property).** Over randomized RunSpecs (fuzzed env,
-   mounts, fragments), the assembled argv never contains a docker-socket
-   mount, `--privileged`, `--network=host`, or any `-v` not present in the
-   spec's mounts or fragment; `--rm` and `--name` are always present;
-   declared memory/cpus always surface as flags, absent resources emit none.
-3. **Tag determinism.** Same packages shuffled → identical tag; one package
-   added, one overlay byte changed, or the pin rev bumped → different tag;
-   the tag is computed with zero adapter calls (pure, no nix).
+   mounts, fragments, `StdinSecrets`), the assembled argv never contains a
+   docker-socket mount, `--privileged`, `--user`, `--network=host`, or any
+   `-v`/`--tmpfs` not present in the spec's mounts or fragment; `--rm` and
+   `--name` are always present; declared memory/cpus always surface as flags,
+   absent resources emit none; `-i` appears exactly when `StdinSecrets` is
+   non-empty and never otherwise, and the token bytes never appear anywhere in
+   the argv. A RunSpec with no skills mount emits no `/faber/skills` `-v`; one
+   with it emits the bind exactly once, always `:ro`.
+3. **Tag determinism and pin resolution.** Same packages shuffled → identical
+   tag; one package added, one overlay byte changed, or the default pin bumped →
+   different tag. Two builds identical except for a per-build `pin` produce
+   **different** tags (the resolved pin folds into the hash); a build with **no**
+   `pin` resolves to the compiled-in `defaultPin` and produces the **same** tag as
+   today (goldens byte-stable), and its rendered expression fetches the default
+   snapshot. The tag is computed with zero adapter calls (pure, no nix).
+3b. **Run-time tag equals build-time tag across the `imageTagger` seam.** For a
+   **pinned** toolset, the tag `ImageBuilder.ImageTag` computes from the resolved
+   `BuildDef` (the `faber build` path) equals the tag recomputed from the derived
+   `ResolvedTemplate` via the `imageTagger` reconstruction
+   (`BuildDef{Packages, Overlay, Pin: template.Pin}` — the run/resume path). This is
+   the regression that catches a dropped `template.Pin`: without the pin the
+   reconstruction falls back to `defaultPin` and the two tags diverge. A **pin-less**
+   template's two tags likewise match (nil → default both times) — necessary but not
+   sufficient, which is why the pinned case is the one that must be asserted.
 4. **Build skip and single-flight.** Fake docker reports the tag exists →
    `Build` returns the tag with no `NixClient.Build` call. Two goroutines
    building the same tag through the per-tag lock produce exactly one nix
@@ -61,6 +83,13 @@ acceptance environment only.
 10. **Non-zero exit is data.** Entry `["false"]` (fake and integration):
     `Run` returns `err == nil`, `ExitCode == 1`, output attached — the
     classification boundary belongs to the failure module.
+11. **Stdin secrets delivery.** With a `StdinSecrets` payload, the fake
+    `DockerClient.ContainerRun` records a non-nil stdin reader whose full
+    contents equal the payload bytes and observes EOF; the payload is never
+    logged and never appears in the recorded argv. With empty `StdinSecrets`,
+    the recorded stdin reader is nil and no `-i` is in the argv. (Integration:
+    entry `["cat", "/dev/stdin"]` echoes the exact payload bytes back through
+    captured output, proving the byte stream reached the container intact.)
 
 ## Edge cases
 

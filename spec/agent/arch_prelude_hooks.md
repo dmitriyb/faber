@@ -12,7 +12,8 @@ their postcondition: the context bundle.
 
 ## Inputs: the environment
 
-A hook inherits the box environment as assembled by phases 1–5:
+A hook inherits the box environment as assembled by the setup phases
+(env-contract through signing):
 
 - `FABER_INPUT_<SLOT>` for every bound input slot, values stringified per the
   slot's declared type — this is how the step's typed inputs reach user code.
@@ -29,7 +30,9 @@ invoked by faber or by hand inside an interactive recovery shell.
 
 ## Output: the context bundle
 
-By the time the prelude exits, `$FABER_BUNDLE_DIR` must contain:
+`$FABER_BUNDLE_DIR` is a per-container tmpfs (RAM), writable by the run user and
+discarded on exit — the bundle is regenerated every run, never persisted. By the
+time the prelude exits, it must contain:
 
 - `CONTEXT.md` — the prompt body handed verbatim to the agent. Mandatory.
 - `bundle.env` — optional machine-readable sidecar: line-oriented

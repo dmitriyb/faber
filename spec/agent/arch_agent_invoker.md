@@ -2,7 +2,7 @@
 
 ## What it is
 
-Phase 8 of the box: exactly one headless invocation of the agent CLI from the
+Phase 9 of the box: exactly one headless invocation of the agent CLI from the
 template's pinned package set. Everything before it is deterministic setup;
 everything after it is deterministic extraction; this is the only
 nondeterministic phase, and it is atomic — there is no resuming into an

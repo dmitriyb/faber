@@ -9,7 +9,7 @@ type DockerClient interface {
     ImageExists(ctx context.Context, tag string) (bool, error)
     Load(ctx context.Context, tarball string) (string, error) // returns loaded tag
     NetworkExists(ctx context.Context, name string) (bool, error)
-    ContainerRun(ctx context.Context, args []string, output io.Writer) (int, error)
+    ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error)
     Kill(ctx context.Context, name string) error
 }
 
@@ -95,6 +95,13 @@ command or wedged CLI cannot outlive its step. `ContainerRun` is the exception
 handled one level up: killing the docker *client* process detaches rather than
 stops the container, so ContainerRunner pairs cancellation with an explicit
 `Kill(ctx2, name)` on a fresh short-deadline context.
+
+When `stdin != nil`, `ContainerRun` wires it to the docker client's standard
+input (the caller has already put `-i` in `args`), copies it to EOF, and closes
+the pipe — a clean EOF the box reads as end-of-payload. `stdin == nil` leaves
+stdin unattached, unchanged from the no-secrets path. The stdin bytes are a
+potential credential, so they are never logged here, exactly like
+`CommandRunner` stdout.
 
 ## Fakes
 

@@ -7,7 +7,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Fixed box phase order",
-      "description": "Every agent step executes the same internal sequence: environment setup (delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent, then result emission and verification. The order is engine-owned and not configurable; there is no in-container DAG."
+      "description": "Every agent step executes the same internal sequence: environment setup (an agent-specific skills-link phase when the template declares one, delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent, then result emission and verification. The order is engine-owned and not configurable; there is no in-container DAG."
     },
     {
       "id": "b880aa49b3b9",
@@ -49,7 +49,7 @@
     {
       "id": "7290820d380e",
       "name": "PhaseSequencer",
-      "description": "The in-container entry program that owns the fixed phase order: validates the step's env contract, applies delegated credentials and host-key policy, clones from the gateway remote, configures commit signing from the forwarded agent, then drives context -> prelude -> agent -> result with fail-stop between phases.",
+      "description": "The in-container entry program that owns the fixed phase order: chowns the writable mounts (including the /run/secrets tmpfs when present) and drops to the run user, validates the step's env contract, materializes file-mode secrets from the stdin payload into /run/secrets and exports them to env, applies host-key policy, clones from the gateway remote, configures commit signing from the forwarded agent, then drives context -> prelude -> agent -> result with fail-stop between phases.",
       "content": "arch_phase_sequencer.md",
       "implements": ["93ba0858d75f"],
       "uses": ["c7c205f95b84", "53965d3ef136", "17c51bae5f80"]

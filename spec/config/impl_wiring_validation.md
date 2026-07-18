@@ -12,6 +12,17 @@ func CheckRunParams(wf WorkflowDef, supplied map[string]string) (Params, error)
 `CheckWiring` runs at `faber validate` (and again, cheaply, at `run` entry since
 `run` embeds validate). `CheckRunParams` runs only at `run`/`resume` entry.
 
+The library cross-references introduced by the config redesign
+(`image`/`skill`/`skills`/`hooks`/`identity` name resolution, duplicate-name and
+dual-mode exclusivity, include cycles) — and the per-image pin's
+both-fields-or-neither completeness, empty-pin normalization, and per-field charset
+validation — are resolved earlier, at Loader/assembly time, so `CheckWiring` sees a
+fully-resolved IR and needs no new pass. Its input
+`*Config` is the assembled config; `outputs`/`inputs` are read from the already
+resolved `ResolvedTemplate`s carried on the nodes, so the tool-subset check reads
+`template.Build.Packages` regardless of whether the toolset arrived via `image:`
+or inline `build:`.
+
 ## Pass structure
 
 One index-building pass, then independent check passes appending to a shared

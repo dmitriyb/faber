@@ -43,6 +43,39 @@ param checking.
 8. **Resume guard.** `faber resume <id>` after the config changed (different IR
    hash) refuses with the mismatch message; `--fresh` proceeds.
 
+## Library-reference and dual-mode scenarios
+
+9. **Dangling library refs.** Each fails `faber validate` with exit 1 and its
+   field-pathed error: `template.image` naming an undeclared image; a
+   `template.skills[*]` naming an undeclared skill; a bare `hooks.context` naming
+   an undeclared hook (distinguished from a path because it has no separator);
+   `identity` naming an undeclared identity. Near-miss suggestions where distance
+   ≤ 2.
+10. **Primary skill — named mode only.** In named mode, `skill: review` with
+    `skills: [implement]` fails: the activated skill must be a member of the
+    delivered set. But `skill: review` with **no `skills:` library** (or with an
+    inline `skills: {dir, link}`) is **valid** — `skill` is then a free-form prompt
+    token, not a library reference, so no membership or existence check fires. This
+    is the case every current config hits and it must keep passing `faber validate`.
+11. **Dual-mode conflict.** A template setting both `image:` and `build:` fails;
+    both top-level `identity:` and `run.identity:` fails; `skills_link:` alongside
+    an inline `skills: {dir, link}` fails — each a field-pathed exclusivity error.
+12. **Assembly errors — collected vs hard stop.** A duplicate library key across
+    two included files and a substrate key on a non-root included file are
+    **recorded during Assemble and collected into the `faber validate` report**
+    (exit 1) alongside every schema error — sorted, no first-error truncation. An
+    include cycle and an unreadable/unparseable included file instead **hard-stop**
+    Assemble (exit 1) with a single cycle/parse message and no collected report,
+    because neither can yield a `Config` to validate.
+13. **Unsafe path-component name.** A config whose `skills` library declares a key
+    like `"../../etc/x"` and whose `template.skills[*]` references it fails `faber
+    validate` (exit 1): both the library key (`skills."../../etc/x"`) and the
+    reference (`templates.box.skills[0]`) report the safe-identifier violation,
+    collected in one report — the escaping name is rejected at validate, never
+    joined into a stage path mid-run. The staging seam re-checks the same
+    discipline (belt-and-suspenders) so a bypassed validation still cannot write
+    outside the per-attempt tree.
+
 ## Edge cases
 
 - Unknown `--param name=v` (not in params interface): rejected, listing declared

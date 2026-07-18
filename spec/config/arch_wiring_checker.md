@@ -7,6 +7,31 @@ a run could hit is surfaced here, at `faber validate`, against the desugared IR.
 The design's central promise — a reference *is* the edge — is only safe because
 this component checks every edge before anything executes.
 
+### Division of labor with the Loader (library references)
+
+The config redesign's library cross-references — `template.image ∈ images`,
+`template.hooks.* ∈ hooks`, `template.identity ∈ identities`, and (in named-skills
+mode only) `template.skills[*] ∈ skills` with `template.skill ∈ template.skills` —
+plus dual-mode exclusivity, are **name-level** checks resolvable against the
+assembled `Config` alone, so they belong to the Loader (see `arch_loader.md`) and
+run *before* desugaring. The optional per-image nixpkgs pin's both-fields-or-neither
+completeness (`images.<name>.pin` / inline `build.pin` requires both `rev` and
+`sha256`), its fully-empty-`{}`→absent normalization, and its per-field charset
+validation (`rev`/`sha256` restricted to the splice-safe charset, since they are
+user-supplied splice material) are likewise Loader schema checks — within-node
+field rules like inline-skills pairing, resolvable against the assembled `Config` —
+not dataflow checks, so the WiringChecker never sees them. The duplicate-name-across-includes and substrate-placement
+violations are recorded at Assemble and merged into the Loader's collected report;
+an include cycle (or unreadable file) hard-stops Assemble before any of this. (When
+`skills` is inline or absent, `template.skill` is a free-form prompt token, checked
+by no one.) By the time the IR exists, every `TemplateDef` has been
+resolved into a `ResolvedTemplate` with no dangling names left. The WiringChecker
+therefore operates on already-resolved templates and keeps its existing job: the
+*typed dataflow* over the IR (`step.use` edges, slot/type compatibility, cycles
+over data+ordering edges, conditions, tool-subset). The two together are the
+"resolve + check every cross-reference" contract; nothing about the checks below
+changed.
+
 ## Checks
 
 Run in order, all violations collected:

@@ -15,9 +15,26 @@ writes to the terminal directly.
 | `faber build [--config path] [--template name]` | Load -> Validate -> ImageBuilder per template | images built and tagged |
 | `faber run <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
 | `faber resume <run-id> [--fresh] [--interactive <step-id>]` | journal load -> recovery mode dispatch (failure module) | as `run` |
+| `faber add-key --role <name> --fingerprint SHA256:… [--comment <c>] [--force]` | security.RoleRegistry load -> AddKey -> atomic save | the role points at the fingerprint (upsert or verified no-op) |
+| `faber list-keys` | security.RoleRegistry load -> print | the registry was read and printed |
 
-Flags shared by all: `--config` (default `orchestrator.yaml`), `--log-level`
-(default `info`), `--log-format` (auto/json/text).
+`add-key` and `list-keys` manage the global `role → fingerprint` registry
+(`roles.json` under faber's config home) the identity binding resolves
+against; they take **none** of the shared config flags below (they touch no
+`orchestrator.yaml`), only `--log-level`/`--log-format`. faber never writes
+key material — only the fingerprint plus an optional label. The subcommands
+are thin dispatch; the store, validation, atomic write, idempotency, and
+`--force` refusal live in the security module (`spec/security/arch_role_registry.md`,
+`impl_role_registry.md`). A malformed `--fingerprint` or `--role`, or a
+missing required flag, is a usage error (exit 2); a refusal to re-point an
+existing role without `--force`, or an IO error, is exit 1.
+
+Flags shared by validate/build/run/resume: `--config` (default `orchestrator.yaml`), `--log-level`
+(default `info`), `--log-format` (auto/json/text). `--config` names the **root
+project file**; `Load` transitively pulls its `include:` closure and merges the
+component libraries before validation (see `arch_loader.md`). A single-file config
+with no `include:` behaves exactly as before, so the default and every existing
+invocation are unchanged.
 
 Exit codes: 0 success; 1 validation or run failure (details already reported);
 2 usage error. `validate` reports *all* errors before exiting — the multi-error

@@ -17,6 +17,8 @@ func run(args []string, stderr io.Writer) int {
     case "build":    return cmdBuild(rest, stderr)
     case "run":      return cmdRun(rest, stderr)
     case "resume":   return cmdResume(rest, stderr)
+    case "add-key":  return cmdAddKey(rest, stderr)
+    case "list-keys": return cmdListKeys(rest, stderr)
     default: usage(stderr); return 2
     }
 }
@@ -64,6 +66,34 @@ The journal header records config hash, workflow, params, and IR hash; resume
 refuses (with a clear message) if the current config desugars to a different IR
 hash unless `--fresh` is given — silently mixing journals across configs is the
 one mistake this must prevent.
+
+### cmdAddKey / cmdListKeys
+
+```
+cmdAddKey:
+  flags: --role, --fingerprint, --comment, --force  (no --config)
+  --role and --fingerprint required (missing ⇒ usage error, exit 2)
+  reg  := security.LoadRegistry(security.RegistryPath())
+  reg, changed, err := security.AddKey(reg, role, fingerprint, comment, force)
+      err is a validation error (bad fingerprint/role) ⇒ exit 2
+      err is a refusal (role re-point without --force) ⇒ exit 1
+  if changed { security.SaveRegistry(path, reg) }   # atomic, 0600; dir lazily 0700
+  exit 0
+
+cmdListKeys:
+  flags: (none but the log flags; no --config)
+  reg := security.LoadRegistry(security.RegistryPath())   # missing file ⇒ empty
+  print role/fingerprint/comment, sorted by role, to stdout
+  exit 0
+```
+
+Both are pure dispatch: parse flags, call the security-module entry points,
+map the returned error kind to an exit code. They read and mutate only the
+registry file, never `orchestrator.yaml`, and never touch key material —
+the CLI only ever handles a fingerprint string and an optional label. The
+store, validation, atomic write, and idempotency semantics are the security
+module's (`spec/security/impl_role_registry.md`); the CLI adds nothing but
+flag wiring and exit-code mapping.
 
 ## Logging (internal/config/logging.go)
 
