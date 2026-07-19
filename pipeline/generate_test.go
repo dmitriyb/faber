@@ -3,6 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -223,7 +224,10 @@ func TestGenerate_ContractViolations(t *testing.T) {
 			map[string]any{"id": "I-2", "deps": []string{"I-1"}},
 		), nil, nil, "dependency cycle"},
 		{"command failure", nil, errors.New("exit 3"), nil, "data-source command failed"},
-		{"bracket in item id", itemsJSON(map[string]any{"id": "a]/b"}), nil, nil, "must not contain"},
+		{"bracket in item id", itemsJSON(map[string]any{"id": "a]/b"}), nil, nil, "must match"},
+		{"quote in item id", itemsJSON(map[string]any{"id": `a"b`}), nil, nil, "must match"},
+		{"newline in item id", itemsJSON(map[string]any{"id": "a\nb"}), nil, nil, "must match"},
+		{"expansion over the node ceiling", oversizedItemsJSON(), nil, nil, "over the 10000-node ceiling"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -363,4 +367,14 @@ func TestGenerate_SelfDepIgnored(t *testing.T) {
 		"w/gen[I-1]/step": StateOK,
 		"w/after":         StateOK,
 	})
+}
+
+// oversizedItemsJSON renders an item document whose expansion would exceed
+// maxExpandedNodes (the target workflow has >= 1 node per instance).
+func oversizedItemsJSON() []byte {
+	items := make([]map[string]any, maxExpandedNodes+1)
+	for i := range items {
+		items[i] = map[string]any{"id": fmt.Sprintf("i%d", i)}
+	}
+	return itemsJSON(items...)
 }

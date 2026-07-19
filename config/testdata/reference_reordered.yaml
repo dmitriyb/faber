@@ -51,6 +51,7 @@ templates:
     output:
       merged: {type: bool, required: true}
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: merger
     skill: merge
     build:
@@ -59,6 +60,7 @@ templates:
   fix:
     skill: fix
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: implementer
     inputs:
       pr:   {required: true, type: int}
@@ -81,6 +83,7 @@ templates:
       context: ./hooks/fetch-change
     skill: review
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: reviewer
     build:
       packages: [git, openssh, go, agent-cli]
@@ -99,6 +102,7 @@ templates:
       context: ./hooks/gather-context
     skill: implement
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       resources: {cpus: 4, memory: 8g}
       identity: implementer
     build:

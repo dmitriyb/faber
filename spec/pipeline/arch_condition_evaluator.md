@@ -11,16 +11,23 @@ per-node question — run or skip.
 
 ## Compilation (validate time)
 
-`CompileCondition(expr, refs)` builds a cel-go environment declaring exactly
-two variables — `steps` and `params` — and compiles the expression. `refs`
-carries the output schema of every step the expression may read and the
-workflow's param declarations; a post-compile walk of the checked AST verifies
-each `steps.X.field` access against X's declared output schema (field exists,
-enum comparisons use declared enum values) and that the expression's result
-type is `bool`. Referenced steps must be predecessors of the condition's node —
-the Desugarer guarantees this by construction (a `when:` reference *is* an
-edge), so by the time an expression evaluates, every step it reads has settled.
-Compiled programs are retained keyed by node ID; nothing is compiled mid-run.
+`CompileCondition(expr)` builds a cel-go environment declaring the condition
+variables (`steps` and `params` as dyn maps, `item`) and compiles the
+expression. The WiringChecker then walks the checked AST (config's
+`checkCondRefs`) and enforces the canonical reference discipline: every use
+of `steps` must be exactly the desugarer's rewritten
+`steps["<node-id>"].<field>` form with the id in the condition's derived dep
+set (a hand-authored index compiles but carries no edge, so it is rejected);
+every use of `params` must name a param the enclosing scope declares; `item`
+never appears (the run-time activation binds only steps and params). A
+separate pass over the canonical form checks each referenced field against
+the dep's declared output schema (field exists, with a did-you-mean hint).
+Referenced steps must be predecessors of the condition's node — the Desugarer
+guarantees this by construction (a `when:` reference *is* an edge), so by the
+time an expression evaluates, every step it reads has settled. Compiled
+programs are retained keyed by node ID; nothing is compiled mid-run. Result
+typing stays a run-time check: the maps are dyn-typed, so a non-bool result
+surfaces as a structured condition failure at evaluation, not at compile.
 
 ## The activation (run time)
 

@@ -216,10 +216,35 @@ func (d *desugarer) emitSub(b *builder, wf WorkflowDef, s StepDef, lvl *level, s
 		OnFailure: s.OnFailure,
 	}
 	node.Bindings = d.expandBindings(b, s.With, lvl, sp+".with", nodeID, false)
+	d.bakeScopeDefaults(node.Bindings, s.Use, s.With, sp)
 	node.When = d.stepCond(b, s.When, lvl, sp, gates)
 	d.emitDependsOn(b, s, lvl, sp, nodeID)
 	b.addNode(node)
 	d.nodeCount++
+}
+
+// bakeScopeDefaults adds a literal binding for every target-workflow param
+// that declares a default and is not bound in with:, so sub-workflow and
+// generate-instance scopes materialize declared defaults exactly like the
+// run entry's CheckParams does for the root scope — a condition inside the
+// scope can rely on every defaulted param being present.
+func (d *desugarer) bakeScopeDefaults(bindings map[string]BindingDesc, target string, with map[string]any, sp string) {
+	decl := d.cfg.Workflows[target].Params
+	for _, name := range sortedKeys(decl) {
+		p := decl[name]
+		if p.Default == nil {
+			continue
+		}
+		if _, bound := with[name]; bound {
+			continue
+		}
+		def, err := normalizeValue(p.Default)
+		if err != nil {
+			d.addf(sp+".with."+name, "invalid default for param %q: %v", name, err)
+			continue
+		}
+		bindings[name] = BindingDesc{Kind: BindLiteral, Value: def, Type: p.Type}
+	}
 }
 
 func (d *desugarer) emitGenerate(b *builder, wf WorkflowDef, s StepDef, lvl *level, sp string, gates []condPiece) {
@@ -247,6 +272,7 @@ func (d *desugarer) emitGenerate(b *builder, wf WorkflowDef, s StepDef, lvl *lev
 		Retry:     s.Retry,
 		OnFailure: s.OnFailure,
 	}
+	d.bakeScopeDefaults(node.Gen.Bindings, g.Workflow, g.With, sp+".generate")
 	node.When = d.stepCond(b, s.When, lvl, sp, gates)
 	d.emitDependsOn(b, s, lvl, sp, nodeID)
 	b.addNode(node)

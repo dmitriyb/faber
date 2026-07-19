@@ -83,7 +83,9 @@ func TestReport_GoldenTaskLoop(t *testing.T) {
 }
 
 // Verifies 990c3d8a7888: the exhausted-loop run's failure block renders the
-// structured error and the re-entry command, byte for byte.
+// structured error byte for byte — and, because a loop exhaustion preserves
+// no handoff state, offers no re-entry command (interactive mode would only
+// refuse it).
 func TestReport_GoldenLoopExhaustion(t *testing.T) {
 	ir := loadReferenceIR(t, "reference_task.ir.json")
 	h := newHarness(t)
@@ -99,11 +101,28 @@ func TestReport_GoldenLoopExhaustion(t *testing.T) {
 		t.Fatalf("want a failed-run error")
 	}
 	text, jsonOut := renderStable(t, h, ir, "run-test")
-	if !strings.Contains(text, "re-enter: faber resume run-test --interactive task/review") {
-		t.Errorf("failure block lacks the re-entry command:\n%s", text)
+	if strings.Contains(text, "re-enter:") {
+		t.Errorf("a handoff-less failure must not suggest re-entry (interactive would refuse):\n%s", text)
 	}
 	checkGolden(t, "report_exhaustion.txt", text)
 	checkGolden(t, "report_exhaustion.json", jsonOut)
+}
+
+// Verifies 990c3d8a7888 / L-P3c: the re-entry suggestion appears exactly when
+// the failed record preserved handoff state to reconstruct from.
+func TestReport_ReentrySuggestionGatedOnHandoff(t *testing.T) {
+	ir := testIR("main", []config.Node{agentNode("task/a", "out")}, nil)
+	h := newHarness(t)
+	withHandoff := failedResult("agent-failed", "died")
+	withHandoff.Error.Handoff = "boxes/a/attempt-1/result/handoff.json"
+	h.boxes.script("task/a", withHandoff)
+	if err := h.run(t, ir, config.RunOptions{}); err == nil {
+		t.Fatalf("want a failed-run error")
+	}
+	text, _ := renderStable(t, h, ir, "run-test")
+	if !strings.Contains(text, "re-enter: faber resume run-test --interactive task/a") {
+		t.Errorf("a failure with handoff state must suggest re-entry:\n%s", text)
+	}
 }
 
 // Verifies 990c3d8a7888: the fan-out cascade run's rollups render byte for
@@ -284,4 +303,56 @@ func reportOf(t *testing.T, h *harness, ir *config.IR) *RunReport {
 		t.Fatalf("report: %v", err)
 	}
 	return report
+}
+
+// Verifies 990c3d8a7888 (TB-F2): box-derived text is sanitized on the human
+// Text path — control bytes (ANSI escapes, newlines that would spoof report
+// lines) never reach the operator's terminal; the JSON path is
+// encoding-escaped by construction.
+func TestReport_TerminalSanitized(t *testing.T) {
+	ir := testIR("main", []config.Node{agentNode("task/a", "out")}, nil)
+	h := newHarness(t)
+	hostile := failedResult("agent-failed", "\x1b]0;pwned\x07cleared\x1b[2J\nok fake/line injected")
+	h.boxes.script("task/a", hostile)
+	if err := h.run(t, ir, config.RunOptions{}); err == nil {
+		t.Fatal("want a failed-run error")
+	}
+	text := h.text.String()
+	for _, banned := range []string{"\x1b", "\x07", "\nok fake/line"} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("report text carries unsanitized control bytes %q:\n%q", banned, text)
+		}
+	}
+	if !strings.Contains(text, "cleared") {
+		t.Fatalf("printable content must survive sanitization:\n%s", text)
+	}
+
+	// Payload values on ok lines are sanitized too.
+	h2 := newHarness(t)
+	h2.boxes.script("task/a", okPayload(map[string]any{"out": "x\x1b[31mred"}))
+	if err := h2.run(t, ir, config.RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(h2.text.String(), "\x1b") {
+		t.Fatalf("ok-line payload values carry unsanitized escapes:\n%q", h2.text.String())
+	}
+}
+
+// Verifies 990c3d8a7888 (F1-review): sanitizeTerm is self-sufficient — a raw
+// invalid-UTF-8 C1 byte (0x9b, a bare CSI introducer) is neutralized even
+// without an upstream JSON round-trip, so the fast path cannot pass raw
+// control bytes through, while ordinary printable text is untouched.
+func TestSanitizeTermRawControlBytes(t *testing.T) {
+	for _, in := range []string{"\x9b2Kraw-csi", "esc\x1b[31m", "bel\x07", "line1\nline2"} {
+		out := sanitizeTerm(in)
+		for i := 0; i < len(out); i++ {
+			b := out[i]
+			if b == 0x1b || b == 0x07 || b == 0x9b || b == '\n' {
+				t.Errorf("sanitizeTerm(%q) still carries control byte %#x: %q", in, b, out)
+			}
+		}
+	}
+	if got := sanitizeTerm("plain text 123"); got != "plain text 123" {
+		t.Errorf("printable text mangled: %q", got)
+	}
 }

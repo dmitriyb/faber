@@ -55,6 +55,7 @@ func TestAssembleIncludeMerge(t *testing.T) {
 templates:
   box:
     image: base
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
@@ -81,6 +82,7 @@ version: 1
 templates:
   box:
     build: {packages: [git]}
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}

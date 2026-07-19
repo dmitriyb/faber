@@ -27,6 +27,7 @@ templates:
       packages: [git, openssh, go, gopls, agent-cli]
       overlay: ./nix/overlay.nix
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: implementer
       resources: {memory: 8g, cpus: 4}
     skill: implement
@@ -46,6 +47,7 @@ templates:
       packages: [git, openssh, go, agent-cli]
       overlay: ./nix/overlay.nix
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: reviewer
     skill: review
     hooks:
@@ -61,6 +63,7 @@ templates:
       packages: [git, openssh, go, gopls, agent-cli]
       overlay: ./nix/overlay.nix
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: implementer
     skill: fix
     hooks:
@@ -75,6 +78,7 @@ templates:
     build:
       packages: [git, openssh]
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: merger
     skill: merge
     inputs:

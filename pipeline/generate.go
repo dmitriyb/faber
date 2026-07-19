@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -94,6 +95,14 @@ func (x *expander) expand(ctx context.Context, n *config.Node, env *scopeEnv) ([
 	}
 	if len(items) == 0 {
 		return nil, nil // no-op: the node settles ok with zero instances
+	}
+	// The expansion ceiling mirrors desugar's maxUnrolledNodes: a data source
+	// is opaque user output, and an absurd item count must be a contract
+	// error, not an unbounded graph splice.
+	if total := len(items) * countIRNodes(target); total > maxExpandedNodes {
+		return nil, &contractError{node: n.ID, msg: fmt.Sprintf(
+			"expansion too large: %d items × %d nodes per instance = %d nodes, over the %d-node ceiling",
+			len(items), countIRNodes(target), total, maxExpandedNodes)}
 	}
 
 	inSet := map[string]bool{}
@@ -211,21 +220,42 @@ func parseItems(stdout []byte) ([]item, error) {
 	return items, nil
 }
 
-// validateItems enforces the item contract: non-empty unique ids, every
-// ${item.field} the binding template references present on every item, and
-// the in-set dep edges acyclic — a cyclic item set can never splice into the
-// DAG, so it is rejected naming the cycle before any instance exists.
+// maxExpandedNodes is the run-time expansion ceiling, the symmetric twin of
+// the desugarer's maxUnrolledNodes: items × per-instance nodes above it is a
+// contract error before any instance exists.
+const maxExpandedNodes = 10000
+
+// countIRNodes counts one IR's nodes including inlined sub-workflow graphs.
+func countIRNodes(ir *config.IR) int {
+	n := len(ir.Nodes)
+	for i := range ir.Nodes {
+		if ir.Nodes[i].Sub != nil {
+			n += countIRNodes(ir.Nodes[i].Sub)
+		}
+	}
+	return n
+}
+
+// itemIDPattern is the item-id grammar: ids embed into instance node ids as
+// "<gen>[<id>]/..." and into the textual CEL rename of the canonical
+// steps["<node-id>"] form, so the reserved namespacing characters ('[', ']',
+// '/', '@'), quotes, backslashes, and control bytes are all contract
+// violations — the same closed grammar step ids obey.
+var itemIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// validateItems enforces the item contract: non-empty unique ids in the
+// closed grammar, every ${item.field} the binding template references
+// present on every item, and the in-set dep edges acyclic — a cyclic item
+// set can never splice into the DAG, so it is rejected naming the cycle
+// before any instance exists.
 func validateItems(items []item, bindings map[string]config.BindingDesc) error {
 	seen := map[string]int{}
 	for i, it := range items {
 		if it.ID == "" {
 			return fmt.Errorf("items[%d]: empty id", i)
 		}
-		// Item ids embed into instance node ids as "<gen>[<id>]/..."; brackets
-		// inside an id would break that grammar (and the report's rollup
-		// grouping), so they are a contract violation.
-		if strings.ContainsAny(it.ID, "[]") {
-			return fmt.Errorf("items[%d]: item id %q must not contain '[' or ']'", i, it.ID)
+		if !itemIDPattern.MatchString(it.ID) {
+			return fmt.Errorf("items[%d]: item id %q must match %s (ids embed into node ids and CEL keys)", i, it.ID, itemIDPattern)
 		}
 		if prev, dup := seen[it.ID]; dup {
 			return fmt.Errorf("items[%d]: duplicate id %q (first at items[%d])", i, it.ID, prev)

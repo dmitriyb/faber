@@ -52,6 +52,9 @@
           "memory": "8g",
           "cpus": 4
         },
+        "env": {
+          "FABER_AGENT_CLI": "agent-cli"
+        },
         "skill": "implement",
         "hooks": {
           "context": "./hooks/gather-context",
@@ -101,6 +104,9 @@
         ],
         "identity": "merger",
         "resources": {},
+        "env": {
+          "FABER_AGENT_CLI": "agent-cli"
+        },
         "skill": "merge",
         "hooks": {},
         "inputs": {
@@ -169,6 +175,9 @@
         "overlay": "./nix/overlay.nix",
         "identity": "implementer",
         "resources": {},
+        "env": {
+          "FABER_AGENT_CLI": "agent-cli"
+        },
         "skill": "fix",
         "hooks": {
           "context": "./hooks/fetch-pr"
@@ -219,6 +228,9 @@
         "overlay": "./nix/overlay.nix",
         "identity": "reviewer",
         "resources": {},
+        "env": {
+          "FABER_AGENT_CLI": "agent-cli"
+        },
         "skill": "review",
         "hooks": {
           "context": "./hooks/fetch-pr"
@@ -268,6 +280,9 @@
         "overlay": "./nix/overlay.nix",
         "identity": "implementer",
         "resources": {},
+        "env": {
+          "FABER_AGENT_CLI": "agent-cli"
+        },
         "skill": "fix",
         "hooks": {
           "context": "./hooks/fetch-pr"
@@ -319,6 +334,9 @@
         "overlay": "./nix/overlay.nix",
         "identity": "reviewer",
         "resources": {},
+        "env": {
+          "FABER_AGENT_CLI": "agent-cli"
+        },
         "skill": "review",
         "hooks": {
           "context": "./hooks/fetch-pr"
@@ -374,6 +392,9 @@
         "overlay": "./nix/overlay.nix",
         "identity": "implementer",
         "resources": {},
+        "env": {
+          "FABER_AGENT_CLI": "agent-cli"
+        },
         "skill": "fix",
         "hooks": {
           "context": "./hooks/fetch-pr"
@@ -425,6 +446,9 @@
         "overlay": "./nix/overlay.nix",
         "identity": "reviewer",
         "resources": {},
+        "env": {
+          "FABER_AGENT_CLI": "agent-cli"
+        },
         "skill": "review",
         "hooks": {
           "context": "./hooks/fetch-pr"

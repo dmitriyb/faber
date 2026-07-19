@@ -128,6 +128,27 @@ Structural, cross-reference, and vocabulary rules — all collected, none fatal-
   only inside generate bindings; `${sources.*}` only as a generate source.
 - Enum values: `credentials.services.*.mode` in {proxy, file, helper}; remote has
   exactly one of `host_key_file` / `tofu: true`; resource strings parse.
+- **Identifier grammars.** Step ids match `[A-Za-z][A-Za-z0-9_-]*` — the
+  node-id namespacing characters (`/`, `@`, `[`, `]`, `"`) are reserved, so an
+  authored id can never collide with a desugared one, and the grammar is
+  reference-total (no dots, letter-first) so every declared id is
+  addressable from `${steps...}` bindings and CEL conditions alike. Slot and param names
+  match `[A-Za-z][A-Za-z0-9_-]*` and must be **env-token disjoint** per
+  declaration map: the canonical `EnvToken` mapping (uppercase, `-`→`_`, the
+  single source the box contract's `SlotToken` delegates to) is lossy, and two
+  names sharing a token would silently misbind one value to the other's
+  `FABER_INPUT_*` variable. Credential service names must be env-token disjoint and must not export an
+  engine- or runner-owned variable (`PATH`, `HOME`, `GIT_SSH_COMMAND`,
+  `SSH_AUTH_SOCK`, the `FABER_` namespace) — the box refuses the same names
+  at its secrets phase as defense in depth.
+- **Run-contract mirrors.** The statically checkable half of the run-spec
+  assembler's refusals: `run.env.FABER_AGENT_CLI` must name the agent CLI
+  (faber defaults no vendor), template env may not claim engine- or
+  security-owned names (`EngineOwnedEnv`, the shared rule), and template
+  volumes may not overlap the reserved container paths
+  (`ReservedContainerPaths` — asserted in agreement with the run-spec
+  assembler's own list by a cross-package test). A template that could not
+  launch any box fails `faber validate`, not each step at run time.
 
 Every violation is `fmt.Errorf("workflows.epic.steps[0].with.repo: <reason>")` —
 the field path is the contract, asserted by tests. Errors aggregate via

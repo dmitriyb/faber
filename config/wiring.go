@@ -40,6 +40,7 @@ func CheckWiring(ir *IR, cfg *Config) error {
 		return err
 	}
 	c := &wiringChecker{cfg: cfg, env: env}
+	c.passFlatIDs(ir)
 	c.checkGraph(ir)
 	sort.Slice(c.errs, func(i, j int) bool {
 		a, b := c.errs[i], c.errs[j]
@@ -106,6 +107,28 @@ type wiringChecker struct {
 
 func (c *wiringChecker) add(node, path, format string, args ...any) {
 	c.errs = append(c.errs, WiringError{Node: node, Path: path, Msg: fmt.Sprintf(format, args...)})
+}
+
+// passFlatIDs walks the whole IR (including inlined sub-workflow graphs) and
+// rejects duplicate node ids across nesting levels. The per-level byID maps
+// below would silently collapse a duplicate, and the executor's graph loader
+// aborts on one at run start — this moves that failure to validate time.
+func (c *wiringChecker) passFlatIDs(g *IR) {
+	seen := map[string]bool{}
+	var walk func(*IR)
+	walk = func(g *IR) {
+		for i := range g.Nodes {
+			n := &g.Nodes[i]
+			if seen[n.ID] {
+				c.add(n.ID, "", "duplicate node id %q in the desugared graph (step ids must be unique across nesting levels)", n.ID)
+			}
+			seen[n.ID] = true
+			if n.Sub != nil {
+				walk(n.Sub)
+			}
+		}
+	}
+	walk(g)
 }
 
 func (c *wiringChecker) checkGraph(g *IR) {
@@ -492,6 +515,19 @@ func (c *wiringChecker) passConditions(g *IR, byID map[string]*Node, outputs map
 	for _, e := range g.Edges {
 		succ[e.From] = append(succ[e.From], e.To)
 	}
+	// A condition may reference a declared param only when its presence at
+	// evaluation is guaranteed: required (the entry/binding checks enforce it
+	// is supplied) or defaulted (CheckParams materializes root defaults; the
+	// desugarer bakes sub/instance defaults into scope bindings). An optional
+	// param without a default may simply be absent from the activation.
+	declared := map[string]bool{}
+	guaranteed := map[string]bool{}
+	for name, p := range c.cfg.Workflows[g.Workflow].Params {
+		declared[name] = true
+		if p.Required || p.Default != nil {
+			guaranteed[name] = true
+		}
+	}
 	for i := range g.Nodes {
 		n := &g.Nodes[i]
 		type namedCond struct {
@@ -526,9 +562,20 @@ func (c *wiringChecker) passConditions(g *IR, byID map[string]*Node, outputs map
 						ref.node, ref.field, didYouMean(ref.field, sortedKeys(fields)))
 				}
 			}
-			if err := compileIn(c.env, nc.cond.CEL); err != nil {
-				c.add(n.ID, nc.path, "condition does not compile: %v", err)
+			ast, iss := c.env.Compile(nc.cond.CEL)
+			if iss != nil && iss.Err() != nil {
+				c.add(n.ID, nc.path, "condition does not compile: %v", iss.Err())
+				continue
 			}
+			// The AST discipline: only canonical steps["<dep>"].<field> and
+			// guaranteed params.<name> references survive to run time.
+			depSet := map[string]bool{}
+			for _, dep := range nc.cond.Deps {
+				depSet[dep] = true
+			}
+			nodeID, path := n.ID, nc.path
+			checkCondRefs(ast, condScope{deps: depSet, declared: declared, guaranteed: guaranteed},
+				func(format string, args ...any) { c.add(nodeID, path, format, args...) })
 		}
 	}
 }

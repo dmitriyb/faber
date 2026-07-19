@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dmitriyb/faber/agent/contract"
+	"github.com/dmitriyb/faber/config"
 )
 
 // runContextHook is phase 7: the first user-filled phase.
@@ -64,10 +65,12 @@ func (b *Box) runPreludeHook(ctx context.Context) error {
 	return nil
 }
 
-// reservedSidecarKey reports whether a bundle.env key would override the
-// engine/security env contract or the process runner environment.
+// reservedSidecarKey reports whether an environment key user-named material
+// (a bundle.env sidecar entry, an exported secret) would use to override the
+// engine/security env contract or the process runner environment. Both rule
+// sets live in the config module — one source for validate and the box.
 func reservedSidecarKey(key string) bool {
-	return contract.EngineOwnedEnv(key) || key == "PATH" || key == "GIT_SSH_COMMAND"
+	return contract.EngineOwnedEnv(key) || config.RunnerOwnedEnv[key]
 }
 
 // runHook executes one opaque user hook. The environment is the whole

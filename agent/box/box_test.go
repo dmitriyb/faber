@@ -865,3 +865,93 @@ func asBoxErrorOK(err error, target **boxError) bool {
 	}
 	return ok
 }
+
+// Verifies 93ba0858d75f (§1 contract handshake): a host-stamped contract
+// version that this binary does not implement is an env-contract violation —
+// no later phase runs on guessed semantics — while a matching or absent
+// stamp proceeds.
+func TestContractVersionHandshake(t *testing.T) {
+	d := newTestDirs(t)
+	b := newTestBox(t, d, map[string]string{contract.EnvContractVersion: "99"}, &fakeRunner{})
+	if code := Main(context.Background(), b); code == 0 {
+		t.Fatal("mismatched contract version must fail the run")
+	}
+	rec := readRecord(t, d)
+	if rec.Error == nil || rec.Error.Reason != contract.ReasonEnvContract ||
+		!strings.Contains(rec.Error.Detail, "FABER_BOX_BIN") {
+		t.Fatalf("want env-contract failure naming FABER_BOX_BIN, got %+v", rec.Error)
+	}
+
+	env := ParseEnv(baseEnv(d, map[string]string{contract.EnvContractVersion: "1"}))
+	if err := env.validate(); err != nil {
+		t.Fatalf("matching contract version must validate: %v", err)
+	}
+	env = ParseEnv(baseEnv(d, nil)) // absent: tolerated (direct invocations)
+	if err := env.validate(); err != nil {
+		t.Fatalf("absent contract version must validate: %v", err)
+	}
+}
+
+// Verifies 93ba0858d75f (§1) and the F6 keying fix: every record the box
+// writes carries the contract stamp, and a fail-stop handoff records inputs
+// keyed by declared slot names (Keying "slot") whenever the host supplied
+// the slot list — the shape re-entry consumes without translation.
+func TestHandoffSlotKeyedAndRecordStamped(t *testing.T) {
+	d := newTestDirs(t)
+	// An unresolvable hook makes the context phase fail after env parsing,
+	// exercising the fail-stop funnel with inputs in hand.
+	b := newTestBox(t, d, map[string]string{
+		contract.EnvInputSlots:               "out,work-dir",
+		contract.InputEnvPrefix + "OUT":      "v1",
+		contract.InputEnvPrefix + "WORK_DIR": "v2",
+		contract.EnvContractVersion:          "1",
+		contract.EnvRequiredInputs:           "out",
+	}, &fakeRunner{handle: func(spec CmdSpec, stream bool) (CmdResult, error) {
+		if strings.HasSuffix(spec.Argv[0], "context") {
+			return CmdResult{ExitCode: 1, StderrTail: []byte("boom")}, nil
+		}
+		return oneKeyHandler(nil)(spec, stream)
+	}})
+	writeHook(t, d, contract.HookContext)
+	if code := Main(context.Background(), b); code == 0 {
+		t.Fatal("failed hook must fail the run")
+	}
+
+	rec := readRecord(t, d)
+	if rec.Contract != contract.ContractVersion {
+		t.Fatalf("record must carry the writer's contract stamp, got %d", rec.Contract)
+	}
+	h := readHandoff(t, d)
+	if h.Keying != contract.HandoffKeyingSlot {
+		t.Fatalf("handoff keying %q, want %q", h.Keying, contract.HandoffKeyingSlot)
+	}
+	if h.Inputs["out"] != "v1" || h.Inputs["work-dir"] != "v2" {
+		t.Fatalf("handoff inputs must be slot-keyed: %v", h.Inputs)
+	}
+	if _, ok := h.Inputs["OUT"]; ok {
+		t.Fatalf("token keys must not leak into a slot-keyed handoff: %v", h.Inputs)
+	}
+}
+
+// Verifies 93ba0858d75f (IN-F5): a secret whose exported env name would
+// shadow an engine- or runner-owned variable aborts the secrets phase — the
+// same reserved-name rule the bundle sidecar obeys, applied to the secrets
+// dir export.
+func TestSecretsReservedNameRefused(t *testing.T) {
+	d := newTestDirs(t)
+	if err := os.WriteFile(filepath.Join(d.secrets, "path"), []byte("evil"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := newTestBox(t, d, nil, &fakeRunner{})
+	if code := Main(context.Background(), b); code == 0 {
+		t.Fatal("a PATH-shadowing secret must fail the run")
+	}
+	rec := readRecord(t, d)
+	if rec.Error == nil || rec.Error.Reason != contract.ReasonSecrets ||
+		!strings.Contains(rec.Error.Detail, "PATH") {
+		t.Fatalf("want a secrets refusal naming PATH, got %+v", rec.Error)
+	}
+	if v := envLookup(b.Environ, "PATH"); v == "evil" {
+		t.Fatal("the shadowing value must never enter the child environment")
+	}
+}

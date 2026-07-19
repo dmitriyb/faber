@@ -207,6 +207,19 @@ func (b *Box) failStop(ctx context.Context, phaseName string, err error) {
 		Inputs:     b.Env.Inputs,
 		Workdir:    b.Workdir,
 	}
+	// Slot-keyed inputs whenever the host declared the slot list: re-entry
+	// feeds these straight back into the slot-named run contract. Without the
+	// list the token-keyed map stands (Keying absent marks the old shape).
+	if len(b.Env.Slots) > 0 {
+		inputs := make(map[string]string, len(b.Env.Slots))
+		for _, slot := range b.Env.Slots {
+			if v, ok := b.Env.Inputs[contract.SlotToken(slot)]; ok {
+				inputs[slot] = v
+			}
+		}
+		handoff.Keying = contract.HandoffKeyingSlot
+		handoff.Inputs = inputs
+	}
 	handoffRef := ""
 	if werr := contract.WriteHandoffFile(dir, handoff); werr != nil {
 		b.Log.ErrorContext(ctx, "write handoff", "err", werr)
@@ -364,15 +377,30 @@ func (b *Box) loadSecrets(ctx context.Context) error {
 		}
 		return &boxError{Reason: contract.ReasonSecrets, Detail: fmt.Sprintf("read secrets dir: %v", err)}
 	}
+	seen := map[string]string{} // env token -> first secret claiming it
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
+		}
+		key := contract.SlotToken(entry.Name())
+		if first, dup := seen[key]; dup {
+			return &boxError{Reason: contract.ReasonSecrets,
+				Detail: fmt.Sprintf("secrets %q and %q both export the variable %s; the later would silently shadow the earlier", first, entry.Name(), key)}
+		}
+		seen[key] = entry.Name()
+		// The same reserved-name rule the bundle sidecar obeys: a secret named
+		// "path" or "home" would export over a runner- or engine-owned
+		// variable in every hook and agent invocation. Validate rejects the
+		// service name upstream; this is the in-box floor for hand-built
+		// secrets dirs.
+		if reservedSidecarKey(key) {
+			return &boxError{Reason: contract.ReasonSecrets,
+				Detail: fmt.Sprintf("secret %q would export the engine- or runner-owned variable %s; rename the credential service", entry.Name(), key)}
 		}
 		raw, err := os.ReadFile(filepath.Join(b.Env.SecretsDir, entry.Name()))
 		if err != nil {
 			return &boxError{Reason: contract.ReasonSecrets, Detail: fmt.Sprintf("read secret file %q: %v", entry.Name(), err)}
 		}
-		key := contract.SlotToken(entry.Name())
 		b.setEnv(key, strings.TrimSpace(string(raw)))
 		b.Log.DebugContext(ctx, "secret exported", "key", key)
 	}
@@ -400,6 +428,14 @@ func (b *Box) materializeStdinSecrets(ctx context.Context) error {
 		return fmt.Errorf("secrets dir: %v", err)
 	}
 	for name, b64 := range payload {
+		// Defense in depth: the host emits only validated service names, but
+		// the write joins name onto the tmpfs path — a traversal or nested
+		// name must never land outside the secrets dir (where it would also
+		// dodge the reserved-name export check below).
+		if name == "" || name == "." || name == ".." || filepath.IsAbs(name) ||
+			strings.ContainsAny(name, `/\`) {
+			return fmt.Errorf("secret name %q is not a single path segment", name)
+		}
 		tok, err := base64.StdEncoding.DecodeString(b64)
 		if err != nil {
 			return fmt.Errorf("decode token for %q: not valid base64", name)

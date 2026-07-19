@@ -309,3 +309,46 @@ func TestBuildRunSpecRejectsShadowingVolumes(t *testing.T) {
 		t.Fatalf("a non-reserved volume must pass: %v", err)
 	}
 }
+
+// Verifies 93ba0858d75f (§1 contract handshake): the host stamps its
+// contract version and the declared slot list into the box env, so the box
+// can refuse a mismatched binary and record slot-keyed handoffs.
+func TestBuildRunSpecStampsContractAndSlots(t *testing.T) {
+	rs, err := BuildRunSpec(validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rs.Env[contract.EnvContractVersion]; got != fmt.Sprint(contract.ContractVersion) {
+		t.Fatalf("%s = %q, want %d", contract.EnvContractVersion, got, contract.ContractVersion)
+	}
+	if got := rs.Env[contract.EnvInputSlots]; got != "alpha,beta" {
+		t.Fatalf("%s = %q, want all declared slots sorted", contract.EnvInputSlots, got)
+	}
+}
+
+// The validate-time reserved-path list (config.ReservedContainerPaths) and
+// the run-spec assembler's own (reservedContainerPaths, built from the
+// security module's constants) must agree — one drifting from the other
+// would let a volume pass validate and still refuse at run time (or vice
+// versa). config cannot import agent/security, so the agreement is asserted
+// here instead of shared.
+func TestReservedPathListsAgree(t *testing.T) {
+	runTime := map[string]bool{}
+	for _, p := range reservedContainerPaths {
+		runTime[p] = true
+	}
+	validate := map[string]bool{}
+	for _, p := range config.ReservedContainerPaths {
+		validate[p] = true
+	}
+	for p := range runTime {
+		if !validate[p] {
+			t.Errorf("run-time reserved path %q missing from config.ReservedContainerPaths", p)
+		}
+	}
+	for p := range validate {
+		if !runTime[p] {
+			t.Errorf("config.ReservedContainerPaths entry %q unknown to the run-spec assembler", p)
+		}
+	}
+}

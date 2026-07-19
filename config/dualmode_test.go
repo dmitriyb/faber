@@ -30,6 +30,7 @@ templates:
   box:
     image: base
     identity: worker
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     hooks: {context: ctx}
     inputs: {input: {type: string, required: true}}
@@ -50,7 +51,7 @@ identities:
 templates:
   box:
     build: {packages: [git], overlay: ./o.nix}
-    run: {identity: worker}
+    run: {identity: worker, env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     hooks: {context: ./hooks/ctx}
     inputs: {input: {type: string, required: true}}
@@ -120,6 +121,7 @@ skills:
 templates:
   box:
     image: base
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: implement
     skills: [implement, go-expert, implement]
     skills_link: .claude/skills
@@ -150,6 +152,7 @@ images: {base: {packages: [git]}}
 templates:
   box:
     image: base
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: summarize
     skills: {dir: ./skills, link: .claude/skills}
     inputs: {input: {type: string, required: true}}
@@ -178,6 +181,7 @@ images: {base: {packages: [git]}}
 templates:
   box:
     image: base
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     skills:
     inputs: {input: {type: string, required: true}}
@@ -200,6 +204,7 @@ workflows:
 version: 1
 templates:
   box:
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     skills: nonsense
 `)
@@ -223,6 +228,7 @@ images: {base: {packages: [git]}}
 templates:
   box:
     image: base
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: anything-goes
     skills: {dir: ./skills, link: .claude/skills}
     inputs: {input: {type: string, required: true}}
@@ -247,6 +253,7 @@ skills: {implement: {dir: ./s}}
 templates:
   box:
     image: base
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: review
     skills: [implement]
     skills_link: .claude/skills
@@ -314,6 +321,7 @@ templates:
   box:
     image: ghostimage
     identity: ghostid
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: real
     skills: [real, ghostskill]
     skills_link: .claude/skills
@@ -354,6 +362,7 @@ skills:
 templates:
   box:
     image: base
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: "../../etc/x"
     skills: ["../../etc/x"]
     skills_link: .claude/skills

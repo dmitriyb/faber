@@ -95,7 +95,7 @@ func minimalConfig() *Config {
 		Templates: map[string]TemplateDef{
 			"box": {
 				Build:  &BuildDef{Packages: []string{"git"}},
-				Run:    RunDef{Identity: "worker"},
+				Run:    RunDef{Identity: "worker", Env: map[string]string{"FABER_AGENT_CLI": "agent-cli"}},
 				Skill:  "act",
 				Inputs: map[string]ParamDef{"input": {Type: "string", Required: true}},
 				Output: map[string]FieldDef{"result": {Type: "string", Required: true}},
@@ -528,6 +528,121 @@ func TestSchemaParamDefaultTyping(t *testing.T) {
 				}
 				return
 			}
+			wantErrContaining(t, err, tt.wantErr)
+		})
+	}
+}
+
+// Verifies 23a6be447cc8 (F4 validation altitude): the identifier grammars —
+// step ids exclude the node-id namespacing characters; slot/param names are
+// env-embeddable and token-disjoint; credential service names cannot shadow
+// engine- or runner-owned variables; and the run-contract mirrors (agent CLI
+// named, engine-owned template env, reserved volume paths) fail validate,
+// not each step at run time.
+func TestValidateIdentifierGrammars(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			"step id with a namespacing character",
+			func(c *Config) {
+				wf := c.Workflows["flow"]
+				wf.Steps[0].ID = "first/nested"
+				c.Workflows["flow"] = wf
+			},
+			`invalid step id "first/nested"`,
+		},
+		{
+			"step id with an iteration marker",
+			func(c *Config) {
+				wf := c.Workflows["flow"]
+				wf.Steps[0].ID = "first@2"
+				c.Workflows["flow"] = wf
+			},
+			`invalid step id "first@2"`,
+		},
+		{
+			"param name outside the env-safe grammar",
+			func(c *Config) {
+				c.Workflows["flow"].Params["bad name"] = ParamDef{Type: "string"}
+			},
+			`params.bad name: invalid name`,
+		},
+		{
+			"slot names colliding on the env token",
+			func(c *Config) {
+				c.Templates["box"].Inputs["in-put"] = ParamDef{Type: "string"}
+				c.Templates["box"].Inputs["in_put"] = ParamDef{Type: "string"}
+			},
+			`both map to the env token IN_PUT`,
+		},
+		{
+			"step id with a dot is unreferenceable",
+			func(c *Config) {
+				wf := c.Workflows["flow"]
+				wf.Steps[0].ID = "first.stage"
+				c.Workflows["flow"] = wf
+			},
+			`invalid step id "first.stage"`,
+		},
+		{
+			"credential services colliding on the env token",
+			func(c *Config) {
+				c.Credentials.Services = map[string]ServiceDef{
+					"agent-api": {Mode: "file"}, "agent_api": {Mode: "file"},
+				}
+			},
+			`collides with "agent-api": both export the env variable AGENT_API`,
+		},
+		{
+			"template volume over the HOME tmpfs",
+			func(c *Config) {
+				tpl := c.Templates["box"]
+				tpl.Run.Volumes = map[string]string{"/host/h": "/home/box"}
+				c.Templates["box"] = tpl
+			},
+			`overlaps the reserved path "/home/box"`,
+		},
+		{
+			"credential service shadowing PATH",
+			func(c *Config) {
+				c.Credentials.Services = map[string]ServiceDef{"path": {Mode: "file"}}
+			},
+			`exports the engine- or runner-owned variable PATH`,
+		},
+		{
+			"missing agent CLI",
+			func(c *Config) {
+				tpl := c.Templates["box"]
+				tpl.Run.Env = nil
+				c.Templates["box"] = tpl
+			},
+			`run.env.FABER_AGENT_CLI: required`,
+		},
+		{
+			"engine-owned template env",
+			func(c *Config) {
+				c.Templates["box"].Run.Env["FABER_SKILL"] = "evil"
+			},
+			`run.env.FABER_SKILL: engine- or security-owned name`,
+		},
+		{
+			"template volume over a reserved path",
+			func(c *Config) {
+				tpl := c.Templates["box"]
+				tpl.Run.Volumes = map[string]string{"/host/x": "/faber/hooks"}
+				c.Templates["box"] = tpl
+			},
+			`overlaps the reserved path "/faber"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			tt.mutate(cfg)
+			err := Validate(cfg, nil)
 			wantErrContaining(t, err, tt.wantErr)
 		})
 	}

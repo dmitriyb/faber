@@ -278,3 +278,29 @@ func TestAdaptersAreFakeable(t *testing.T) {
 	var _ GitClient = NewGitCLI(nil)
 	var _ CommandRunner = NewCommandRunner(nil)
 }
+
+// Verifies b8db21752444 (IN-F3): a user command's captured stdout is bounded —
+// a data source streaming without limit fails loudly instead of buffering
+// host memory — and the refusal names the bound, never the bytes.
+func TestUserCmdStdoutBounded(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("needs /bin/sh")
+	}
+	r := NewCommandRunner(testLogger())
+	_, err := r.Run(context.Background(), CmdSpec{
+		Path: "/bin/sh",
+		Args: []string{"-c", "head -c 70000000 /dev/zero"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "stdout exceeded") {
+		t.Fatalf("want the stdout bound refusal, got %v", err)
+	}
+
+	// Under the bound: bytes flow untouched.
+	res, err := r.Run(context.Background(), CmdSpec{
+		Path: "/bin/sh",
+		Args: []string{"-c", "printf hello"},
+	})
+	if err != nil || string(res.Stdout) != "hello" {
+		t.Fatalf("bounded run mangled stdout: %q, %v", res.Stdout, err)
+	}
+}
