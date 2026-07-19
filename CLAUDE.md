@@ -18,7 +18,7 @@ Faber is **mechanism, not policy**: it knows `docker build`/`docker run`, a work
 | agent | The box: fixed phase order context → prelude → agent → result, structured result extraction | config, infra, security |
 | metering | Pluggable estimate/actual budget hooks, endpoint fidelity tiers, 429-defer floor | config |
 | failure | Structured step results, on_failure cleanup, retry, run journal, resume/recovery modes | config |
-| pipeline | IR executor: topological + parallel step scheduling, CEL conditions, generate expansion | config, agent, failure, metering |
+| pipeline | IR executor: topological + parallel step scheduling, CEL conditions, generate expansion | config, infra, security, agent, metering, failure |
 
 ## Spec Convention (spexmachina)
 

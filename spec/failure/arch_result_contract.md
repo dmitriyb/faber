@@ -50,9 +50,17 @@ selector's bound reached without settling).
 
 ## The error record and the handoff pointer
 
-`error` carries a stable machine `reason` (a small vocabulary per producer:
-env-contract, hook, agent, result-schema, verify, launch, loop-exhausted,
-source-contract), a `detail` — human text by default, machine-readable JSON by
+`error` carries a stable machine `reason` — a small vocabulary per producer.
+The failure module's own words: env-contract, hook, agent, result-schema,
+verify, launch, canceled, loop-exhausted, source-contract. The box contract
+contributes its per-phase words (secrets, host-key-policy, clone-failed,
+signing, hook-failed, bundle-missing, bundle-malformed, agent-failed,
+output-schema, missing-output, side-effect-unverified, result-write) plus the
+host-synthesized box-vanished and contract-version; the pipeline contributes
+its admission words (budget, admission, condition, expansion) and the
+reserved skip/annotation encodings (never trusted from an executed record).
+Box-authored reasons colliding with the reserved vocabulary are namespaced
+`box:` at the extract boundary. Beside `reason` sits a `detail` — human text by default, machine-readable JSON by
 per-reason convention (a `rate-limit` reason carries the reset epoch the
 metering module's defer floor reads) — and an optional `handoff` — a pointer,
 resolvable under the run directory, to preserved diagnostic state. This

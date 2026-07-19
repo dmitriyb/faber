@@ -86,10 +86,12 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    known-hosts file with `StrictHostKeyChecking=yes` (fail closed); else an
    explicit TOFU opt-in (`FABER_HOST_KEY_TOFU=1`) selects `accept-new`
    (sandbox only); else the box aborts before any network use.
-5. **Clone.** `repo` is the one reserved slot name the engine interprets: when
-   bound, the sequencer clones `<FABER_REMOTE_URL>/<repo>.git` — the gateway,
-   the box's only reachable remote — into `/workspace/<repo>`, the working
-   directory for every later phase. When absent (a gateless step), later
+5. **Clone.** `repo` is the one reserved slot name the engine interprets.
+   The HOST splices it: the security module's remote binding shape-checks the
+   resolved repo value and exports the complete clone URL as
+   `FABER_REMOTE_URL`; the sequencer clones that URL as-is — it never
+   assembles a URL — into `/workspace/<repo>`, the working directory for
+   every later phase. When absent (a gateless step), later
    phases run in a scratch directory and phases 5–6 are skipped.
 
    *Shared object cache (the large-repo seam).* A cross-container git worktree

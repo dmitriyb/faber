@@ -4,7 +4,7 @@ Scenarios spanning ExecAdapters, ImageBuilder, and ContainerRunner — the path
 from a template's `build:` section to a finished container run. Unit tests
 live beside the code; these are the module-level behaviors that must hold.
 Fake-backed scenarios run in `go test ./...`; scenarios needing real `nix` and
-`docker` are build-tag-guarded (`//go:build infra_integration`) and run in the
+`docker` are build-tag-guarded (`//go:build realinfra`) and run in the
 acceptance environment only.
 
 ## Fixtures
