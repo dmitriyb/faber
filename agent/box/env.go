@@ -38,6 +38,11 @@ type BoxEnv struct {
 	// RequiredInputs lists the slot names FABER_REQUIRED_INPUTS declares.
 	RequiredInputs []string
 
+	// Slots lists ALL declared input slot names (FABER_INPUT_SLOTS), so the
+	// fail-stop handoff can be recorded slot-keyed — the slot→token mapping
+	// is lossy in reverse. Empty on a pre-versioning or direct invocation.
+	Slots []string
+
 	// Schema is the decoded output schema; set by the env phase.
 	Schema contract.OutputSchema
 
@@ -80,11 +85,12 @@ type BoxEnv struct {
 	// means the phase never touches stdin.
 	SecretsStdin bool
 
-	// rawSchema, rawAttempt and rawTOFU hold the undecoded values for the
-	// env phase.
-	rawSchema  string
-	rawAttempt string
-	rawTOFU    string
+	// rawSchema, rawAttempt, rawTOFU and rawContract hold the undecoded
+	// values for the env phase.
+	rawSchema   string
+	rawAttempt  string
+	rawTOFU     string
+	rawContract string
 }
 
 // ParseEnv decodes the box environment. It never fails: the env phase
@@ -122,6 +128,14 @@ func ParseEnv(environ []string) *BoxEnv {
 		rawSchema:        get(contract.EnvOutputSchema),
 		rawAttempt:       get(contract.EnvAttempt),
 		rawTOFU:          get(security.EnvHostKeyTOFU),
+		rawContract:      get(contract.EnvContractVersion),
+	}
+	if raw := strings.TrimSpace(get(contract.EnvInputSlots)); raw != "" {
+		for _, name := range strings.Split(raw, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				env.Slots = append(env.Slots, name)
+			}
+		}
 	}
 	// Non-numeric or absent uid/gid parse to 0, which the preamble reads as "no
 	// drop" — the same fail-safe as an already-non-root box.
@@ -159,6 +173,14 @@ func (e *BoxEnv) validate() error {
 	need(e.AgentCLI, contract.EnvAgentCLI)
 	need(e.ResultDir, contract.EnvResultDir)
 	need(e.BundleDir, contract.EnvBundleDir)
+	// Contract handshake: a host that stamps a version must match this
+	// binary exactly — a mismatch means FABER_BOX_BIN points at a stale or
+	// foreign sequencer and no phase below may run on guessed semantics.
+	// Absence is tolerated (direct invocations, lifecycle tests).
+	if e.rawContract != "" && e.rawContract != strconv.Itoa(contract.ContractVersion) {
+		errs = append(errs, fmt.Errorf("%s: host speaks contract v%s, this faber-box implements v%d — FABER_BOX_BIN points at a mismatched binary",
+			contract.EnvContractVersion, e.rawContract, contract.ContractVersion))
+	}
 	for _, slot := range e.RequiredInputs {
 		if e.Inputs[contract.SlotToken(slot)] == "" {
 			errs = append(errs, fmt.Errorf("%s: required input slot %q is absent or empty", contract.InputEnv(slot), slot))

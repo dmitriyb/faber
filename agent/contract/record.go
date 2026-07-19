@@ -3,6 +3,7 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,7 +34,13 @@ const (
 	ReasonSideEffectUnverified = "side-effect-unverified"
 	ReasonResultWrite          = "result-write"
 	ReasonBoxVanished          = "box-vanished"
+	ReasonContractVersion      = "contract-version"
 )
+
+// HandoffKeyingSlot marks a handoff record whose Inputs map is keyed by
+// declared slot names (the shape interactive re-entry consumes directly).
+// An absent Keying marks a pre-versioning record keyed by env tokens.
+const HandoffKeyingSlot = "slot"
 
 // Result is one step attempt's record: the shape of result.json in the
 // mounted result directory and the value the host threads onward. The
@@ -42,6 +49,11 @@ const (
 type Result struct {
 	// Status is StatusOK or StatusFailed.
 	Status string `json:"status"`
+
+	// Contract is the ContractVersion of the writer. WriteResultFile stamps
+	// it; the host asserts it on extract, so a record written by a
+	// mismatched faber-box binary is surfaced instead of misread.
+	Contract int `json:"contract,omitempty"`
 
 	// Payload holds the skill's declared output fields (plus preserved
 	// undeclared extras) on an ok attempt.
@@ -81,8 +93,13 @@ type ResultError struct {
 
 // Handoff is the structured fail-stop record written beside the attempt
 // record: everything the interactive recovery mode needs to reconstruct the
-// box. It never carries secret values — Inputs is the FABER_INPUT_* map only.
+// box. It never carries secret values — Inputs holds the bound input values
+// only. Keying names the Inputs key vocabulary: HandoffKeyingSlot means
+// declared slot names (re-entry consumes them without translation); absent
+// means a pre-versioning record keyed by FABER_INPUT_* env tokens, which
+// re-entry translates through the template's declared slots.
 type Handoff struct {
+	Keying     string            `json:"keying,omitempty"`
 	Phase      string            `json:"phase"`
 	Reason     string            `json:"reason"`
 	ExitCode   int               `json:"exit_code,omitempty"`
@@ -93,14 +110,45 @@ type Handoff struct {
 
 // WriteResultFile writes the attempt record atomically (temp file plus rename
 // within the result directory) so the mounted directory never exposes a
-// half-written record.
+// half-written record. It stamps the writer's ContractVersion so the host
+// can assert the record's vintage on extract.
 func WriteResultFile(dir string, rec Result) error {
+	if rec.Contract == 0 {
+		rec.Contract = ContractVersion
+	}
 	return writeJSON(dir, ResultFile, rec)
 }
 
-// ReadResultFile parses the attempt record from the result directory.
+// MaxRecordBytes bounds every host-side read of a container-written record
+// file (result.json, handoff.json). It matches the journal's line bound: a
+// record the journal could not replay must fail at the boundary, and a
+// hostile box must not be able to balloon host memory through a mounted file.
+const MaxRecordBytes = 64 << 20
+
+// ReadBoundedFile reads a container-written file with the record size bound.
+// Oversize is an error, never a truncation — a partially read record must not
+// be interpreted.
+func ReadBoundedFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, MaxRecordBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > MaxRecordBytes {
+		return nil, fmt.Errorf("contract: %s exceeds the %d-byte record bound", filepath.Base(path), MaxRecordBytes)
+	}
+	return raw, nil
+}
+
+// ReadResultFile parses the attempt record from the result directory. The
+// read is size-bounded: the box is untrusted and the record crosses the
+// container boundary.
 func ReadResultFile(dir string) (Result, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, ResultFile))
+	raw, err := ReadBoundedFile(filepath.Join(dir, ResultFile))
 	if err != nil {
 		return Result{}, fmt.Errorf("contract: read %s: %w", ResultFile, err)
 	}

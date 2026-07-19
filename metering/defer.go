@@ -165,8 +165,11 @@ func (d *RateLimitDefer) Reset(nodeID string) {
 }
 
 // Restore seeds a node's consecutive counter; on resume the executor rebuilds
-// it by counting the node's trailing journal defer events, so the Max bound
-// survives a process restart.
+// it from the trailing run of deferred annotations in the node's last result
+// record, so the Max bound survives a process restart. (A run that crashed
+// mid-wait has a durable KindDefer event but no result record yet, so its
+// counter resets to zero — a conservative direction: the bound only ever
+// loosens, never wrongly trips.)
 func (d *RateLimitDefer) Restore(nodeID string, consecutive int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

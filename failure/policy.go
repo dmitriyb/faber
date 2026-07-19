@@ -64,6 +64,21 @@ func (p *Policy) RunStep(ctx context.Context, spec StepSpec, run StepRunner) Res
 	}
 	var history []AttemptInfo
 	for attempt := 1; ; attempt++ {
+		// A cancelled run must not consume the remaining retry budget on
+		// attempts that cannot succeed: each one would fully stage and launch
+		// (skills tree, bindings, docker kill) against a dead context. The
+		// canceled record keeps the real attempts' history; the step re-runs
+		// intact on resume.
+		if cerr := context.Cause(ctx); cerr != nil {
+			now := time.Now()
+			return Result{
+				Status:   StatusFailed,
+				Error:    &ErrorRecord{Reason: ReasonCanceled, Detail: cerr.Error()},
+				Timing:   Timing{Started: now, Finished: now},
+				Attempt:  attempt,
+				Attempts: history,
+			}
+		}
 		started := time.Now()
 		res, err := run(ctx, attempt)
 		if err != nil {
@@ -107,18 +122,42 @@ func (p *Policy) RunStep(ctx context.Context, spec StepSpec, run StepRunner) Res
 	}
 }
 
+// CleanupGrace bounds an on_failure hook run on an ALREADY-aborted run's
+// detached context: cleanup must still run (an abort is exactly when external
+// side-effects need releasing) but must not stall shutdown forever. A healthy
+// run's cleanup keeps the live context unbounded — this cap applies only when
+// the run context is already cancelled.
+const CleanupGrace = 2 * time.Minute
+
+// CleanupContext returns the context an on_failure hook runs under. On a
+// healthy run it is the live context (cleanup is bounded only by the hook
+// itself, as before). When the run is already aborted it is a
+// cancellation-detached, time-bounded context, so the terminal cleanup still
+// runs — an aborted run is the one moment releasing side-effects matters most
+// — without stalling shutdown. Returns a no-op cancel when the live context
+// is used; callers defer it unconditionally.
+func CleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), CleanupGrace)
+}
+
 // cleanup runs the declared on_failure hook and journals its outcome. A
 // cleanup that itself fails is reported — a cleanup record beside the failure
-// — but the step's original failure record stands untouched.
+// — but the step's original failure record stands untouched. See
+// CleanupContext for the abort-safety discipline.
 func (p *Policy) cleanup(ctx context.Context, spec StepSpec, res Result, log *slog.Logger) {
 	if spec.OnFailure == "" {
 		return
 	}
+	hctx, cancel := CleanupContext(ctx)
+	defer cancel()
 	var err error
 	if p.Hooks == nil {
 		err = errNoHookRunner
 	} else {
-		err = p.Hooks.RunOnFailure(ctx, HookInvocation{
+		err = p.Hooks.RunOnFailure(hctx, HookInvocation{
 			Script:  spec.OnFailure,
 			StepID:  spec.ID,
 			Attempt: res.Attempt,

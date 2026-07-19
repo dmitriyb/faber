@@ -48,17 +48,40 @@ directory copied to `$FABER_RESULT_DIR/handoff/bundle/`:
 
 ```go
 type Handoff struct {
+    Keying     string            `json:"keying,omitempty"` // "slot" | "" (pre-versioning, token-keyed)
     Phase      string            `json:"phase"`
     Reason     string            `json:"reason"`
     ExitCode   int               `json:"exit_code,omitempty"`
     StderrTail string            `json:"stderr_tail,omitempty"`
-    Inputs     map[string]string `json:"inputs"` // FABER_INPUT_* only — never secret env
+    Inputs     map[string]string `json:"inputs"` // bound input values only — never secret env
     Workdir    string            `json:"workdir"`
 }
 ```
 
+`Keying` names the `Inputs` key vocabulary. Whenever the host supplied the
+declared slot list (`FABER_INPUT_SLOTS`), the box records inputs keyed by
+slot names and stamps `keying: "slot"` — the shape interactive re-entry
+feeds straight back into the slot-named run contract. An absent `Keying` is
+a pre-versioning record keyed by `FABER_INPUT_*` env tokens; re-entry
+translates it forward through the template's declared slots (slot→token is
+total; the reverse is lossy, which is why the box records slots now). A
+record with no usable value for a required slot is refused at re-entry with
+a clear message.
+
 The failed attempt record's `error.handoff` carries the path; the interactive
 recovery mode reconstructs the box from exactly this data.
+
+## Contract version handshake
+
+`contract.ContractVersion` (currently 1) is the faber↔faber-box result
+contract's schema version, independent of the application version. The host
+stamps it into the box env as `FABER_CONTRACT_VERSION`; the box's env phase
+refuses a mismatching value (absence is tolerated for direct sequencer
+invocations), and `WriteResultFile` stamps the writer's version into
+`result.json` (`contract` field), which the host asserts on extract. Since
+faber-box ships from the host as the same build, any mismatch is a
+`FABER_BOX_BIN`-misconfiguration detector — a stale or foreign sequencer —
+not a migration path.
 
 ## Result emission (internal/agent/result.go)
 

@@ -30,6 +30,21 @@ func ExtractResult(dir string, schema OutputSchema) (Result, error) {
 			},
 		}, nil
 	}
+	if rec.Contract != contract.ContractVersion {
+		// The record's stamped vintage disagrees with this host (0 = a writer
+		// that predates stamping). faber-box ships from the host as the same
+		// build, so this detects a stale or foreign FABER_BOX_BIN — the record
+		// must not be interpreted as if it spoke this contract.
+		return Result{
+			Status: StatusFailed,
+			Error: &ResultError{
+				Reason: contract.ReasonContractVersion,
+				Detail: fmt.Sprintf("result record carries contract v%d, host speaks v%d — check FABER_BOX_BIN (a mismatched faber-box binary)", rec.Contract, contract.ContractVersion),
+			},
+			Timing:  rec.Timing,
+			Attempt: rec.Attempt,
+		}, nil
+	}
 	if rec.Status != StatusOK {
 		// Already a failure record; never thread its payload.
 		rec.Payload = nil

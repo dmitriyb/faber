@@ -373,3 +373,38 @@ func TestParseBudgets(t *testing.T) {
 		}
 	}
 }
+
+// Verifies 58879b841ed4 / bff0f92afc29's fold: FoldSpent seeds the spent
+// ledger from a resumed run's journaled actuals, so a budget bounds the whole
+// logical run — an estimate that fit before the fold rejects after it.
+// Negative amounts are clamped away and additions saturate: disk-resident
+// records never widen a budget or wrap the ledger.
+func TestFoldSpentSeedsLedgerClampedAndSaturating(t *testing.T) {
+	m := fixedMeter([]Unit{"tokens"}, []Cost{{Unit: "tokens", Amount: 30}}, nil)
+	a := NewAdmitter(map[string][]Meter{"ep": {m}}, map[Unit]int64{"tokens": 50}, nil)
+
+	a.FoldSpent([]Cost{
+		{Unit: "tokens", Amount: 25},
+		{Unit: "tokens", Amount: -100}, // clamped: never widens the budget
+	})
+	d, err := a.Admit(context.Background(), Step{NodeID: "task/a", Endpoint: "ep"})
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if d.Kind != Reject || d.Budget != "tokens" {
+		t.Fatalf("got %+v, want reject(tokens): 25 folded + 30 estimated > 50", d)
+	}
+
+	// Saturation: two near-max folds must not wrap negative (which would
+	// reopen the budget); the ledger pins at the maximum instead.
+	b := NewAdmitter(map[string][]Meter{"ep": {m}}, map[Unit]int64{"tokens": 50}, nil)
+	huge := int64(1) << 62
+	b.FoldSpent([]Cost{{Unit: "tokens", Amount: huge}, {Unit: "tokens", Amount: huge}, {Unit: "tokens", Amount: huge}})
+	d, err = b.Admit(context.Background(), Step{NodeID: "task/b", Endpoint: "ep"})
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if d.Kind != Reject {
+		t.Fatalf("saturated ledger must still reject, got %+v", d)
+	}
+}

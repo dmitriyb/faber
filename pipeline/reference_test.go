@@ -164,7 +164,7 @@ func TestReference_SkipSemantics(t *testing.T) {
 
 // Verifies 8879dc1597d6 and a0f44481f57b: resume replays the journal — a
 // settled step is a cached hit whose box never re-runs and whose report line
-// is marked cached; --no-cache (fresh) re-runs everything under a new run id.
+// is marked cached; --fresh re-runs everything under a new run id.
 func TestReference_ResumeFromJournal(t *testing.T) {
 	ir := loadReferenceIR(t, "reference_task.ir.json")
 	h := newHarness(t)
@@ -211,12 +211,12 @@ func TestReference_ResumeFromJournal(t *testing.T) {
 		t.Errorf("report does not mark implement cached:\n%s", h.text.String())
 	}
 
-	// Run 3: --no-cache. A fresh run id, an empty lookup, every node re-runs.
+	// Run 3: --fresh. A fresh run id, an empty lookup, every node re-runs.
 	if err := h.run(t, ir, config.RunOptions{Mode: "fresh"}); err != nil {
 		t.Fatalf("fresh: %v", err)
 	}
 	if got := h.boxes.attempts("task/implement"); got != 2 {
-		t.Errorf("implement ran %d boxes after --no-cache, want 2", got)
+		t.Errorf("implement ran %d boxes after --fresh, want 2", got)
 	}
 }
 

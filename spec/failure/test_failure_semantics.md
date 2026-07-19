@@ -55,8 +55,8 @@ StepRunner and a recording HookRunner unless a real container is stated;
    half-attempt left no record and needed none.
 9. **Resume refuses drift.** Edit the config (add a step) or change a param
    between runs: resume fails before launching anything, naming the IR-hash or
-   param mismatch and suggesting `--no-cache`.
-10. **Fresh ignores the journal.** `--no-cache` after a completed run re-runs
+   param mismatch and suggesting `--fresh`.
+10. **Fresh ignores the journal.** `--fresh` after a completed run re-runs
     every step under a new run id; the old journal is untouched.
 11. **Interactive reconstruction.** After scenario 1, interactive re-entry on
     the failed step launches a container from the same image tag with the same

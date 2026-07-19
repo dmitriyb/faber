@@ -45,6 +45,8 @@ type fakeJournal struct{ header JournalHeader }
 
 func (f fakeJournal) LoadHeader(runID string) (JournalHeader, error) { return f.header, nil }
 
+func (f fakeJournal) SupportedFormat() int { return 1 }
+
 // runCLI invokes the in-process CLI harness and captures exit code, stdout,
 // and stderr.
 func runCLI(t *testing.T, deps Deps, args ...string) (int, string, string) {
@@ -252,6 +254,8 @@ func TestCLIResumeGuard(t *testing.T) {
 		ConfigPath: "testdata/reference.yaml",
 		Workflow:   "task",
 		Params:     map[string]string{"repo": "sandbox", "item": "I-1"},
+		Format:     1,
+		IRVersion:  IRVersion,
 	}
 
 	t.Run("journal seam not wired yields a structured error", func(t *testing.T) {
@@ -385,4 +389,142 @@ func TestCLILogging(t *testing.T) {
 			t.Fatalf("got %d: %s", code, stderr)
 		}
 	})
+}
+
+type fakeAudit struct {
+	runs []RunAudit
+	err  error
+}
+
+func (f fakeAudit) AuditRuns() ([]RunAudit, error) { return f.runs, f.err }
+
+// Verifies 67c77533453d (§1 upgrade guard): faber upgrade-check is a
+// read-only pre-flight — it refuses (exit 1) while live or unfinished runs
+// exist, listing them; --force acknowledges and exits 0; a clean store (or
+// only complete runs) exits 0. It never updates faber.
+func TestCLIUpgradeCheck(t *testing.T) {
+	t.Run("audit seam not wired yields a structured error", func(t *testing.T) {
+		code, _, stderr := runCLI(t, Deps{}, "upgrade-check")
+		if code != 1 || !strings.Contains(stderr, "requires the failure module") {
+			t.Fatalf("got %d: %s", code, stderr)
+		}
+	})
+
+	t.Run("all complete passes", func(t *testing.T) {
+		audit := fakeAudit{runs: []RunAudit{{RunID: "r1", Complete: true, Format: 1}}}
+		code, stdout, _ := runCLI(t, Deps{Audit: audit}, "upgrade-check")
+		if code != 0 || !strings.Contains(stdout, "safe to swap") {
+			t.Fatalf("got %d: %s", code, stdout)
+		}
+	})
+
+	t.Run("live and unfinished runs refuse, listed", func(t *testing.T) {
+		audit := fakeAudit{runs: []RunAudit{
+			{RunID: "r-live", Live: true, Format: 1},
+			{RunID: "r-cut", Format: 1},
+			{RunID: "r-done", Complete: true, Format: 1},
+			{RunID: "r-old"},
+		}}
+		code, stdout, stderr := runCLI(t, Deps{Audit: audit}, "upgrade-check")
+		if code != 1 {
+			t.Fatalf("got %d: %s", code, stderr)
+		}
+		for _, want := range []string{"r-live", "r-cut", "r-old", "not upgraded mid-run"} {
+			if !strings.Contains(stdout+stderr, want) {
+				t.Errorf("output missing %q:\n%s%s", want, stdout, stderr)
+			}
+		}
+		if strings.Contains(stdout, "r-done") {
+			t.Errorf("a complete run must not be listed as blocking:\n%s", stdout)
+		}
+	})
+
+	t.Run("force acknowledges and passes", func(t *testing.T) {
+		audit := fakeAudit{runs: []RunAudit{{RunID: "r-cut", Format: 1}}}
+		code, stdout, _ := runCLI(t, Deps{Audit: audit}, "upgrade-check", "--force")
+		if code != 0 || !strings.Contains(stdout, "--force") {
+			t.Fatalf("got %d: %s", code, stdout)
+		}
+	})
+}
+
+// Verifies 67c77533453d (§1 destructive guard): resume fails closed on a
+// journal-format or IR-schema mismatch with a message that names the engine
+// (not the operator's config); --fresh remains the escape hatch.
+func TestCLIResumeVersionGuards(t *testing.T) {
+	goodHash, err := HashIR(desugarRef(t, "task"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := JournalHeader{
+		RunID:      "r-1",
+		ConfigPath: "testdata/reference.yaml",
+		Workflow:   "task",
+		Params:     map[string]string{"repo": "sandbox", "item": "I-1"},
+		IRHash:     goodHash,
+		Format:     1,
+		IRVersion:  IRVersion,
+	}
+
+	t.Run("pre-versioning journal refuses resume", func(t *testing.T) {
+		h := base
+		h.Format = 0
+		exec := &fakeExecutor{}
+		code, _, stderr := runCLI(t, Deps{Journal: fakeJournal{h}, Executor: exec}, "resume", "r-1")
+		if code != 1 || !strings.Contains(stderr, "does not auto-migrate") || exec.called {
+			t.Fatalf("got %d (called=%v): %s", code, exec.called, stderr)
+		}
+	})
+
+	t.Run("IR schema drift names the engine, not the config", func(t *testing.T) {
+		h := base
+		h.IRVersion = IRVersion + 1
+		exec := &fakeExecutor{}
+		code, _, stderr := runCLI(t, Deps{Journal: fakeJournal{h}, Executor: exec}, "resume", "r-1")
+		if code != 1 || !strings.Contains(stderr, "IR schema") || exec.called {
+			t.Fatalf("got %d (called=%v): %s", code, exec.called, stderr)
+		}
+		if strings.Contains(stderr, "config has changed") {
+			t.Fatalf("an engine-side schema change must not be blamed on the config: %s", stderr)
+		}
+	})
+
+	t.Run("fresh escapes both guards", func(t *testing.T) {
+		h := base
+		h.Format = 0
+		h.IRVersion = IRVersion + 1
+		exec := &fakeExecutor{}
+		code, _, stderr := runCLI(t, Deps{Journal: fakeJournal{h}, Executor: exec}, "resume", "r-1", "--fresh")
+		if code != 0 || !exec.called || exec.opts.Mode != "fresh" {
+			t.Fatalf("--fresh must proceed, got %d (%+v): %s", code, exec.opts, stderr)
+		}
+	})
+}
+
+// Verifies 67c77533453d (L-P3i/L-P3h): -h/--help on run and resume prints
+// usage to stdout and exits 0 (never the exit-2 usage error), and
+// --report-json reaches the executor's options.
+func TestCLIHelpAndReportJSON(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "-h"}, {"run", "--help"},
+		{"resume", "-h"}, {"resume", "--help"},
+		{"run", "task", "-h"}, // trailing help must also exit 0 (not the usage error)
+		{"resume", "r-1", "--help"},
+	} {
+		code, stdout, stderr := runCLI(t, Deps{}, args...)
+		if code != 0 || !strings.Contains(stdout, "usage: faber "+args[0]) {
+			t.Errorf("%v: got code %d, stdout %q, stderr %q", args, code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "-log-level") {
+			t.Errorf("%v: help lacks flag defaults:\n%s", args, stdout)
+		}
+	}
+
+	exec := &fakeExecutor{}
+	code, _, stderr := runCLI(t, Deps{Executor: exec}, "run", "task",
+		"--config", "testdata/reference.yaml", "--param", "repo=sandbox", "--param", "item=I-1",
+		"--report-json", "-")
+	if code != 0 || exec.opts.ReportJSON != "-" {
+		t.Fatalf("got %d (%+v): %s", code, exec.opts, stderr)
+	}
 }

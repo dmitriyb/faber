@@ -41,6 +41,9 @@ type RunOptions struct {
 	MaxParallel     int
 	Budgets         map[string]float64
 	MeteringPath    string
+	// ReportJSON is where the machine-readable run report goes: a file path,
+	// "-" for stdout, or empty for none.
+	ReportJSON string
 
 	// Wiring context: the CLI fills these so the integration-level Executor
 	// can assemble per-run capabilities (journal header identity, security
@@ -60,18 +63,41 @@ type Executor interface {
 
 // JournalHeader is what resume needs from a run journal: enough to re-derive
 // the config, workflow, and params, plus the IR hash that defines resume
-// compatibility ("same bytes out of the desugaring pipeline").
+// compatibility ("same bytes out of the desugaring pipeline"). Format and
+// IRVersion are the schema stamps the guards branch on: they distinguish an
+// engine upgrade from operator config drift.
 type JournalHeader struct {
 	RunID      string
 	ConfigPath string
 	Workflow   string
 	Params     map[string]string
 	IRHash     string
+	Format     int // journal schema stamp (0 = pre-versioning journal)
+	IRVersion  int // IR schema the journaled hash was computed under
 }
 
-// JournalStore opens journaled runs (failure module).
+// JournalStore opens journaled runs (failure module). SupportedFormat is the
+// journal schema this binary reads and writes — the failure module owns the
+// constant; the CLI only compares stamps against it for its early guards.
 type JournalStore interface {
 	LoadHeader(runID string) (JournalHeader, error)
+	SupportedFormat() int
+}
+
+// RunAudit is one journaled run's upgrade-relevant state, as the pre-upgrade
+// guard reports it.
+type RunAudit struct {
+	RunID    string
+	Live     bool // another process currently holds the run's lock
+	Complete bool // the journal records a run-end marker
+	Format   int  // journal schema stamp (0 = pre-versioning journal)
+}
+
+// RunAuditor enumerates journaled runs for `faber upgrade-check` (failure
+// module). The scan is read-only and tolerant: it must read journals of any
+// format, because the guard's whole job is to look before an upgrade leaps.
+type RunAuditor interface {
+	AuditRuns() ([]RunAudit, error)
 }
 
 // RegistryController manages the global role→fingerprint registry (security
@@ -97,6 +123,7 @@ type Deps struct {
 	Builder  ImageBuilder
 	Executor Executor
 	Journal  JournalStore
+	Audit    RunAuditor
 	Registry RegistryController
 }
 
@@ -120,9 +147,11 @@ func RunWithDeps(args []string, stdout, stderr io.Writer, deps Deps) int {
 	case "build":
 		return cmdBuild(rest, stderr, deps)
 	case "run":
-		return cmdRun(rest, stderr, deps)
+		return cmdRun(rest, stdout, stderr, deps)
 	case "resume":
-		return cmdResume(rest, stderr, deps)
+		return cmdResume(rest, stdout, stderr, deps)
+	case "upgrade-check":
+		return cmdUpgradeCheck(rest, stdout, stderr, deps)
 	case "add-key":
 		return cmdAddKey(rest, stderr, deps)
 	case "list-keys":
@@ -142,6 +171,9 @@ commands:
   build      build template images
   run        execute a workflow: faber run <workflow> --param k=v ...
   resume     re-enter a journaled run: faber resume <run-id>
+  upgrade-check  read-only pre-upgrade guard: refuses while live or
+             unfinished runs exist (faber is not upgraded mid-run);
+             --force acknowledges and proceeds
   add-key    register a role→fingerprint in the global registry:
              faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--force]
   list-keys  print the global role→fingerprint registry
@@ -149,6 +181,26 @@ commands:
 common flags: --config path (default orchestrator.yaml), --log-level level, --log-format auto|json|text
 add-key/list-keys touch no orchestrator.yaml and take only --log-level/--log-format
 `)
+}
+
+// wantsHelp reports whether the arg list requests help — a standalone
+// `-h`/`--help` token anywhere, so `faber run <wf> -h` prints help exactly
+// like a leading flag rather than falling through to the parse-error path.
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+// printUsage writes the usage line and the flag defaults to w (stdout for the
+// help path), never the exit-2 error stream.
+func printUsage(w io.Writer, fs *flag.FlagSet, usage string) {
+	fmt.Fprintln(w, usage)
+	fs.SetOutput(w)
+	fs.PrintDefaults()
 }
 
 type commonFlags struct {
@@ -292,13 +344,7 @@ func cmdBuild(args []string, stderr io.Writer, deps Deps) int {
 	return 0
 }
 
-func cmdRun(args []string, stderr io.Writer, deps Deps) int {
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		fmt.Fprintln(stderr, "usage: faber run <workflow> [--param k=v ...] [flags]")
-		return 2
-	}
-	workflow, rest := args[0], args[1:]
-
+func cmdRun(args []string, stdout, stderr io.Writer, deps Deps) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	common := addCommonFlags(fs)
@@ -307,7 +353,20 @@ func cmdRun(args []string, stderr io.Writer, deps Deps) int {
 	fs.Var(&budgetFlags, "budget", "budget bound unit=n (repeatable)")
 	maxParallel := fs.Int("max-parallel", 0, "maximum concurrently running steps (0 = unlimited)")
 	metering := fs.String("metering", "", "path to run-time metering config")
+	reportJSON := fs.String("report-json", "", "write the machine-readable run report to this path (- = stdout)")
+	const runUsage = "usage: faber run <workflow> [--param k=v ...] [flags]"
+	if wantsHelp(args) {
+		printUsage(stdout, fs, runUsage)
+		return 0
+	}
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(stderr, runUsage)
+		return 2
+	}
+	workflow, rest := args[0], args[1:]
+	fs.SetOutput(io.Discard) // help/errors handled explicitly, on the right stream
 	if err := fs.Parse(rest); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	logger, err := common.logger(stderr)
@@ -338,6 +397,7 @@ func cmdRun(args []string, stderr io.Writer, deps Deps) int {
 	defer stop()
 	opts := RunOptions{
 		MaxParallel: *maxParallel, Budgets: budgets, MeteringPath: *metering,
+		ReportJSON: *reportJSON,
 		ConfigPath: common.config, Workflow: workflow, Supplied: supplied,
 		Targets: targets, Config: cfg,
 	}
@@ -397,19 +457,26 @@ func runEntry(configPath, workflow string, supplied map[string]string, stderr io
 	return cfg, entryIR, targets, params, 0
 }
 
-func cmdResume(args []string, stderr io.Writer, deps Deps) int {
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		fmt.Fprintln(stderr, "usage: faber resume <run-id> [--fresh] [--interactive <step-id>] [flags]")
-		return 2
-	}
-	runID, rest := args[0], args[1:]
-
+func cmdResume(args []string, stdout, stderr io.Writer, deps Deps) int {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	common := addCommonFlags(fs)
 	fresh := fs.Bool("fresh", false, "restart from the journal's config without reusing step results")
 	interactive := fs.String("interactive", "", "re-enter interactively at this step id")
+	reportJSON := fs.String("report-json", "", "write the machine-readable run report to this path (- = stdout)")
+	const resumeUsage = "usage: faber resume <run-id> [--fresh] [--interactive <step-id>] [flags]"
+	if wantsHelp(args) {
+		printUsage(stdout, fs, resumeUsage)
+		return 0
+	}
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(stderr, resumeUsage)
+		return 2
+	}
+	runID, rest := args[0], args[1:]
+	fs.SetOutput(io.Discard) // help/errors handled explicitly, on the right stream
 	if err := fs.Parse(rest); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	logger, err := common.logger(stderr)
@@ -424,6 +491,20 @@ func cmdResume(args []string, stderr io.Writer, deps Deps) int {
 	header, err := deps.Journal.LoadHeader(runID)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if supported := deps.Journal.SupportedFormat(); header.Format != supported && !*fresh {
+		fmt.Fprintf(stderr, "faber resume: run %s was journaled under schema v%d; this faber speaks v%d and does not auto-migrate — finish the run on the faber that wrote it, or pass --fresh to start over\n",
+			runID, header.Format, supported)
+		return 1
+	}
+	if header.IRVersion != 0 && header.IRVersion != IRVersion && !*fresh {
+		// Checked before the config pipeline re-runs: the IR schema itself
+		// moved — an engine upgrade, not config drift — and a config-shaped
+		// error from re-validation must not preempt the message that names
+		// the engine rather than the operator's config.
+		fmt.Fprintf(stderr, "faber resume: run %s was journaled under IR schema v%d; this faber emits v%d and does not auto-migrate — finish the run on the faber that wrote it, or pass --fresh to start over\n",
+			runID, header.IRVersion, IRVersion)
 		return 1
 	}
 
@@ -457,6 +538,7 @@ func cmdResume(args []string, stderr io.Writer, deps Deps) int {
 	defer stop()
 	opts := RunOptions{
 		RunID: runID, Mode: mode, InteractiveStep: *interactive,
+		ReportJSON: *reportJSON,
 		ConfigPath: header.ConfigPath, Workflow: header.Workflow, Supplied: header.Params,
 		Targets: targets, Config: cfg,
 	}
@@ -465,6 +547,55 @@ func cmdResume(args []string, stderr io.Writer, deps Deps) int {
 		return 1
 	}
 	return 0
+}
+
+// cmdUpgradeCheck is the read-only pre-upgrade guard: it enumerates journaled
+// runs and refuses (exit 1) while any is live (its lock is held) or
+// unfinished (no run-end marker), listing them — encoding the rule "faber is
+// not upgraded mid-run". It never modifies anything and never updates faber
+// (the binary swap is external); --force acknowledges the listed runs and
+// exits 0 so a deliberate upgrade can proceed. In-flight runs across a
+// schema bump are finished on the old binary or restarted with --fresh.
+func cmdUpgradeCheck(args []string, stdout, stderr io.Writer, deps Deps) int {
+	fs := flag.NewFlagSet("upgrade-check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	addLogFlags(fs)
+	force := fs.Bool("force", false, "acknowledge live/unfinished runs and exit 0 anyway")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if deps.Audit == nil {
+		fmt.Fprintln(stderr, "faber upgrade-check: run auditing requires the failure module, which is not wired into this binary yet")
+		return 1
+	}
+	runs, err := deps.Audit.AuditRuns()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	var blocking []string
+	for _, r := range runs {
+		switch {
+		case r.Live:
+			blocking = append(blocking, fmt.Sprintf("  %s  live (another faber process holds its lock)", r.RunID))
+		case !r.Complete && r.Format == 0:
+			blocking = append(blocking, fmt.Sprintf("  %s  unfinished (pre-versioning journal; completeness unknown)", r.RunID))
+		case !r.Complete:
+			blocking = append(blocking, fmt.Sprintf("  %s  unfinished (no run-end marker; interrupted or crashed)", r.RunID))
+		}
+	}
+	if len(blocking) == 0 {
+		fmt.Fprintf(stdout, "upgrade-check: %d journaled run(s), none live or unfinished — safe to swap the faber binary\n", len(runs))
+		return 0
+	}
+	fmt.Fprintf(stdout, "upgrade-check: %d of %d journaled run(s) block an upgrade:\n%s\n",
+		len(blocking), len(runs), strings.Join(blocking, "\n"))
+	if *force {
+		fmt.Fprintln(stdout, "--force: proceeding anyway; the listed runs must be finished on the old binary or restarted with --fresh after the swap")
+		return 0
+	}
+	fmt.Fprintln(stderr, "faber upgrade-check: refusing — faber is not upgraded mid-run; finish or resume the listed runs first, or pass --force to acknowledge")
+	return 1
 }
 
 // logFlags registers only --log-level/--log-format on fs, for the registry

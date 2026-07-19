@@ -121,6 +121,20 @@ mount, `--privileged`, or `--user`: no field of `RunSpec` maps to them, and the
 non-root drop is the box's own job, driven by the `FABER_RUN_UID`/`FABER_RUN_GID`
 engine env, not a docker flag.
 
+Two guard layers protect the spec before any argv exists. The run-spec
+assembler (agent.BuildRunSpec) refuses template env claiming engine- or
+security-owned names (only `FABER_AGENT_CLI` may be set) and template volumes
+overlapping the reserved container paths (`/faber`, `/run/secrets`,
+`/ssh-agent`, `/workspace`, `/home/box`, `/tmp` — docker's last-mount-wins
+would sever the result channel or substitute the engine's mounts); the
+config Loader mirrors both refusals at validate time from the same shared
+vocabulary. `Run` itself enforces two floors: a relative bind host is
+refused (docker would read it as a NAMED VOLUME and silently detach the
+mount — absolutizing is the wiring's job), and any stale holder of the
+deterministic container name is force-removed before launch (a crashed
+process's abandoned container both blocks the name and keeps writing into
+its orphaned attempt dir).
+
 ## Run lifecycle
 
 ```go

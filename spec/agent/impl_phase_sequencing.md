@@ -20,6 +20,7 @@ type Box struct {
 
 type BoxEnv struct {
     Skill, Identity      string
+    AgentCLI             string            // FABER_AGENT_CLI; the agent binary the box invokes (no vendor default)
     ResultDir, BundleDir string
     RemoteURL            string
     Repo                 string            // reserved input; empty = gateless
@@ -34,6 +35,9 @@ type BoxEnv struct {
     GitCache             string            // FABER_GIT_CACHE; ro object cache for clone --reference-if-able, empty = none
     SkillsLink           string            // FABER_SKILLS_LINK; $HOME-relative path to symlink at /faber/skills, empty = no skills leg
     SecretsStdin         bool              // FABER_SECRETS_STDIN=1; file-mode tokens arrive on stdin for phase 3 to materialize
+    Slots                []string          // FABER_INPUT_SLOTS; declared slot names, for the slot-keyed handoff
+    // FABER_CONTRACT_VERSION is validated by the env phase (see the contract
+    // version handshake in impl_hook_result_contracts.md)
 }
 
 func ParseEnv(environ []string) (*BoxEnv, error) // collects ALL violations

@@ -36,7 +36,7 @@
       "preq_id": "0186891639d3",
       "type": "functional",
       "title": "Recovery modes",
-      "description": "Three ways to re-enter a failed run: resume (journal hits with matching input-hash are skipped, execution restarts at the first failed or absent step), fresh (--no-cache: ignore the journal, run everything), and interactive (drop the operator into the failed step's box — same image, bindings, and inputs — for manual diagnosis). A failed generate item is a normal failure plus journal entry, not a special partial-run state.",
+      "description": "Three ways to re-enter a failed run: resume (journal hits with matching input-hash are skipped, execution restarts at the first failed or absent step), fresh (--fresh: ignore the journal, run everything), and interactive (drop the operator into the failed step's box — same image, bindings, and inputs — for manual diagnosis). A failed generate item is a normal failure plus journal entry, not a special partial-run state.",
       "depends_on": ["bff0f92afc29"]
     },
     {
@@ -73,7 +73,7 @@
     {
       "id": "ec44f9c7b403",
       "name": "Journal",
-      "description": "The append-only run journal: (step-id, input-hash) keying, input-hash computation, record encoding, lookup for resume decisions, and per-step actual-cost records. Owns the deferred store-location/concurrency seam.",
+      "description": "The append-only run journal: (step-id, input-hash) keying, input-hash computation, record encoding, lookup for resume decisions, per-step actual-cost records, the run-end marker, and same-run process exclusivity (the advisory run lock). Owns the on-disk journal schema version (format: 1) — bumped only when record shapes change; replay fails closed on any other stamp, no auto-migration. Owns the deferred store-location/cross-run-concurrency seam.",
       "content": "arch_journal.md",
       "implements": ["bff0f92afc29", "fca4912f1bbe"],
       "uses": ["dcfa188fa679"]
@@ -81,7 +81,7 @@
     {
       "id": "351e41becee4",
       "name": "RecoveryModes",
-      "description": "The resume/fresh/interactive entry points: journal replay into scheduler state, cache-bypass, and the interactive re-entry that reconstructs the failed step's box (image, bindings, inputs) for an operator shell.",
+      "description": "The resume/fresh/interactive entry points: journal replay into scheduler state, fail-closed version and drift guards (journal format, IR version, IR hash, params, recorded image tags), cache-bypass, the interactive re-entry that reconstructs the failed step's box (journaled image tag, bindings, slot-keyed handoff inputs) for an operator shell, and the read-only faber upgrade-check run audit.",
       "content": "arch_recovery_modes.md",
       "implements": ["87f006277d2c"],
       "uses": ["ec44f9c7b403"]

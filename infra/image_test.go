@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -490,5 +491,46 @@ func TestMissingOverlayFails(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("error %v does not wrap os.ErrNotExist", err)
+	}
+}
+
+// Verifies 0acac696dcf1: the overlay is read exactly once per build — the
+// tag hashes the same bytes the staged expression imports. An overlay edit
+// landing between tag computation and staging (simulated via the ImageExists
+// hook) must never let the daemon cache one content's image under another
+// content's tag; the staged bytes stay the hashed ones.
+func TestBuildOverlaySingleRead(t *testing.T) {
+	dir := t.TempDir()
+	overlayPath := filepath.Join(dir, "overlay.nix")
+	orig := []byte("final: prev: { tool = prev.hello; }\n")
+	if err := os.WriteFile(overlayPath, orig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	build := config.BuildDef{Packages: []string{"git"}, Overlay: overlayPath}
+
+	probe := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testLogger())
+	tag, err := probe.ImageTag("merge", build) // the ORIGINAL bytes' tag
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nix := &fakeNix{buildOut: []string{"/nix/store/aaa-image.tar.gz"}}
+	docker := &fakeDocker{loadTag: tag, markLoaded: true, existsHook: func(string) {
+		// The race window: the overlay changes after the tag is derived but
+		// before the expression is staged for the build.
+		if err := os.WriteFile(overlayPath, []byte("final: prev: { tool = prev.mutated; }\n"), 0o644); err != nil {
+			t.Error(err)
+		}
+	}}
+	b := NewImageBuilder(docker, nix, testPin(), "", testLogger())
+	got, err := b.Build(context.Background(), "merge", build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != tag {
+		t.Fatalf("tag %q, want %q", got, tag)
+	}
+	if len(nix.buildOverlays) != 1 || !bytes.Equal(nix.buildOverlays[0], orig) {
+		t.Fatalf("staged overlay bytes diverged from the hashed bytes: %q", nix.buildOverlays)
 	}
 }

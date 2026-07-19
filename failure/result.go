@@ -29,6 +29,7 @@ const (
 	ReasonResultSchema   = "result-schema"   // payload failed schema validation / result contract
 	ReasonVerify         = "verify"          // result verification failed
 	ReasonLaunch         = "launch"          // the container / attempt never launched
+	ReasonCanceled       = "canceled"        // the run's context was cancelled before/around the attempt
 	ReasonLoopExhausted  = "loop-exhausted"  // a loop selector settled without the until predicate holding
 	ReasonSourceContract = "source-contract" // a generate data source broke its contract
 )

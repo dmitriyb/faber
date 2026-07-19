@@ -90,6 +90,16 @@ func (d *dockerCLI) Kill(ctx context.Context, name string) error {
 	return nil
 }
 
+func (d *dockerCLI) Remove(ctx context.Context, name string) error {
+	_, err := d.cli.run(ctx, "rm", "--force", name)
+	// Absent and already-being-removed (--rm racing this eviction) both mean
+	// the name is (about to be) free — success for an idempotent eviction.
+	if err != nil && !isNotFound(err, "No such container", "is already in progress") {
+		return fmt.Errorf("infra: docker rm %s: %w", name, err)
+	}
+	return nil
+}
+
 // isNotFound classifies a docker inspect failure as "object absent" rather
 // than an actuation error. This inspects the error's bounded stderr tail —
 // error classification, not output parsing; the success path stays structured.

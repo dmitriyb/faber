@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"strings"
 
 	"github.com/dmitriyb/faber/config"
 )
@@ -17,43 +18,66 @@ type RunSeed struct {
 	Header Header
 	// Prior is the last-wins (step-id, input-hash) → result map replayed from
 	// the journal. Empty for fresh runs.
-	Prior   map[Key]ResultRecord
+	Prior map[Key]ResultRecord
+	// Costs is every journaled cost record replayed from the prior run, in
+	// journal order — the material the executor folds into the metering
+	// admitter's spent ledger so a declared budget covers the whole logical
+	// run across interruptions. Empty for fresh runs.
+	Costs   []CostRecord
 	Journal *Journal
 }
 
-// Resume re-enters a stopped run. The journal header is checked first: the
-// caller re-derives the IR from the header's config (the config pipeline is
-// deterministic), and the IR hash and supplied params must match the header —
-// a mismatch means the graph changed and journal keys cannot be trusted, so
-// Resume refuses and points at fresh (--no-cache). On a match it returns a
-// seed whose Prior map the scheduler consults at readiness time.
+// Resume re-enters a stopped run. Exclusivity comes first: the run's
+// advisory lock is acquired before any read, so a live run refuses loudly
+// and replay never races a live appender. Then the journal header is
+// checked: the caller re-derives the IR from the header's config (the config
+// pipeline is deterministic), and the IR hash and supplied params must match
+// the header — a mismatch means the graph changed and journal keys cannot be
+// trusted, so Resume refuses and points at fresh (--fresh). On a match it
+// returns a seed whose Prior map the scheduler consults at readiness time.
 func (s *Store) Resume(ir *config.IR, runID string, supplied map[string]string) (*RunSeed, error) {
-	rp, err := s.Load(runID)
+	lock, err := AcquireRunLock(s.RunDir(runID))
 	if err != nil {
 		return nil, err
+	}
+	fail := func(err error) (*RunSeed, error) {
+		lock.Release()
+		return nil, err
+	}
+	rp, err := s.Load(runID)
+	if err != nil {
+		return fail(err)
 	}
 	hash, err := config.HashIR(ir)
 	if err != nil {
-		return nil, fmt.Errorf("failure: resume %s: %w", runID, err)
+		return fail(fmt.Errorf("failure: resume %s: %w", runID, err))
+	}
+	if rp.Header.IRVersion != 0 && rp.Header.IRVersion != ir.IRVersion {
+		// The IR schema itself moved between the journaling faber and this
+		// one — an engine upgrade, not operator config drift; the messages
+		// must not blame the config.
+		return fail(fmt.Errorf(
+			"failure: resume %s: faber's IR schema changed since this run was journaled (journal IR v%d, current v%d); no auto-migration — finish the run on the faber that wrote it, or start over with --fresh",
+			runID, rp.Header.IRVersion, ir.IRVersion))
 	}
 	if hash != rp.Header.IRHash {
-		return nil, fmt.Errorf(
-			"failure: resume %s: config drift: IR hash mismatch (journal %s, current %s) — journal keys cannot be trusted; use --no-cache to start fresh",
-			runID, rp.Header.IRHash, hash)
+		return fail(fmt.Errorf(
+			"failure: resume %s: config drift: IR hash mismatch (journal %s, current %s) — journal keys cannot be trusted; use --fresh to start over",
+			runID, rp.Header.IRHash, hash))
 	}
 	if !maps.Equal(nonNil(supplied), nonNil(rp.Header.Params)) {
-		return nil, fmt.Errorf(
-			"failure: resume %s: config drift: supplied params differ from the journaled run's — journal keys cannot be trusted; use --no-cache to start fresh",
-			runID)
+		return fail(fmt.Errorf(
+			"failure: resume %s: config drift: supplied params differ from the journaled run's — journal keys cannot be trusted; use --fresh to start over",
+			runID))
 	}
-	j, err := s.Reopen(runID)
+	j, err := s.reopenLocked(runID, lock)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
-	return &RunSeed{Header: rp.Header, Prior: rp.Results, Journal: j}, nil
+	return &RunSeed{Header: rp.Header, Prior: rp.Results, Costs: rp.Costs, Journal: j}, nil
 }
 
-// Fresh starts a brand-new run that ignores any prior journal (--no-cache):
+// Fresh starts a brand-new run that ignores any prior journal (--fresh):
 // a new run directory and journal under hdr.RunID, an empty prior map, no
 // lookups. Old journals are left untouched as records of abandoned runs.
 func (s *Store) Fresh(hdr Header) (*RunSeed, error) {
@@ -96,12 +120,21 @@ type InteractiveTarget struct {
 }
 
 // HandoffPath resolves the failed record's handoff pointer under the run
-// directory. ok is false when the record preserved no handoff state.
+// directory. ok is false when the record preserved no handoff state — or
+// when the journaled pointer does not stay under the run directory: the
+// pointer's parent is bind-mounted into the operator's re-entry container,
+// so a pointer that cleans to an escape (a hand-edited or pre-hardening
+// journal) must never resolve.
 func (t InteractiveTarget) HandoffPath() (string, bool) {
 	if t.Record.Result.Error == nil || t.Record.Result.Error.Handoff == "" {
 		return "", false
 	}
-	return filepath.Join(t.RunDir, t.Record.Result.Error.Handoff), true
+	joined := filepath.Join(t.RunDir, t.Record.Result.Error.Handoff)
+	base := filepath.Clean(t.RunDir)
+	if !strings.HasPrefix(joined, base+string(filepath.Separator)) {
+		return "", false
+	}
+	return joined, true
 }
 
 // BoxReentry reconstructs a failed step's box — same image tag, same security
@@ -133,6 +166,20 @@ func (s *Store) Interactive(ctx context.Context, runID, stepID string, re BoxRee
 		return fmt.Errorf(
 			"failure: interactive: step %s settled %q in run %s; interactive re-entry is only for failed steps",
 			stepID, rec.Result.Status, runID)
+	}
+	// Skip settlements and other cheap failures journal with an empty input
+	// hash (the forgery-resistant skip encoding) — no box ever ran, so there
+	// is nothing to re-enter. Refusing here keeps a skip record from passing
+	// the failed-status gate above.
+	if rec.InputHash == "" {
+		return fmt.Errorf(
+			"failure: interactive: step %s settled without executing a box in run %s (a skip or launch-stage failure); there is no box state to re-enter",
+			stepID, runID)
+	}
+	if rec.Result.Error == nil || rec.Result.Error.Handoff == "" {
+		return fmt.Errorf(
+			"failure: interactive: step %s preserved no handoff state in run %s; re-run the step instead",
+			stepID, runID)
 	}
 	return re.Reenter(ctx, InteractiveTarget{
 		RunDir: s.RunDir(runID),

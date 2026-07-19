@@ -185,8 +185,16 @@ func (a *Admitter) Admit(ctx context.Context, s Step) (Decision, error) {
 		if e.DeferUntil != nil && e.DeferUntil.After(deferUntil) {
 			deferUntil = *e.DeferUntil
 		}
+		// Estimates are clamped non-negative and summed saturating: meters run
+		// opaque user commands, and a negative or overflowing estimate must
+		// never widen a budget or wrap the ledger comparisons below. Zero
+		// claims stay — a zero-amount cost enrolls its unit in admission (the
+		// reported tier's retrospective enforcement rides on that).
 		for _, c := range e.Costs {
-			est[c.Unit] += c.Amount
+			if c.Amount < 0 {
+				continue
+			}
+			est[c.Unit] = satAdd(est[c.Unit], c.Amount)
 		}
 	}
 
@@ -202,7 +210,7 @@ func (a *Admitter) Admit(ctx context.Context, s Step) (Decision, error) {
 		if !budgeted {
 			continue
 		}
-		if a.spent[u]+est[u] > limit {
+		if satAdd(a.spent[u], est[u]) > limit {
 			d := Decision{
 				Kind:   Reject,
 				Budget: u,
@@ -218,7 +226,7 @@ func (a *Admitter) Admit(ctx context.Context, s Step) (Decision, error) {
 		if !budgeted {
 			continue
 		}
-		if a.spent[u]+a.reserved[u]+est[u] > limit {
+		if satAdd(satAdd(a.spent[u], a.reserved[u]), est[u]) > limit {
 			d := Decision{
 				Kind:   Defer,
 				Detail: fmt.Sprintf("budget %s contended: estimate %d does not fit alongside in-flight reservations %d", u, est[u], a.reserved[u]),
@@ -233,7 +241,7 @@ func (a *Admitter) Admit(ctx context.Context, s Step) (Decision, error) {
 		a.release(prev)
 	}
 	for u, n := range est {
-		a.reserved[u] += n
+		a.reserved[u] = satAdd(a.reserved[u], n)
 	}
 	a.inflight[s.NodeID] = reservation{endpoint: s.Endpoint, held: est}
 	a.mu.Unlock()
@@ -276,19 +284,57 @@ func (a *Admitter) Settle(ctx context.Context, r ResultView) ([]Cost, error) {
 				"node", r.NodeID, "endpoint", res.endpoint, "error", err)
 			continue
 		}
+		// Actuals derive from the box's usage sidecar — untrusted bytes. The
+		// ledger clamps them non-negative and adds saturating so a hostile or
+		// garbled sidecar can neither refund a budget nor wrap the ledger; the
+		// journaled record keeps the clamped values the ledger actually used.
 		for _, c := range costs {
-			a.spent[c.Unit] += c.Amount
+			if c.Amount < 0 {
+				a.logger.Warn("negative actual cost clamped to zero", "node", r.NodeID, "unit", c.Unit, "amount", c.Amount)
+				c.Amount = 0
+			}
+			a.spent[c.Unit] = satAdd(a.spent[c.Unit], c.Amount)
 			actuals = append(actuals, c)
 		}
 	}
 	return actuals, nil
 }
 
-// release returns a held reservation to the ledger.
+// release returns a held reservation to the ledger, clamping at zero — the
+// floor pairs with the saturating add so the in-flight sum can never read
+// negative and quietly widen admission.
 func (a *Admitter) release(res reservation) {
 	for u, n := range res.held {
+		if a.reserved[u] < n {
+			a.reserved[u] = 0
+			continue
+		}
 		a.reserved[u] -= n
 	}
+}
+
+// FoldSpent seeds the spent ledger from a resumed run's journaled actuals,
+// so a declared budget bounds the whole logical run across interruptions
+// rather than resetting at every resume. Amounts are clamped non-negative
+// and added saturating: the journal is host-written but disk-resident, and
+// the ledger never lets a stray record widen a budget.
+func (a *Admitter) FoldSpent(costs []Cost) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, c := range costs {
+		if c.Amount <= 0 {
+			continue
+		}
+		a.spent[c.Unit] = satAdd(a.spent[c.Unit], c.Amount)
+	}
+}
+
+// satAdd adds non-negative b to non-negative a, saturating at MaxInt64.
+func satAdd(a, b int64) int64 {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
 }
 
 // participates reports whether m protects any declared budget: an estimate

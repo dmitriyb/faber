@@ -72,13 +72,18 @@ the record is returned for journaling.
 
 ```go
 func Resume(ctx context.Context, runDir string, cfg *config.Config) (*RunSeed, error) {
-    hdr, done, err := Load(filepath.Join(runDir, "journal.jsonl"))
+    lock, err := AcquireRunLock(runDir) // exclusivity first: a live run refuses loudly
+    // (every refusal below releases the lock; success hands it to the Journal)
+    hdr, done, costs, err := Load(filepath.Join(runDir, "journal.jsonl"))
     // re-derive: deterministic pipeline => byte-stable IR
     ir := desugarAndCheck(cfg, hdr.Workflow)
     if hashOf(ir) != hdr.IRHash || !maps.Equal(normParams(cfg), hdr.Params) {
-        return nil, fmt.Errorf("run %s: config drift (IR/params changed); resume unsafe, use --no-cache", hdr.RunID)
+        return nil, fmt.Errorf("run %s: config drift (IR/params changed); resume unsafe, use --fresh", hdr.RunID)
     }
-    return &RunSeed{IR: ir, Prior: done, Journal: reopen(runDir)}, nil
+    // Prior seeds readiness-time lookup; Costs seed the metering admitter's
+    // spent ledger (the executor folds them), so a budget bounds the whole
+    // logical run across interruptions.
+    return &RunSeed{IR: ir, Prior: done, Costs: costs, Journal: reopen(runDir, lock)}, nil
 }
 ```
 
@@ -97,8 +102,9 @@ func (s *RunSeed) Lookup(stepID string, inputs map[string]any, tmpl, image strin
 }
 ```
 
-Fresh (`--no-cache`) is the degenerate seed: new run id, new journal, empty
-`Prior`.
+Fresh (`--fresh`) is the degenerate seed: new run id, new journal, empty
+`Prior` and `Costs`. Fresh takes the new run's lock exactly like resume —
+`Begin` acquires it before creating the journal.
 
 ## Interactive re-entry
 

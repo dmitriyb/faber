@@ -13,8 +13,9 @@ writes to the terminal directly.
 |---------|-------------|--------------|
 | `faber validate [--config path] [--emit-ir] [--workflow name]` | Load -> Validate -> Desugar -> WiringChecker -> infra package-resolution proof | the named (or every) workflow would start |
 | `faber build [--config path] [--template name]` | Load -> Validate -> ImageBuilder per template | images built and tagged |
-| `faber run <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
-| `faber resume <run-id> [--fresh] [--interactive <step-id>]` | journal load -> recovery mode dispatch (failure module) | as `run` |
+| `faber run <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
+| `faber resume <run-id> [--fresh] [--interactive <step-id>] [--report-json path\|-]` | journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
+| `faber upgrade-check [--force]` | run audit (failure module) -> refuse while live/unfinished runs exist | safe to swap the faber binary |
 | `faber add-key --role <name> --fingerprint SHA256:… [--comment <c>] [--force]` | security.RoleRegistry load -> AddKey -> atomic save | the role points at the fingerprint (upsert or verified no-op) |
 | `faber list-keys` | security.RoleRegistry load -> print | the registry was read and printed |
 
@@ -28,6 +29,10 @@ are thin dispatch; the store, validation, atomic write, idempotency, and
 `impl_role_registry.md`). A malformed `--fingerprint` or `--role`, or a
 missing required flag, is a usage error (exit 2); a refusal to re-point an
 existing role without `--force`, or an IO error, is exit 1.
+
+`run`/`resume` answer `-h`/`--help` with their usage and flag defaults on
+stdout, exit 0 — never the exit-2 usage error. `--report-json` writes the
+machine-readable run report to a path (`-` = stdout, after the human report).
 
 Flags shared by validate/build/run/resume: `--config` (default `orchestrator.yaml`), `--log-level`
 (default `info`), `--log-format` (auto/json/text). `--config` names the **root

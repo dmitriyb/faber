@@ -55,7 +55,7 @@ func (s builderSeam) BuildImage(ctx context.Context, cfg *config.Config, templat
 		return fmt.Errorf("infra: unknown template %q", template)
 	}
 	build, _ := config.ResolveBuild(cfg, tpl)
-	tag, err := s.b.Build(ctx, template, build)
+	tag, err := s.b.BuildWith(ctx, template, build, logger)
 	if err != nil {
 		return err
 	}

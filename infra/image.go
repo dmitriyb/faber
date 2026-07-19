@@ -109,6 +109,29 @@ func (b *ImageBuilder) resolvePin(build config.BuildDef) NixpkgsPin {
 // inputs that determine image content: the resolved pin revision, the sorted package
 // list, and the overlay file's content hash (bytes, not path).
 func (b *ImageBuilder) ImageTag(name string, build config.BuildDef) (string, error) {
+	overlay, err := readOverlay(build)
+	if err != nil {
+		return "", err
+	}
+	return b.imageTag(name, build, overlay), nil
+}
+
+// readOverlay reads the declared overlay's bytes, once — every consumer of
+// the same build must hash and stage the same bytes (see Build). nil when the
+// build declares no overlay.
+func readOverlay(build config.BuildDef) ([]byte, error) {
+	if build.Overlay == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(build.Overlay)
+	if err != nil {
+		return nil, fmt.Errorf("infra: overlay %s: %w", build.Overlay, err)
+	}
+	return data, nil
+}
+
+// imageTag is ImageTag over already-read overlay bytes.
+func (b *ImageBuilder) imageTag(name string, build config.BuildDef, overlay []byte) string {
 	pin := b.resolvePin(build) // build's pin, else the compiled-in default
 	h := sha256.New()
 	fmt.Fprintln(h, imageSchemaVersion)
@@ -117,14 +140,10 @@ func (b *ImageBuilder) ImageTag(name string, build config.BuildDef) (string, err
 		fmt.Fprintln(h, p)
 	}
 	if build.Overlay != "" {
-		data, err := os.ReadFile(build.Overlay)
-		if err != nil {
-			return "", fmt.Errorf("infra: overlay %s: %w", build.Overlay, err)
-		}
-		fmt.Fprintf(h, "%x\n", sha256.Sum256(data))
+		fmt.Fprintf(h, "%x\n", sha256.Sum256(overlay))
 	}
 	hash := fmt.Sprintf("%x", h.Sum(nil))[:tagHexLen]
-	return fmt.Sprintf("faber/%s:%s", name, hash), nil
+	return fmt.Sprintf("faber/%s:%s", name, hash)
 }
 
 // ProvePackages proves, without building, that every name in the template's
@@ -139,8 +158,12 @@ func (b *ImageBuilder) ProvePackages(ctx context.Context, tpl string, build conf
 	if err := checkSpliceNames(tpl, build); err != nil {
 		return err
 	}
+	overlay, err := readOverlay(build)
+	if err != nil {
+		return err
+	}
 	pin := b.resolvePin(build) // build's pin, else the compiled-in default
-	exprFile, cleanup, err := b.stageExpr(renderProofExpr(pin, build.Overlay != "", build.Packages), build.Overlay)
+	exprFile, cleanup, err := b.stageExpr(renderProofExpr(pin, build.Overlay != "", build.Packages), overlay, build.Overlay != "")
 	if err != nil {
 		return err
 	}
@@ -175,13 +198,28 @@ func (b *ImageBuilder) ProvePackages(ctx context.Context, tpl string, build conf
 // already exists nothing is built. Builds of one tag are serialized behind a
 // per-tag lock so concurrent steps of one template build once.
 func (b *ImageBuilder) Build(ctx context.Context, tpl string, build config.BuildDef) (string, error) {
+	return b.BuildWith(ctx, tpl, build, b.logger)
+}
+
+// BuildWith is Build with the caller's logger: a multi-minute nix build must
+// report progress at the invoking command's log level, not the construction-
+// time wiring logger's (pinned quiet by design).
+func (b *ImageBuilder) BuildWith(ctx context.Context, tpl string, build config.BuildDef, logger *slog.Logger) (string, error) {
+	if logger == nil {
+		logger = b.logger
+	}
 	if err := checkSpliceNames(tpl, build); err != nil {
 		return "", err
 	}
-	tag, err := b.ImageTag(tpl, build)
+	// The overlay is read exactly once per build: the tag hashes these bytes
+	// and the staged expression imports these same bytes, so an overlay edit
+	// racing the build can never load content under another content's tag
+	// (the daemon caches by tag — a mismatch would poison it permanently).
+	overlay, err := readOverlay(build)
 	if err != nil {
 		return "", err
 	}
+	tag := b.imageTag(tpl, build, overlay)
 	lock := b.tagLock(tag)
 	lock.Lock()
 	defer lock.Unlock()
@@ -191,19 +229,19 @@ func (b *ImageBuilder) Build(ctx context.Context, tpl string, build config.Build
 		return "", err
 	}
 	if exists {
-		b.logger.DebugContext(ctx, "image exists, skipping build", "template", tpl, "tag", tag)
+		logger.DebugContext(ctx, "image exists, skipping build", "template", tpl, "tag", tag)
 		return tag, nil
 	}
 
 	pin := b.resolvePin(build) // build's pin, else the compiled-in default
 	hash := tag[strings.LastIndexByte(tag, ':')+1:]
-	exprFile, cleanup, err := b.stageExpr(renderImageExpr(pin, tpl, hash, build.Packages, build.Overlay != ""), build.Overlay)
+	exprFile, cleanup, err := b.stageExpr(renderImageExpr(pin, tpl, hash, build.Packages, build.Overlay != ""), overlay, build.Overlay != "")
 	if err != nil {
 		return "", err
 	}
 	defer cleanup()
 
-	b.logger.InfoContext(ctx, "building image", "template", tpl, "tag", tag)
+	logger.InfoContext(ctx, "building image (a cold nix build can take minutes)", "template", tpl, "tag", tag)
 	outPaths, err := b.nix.Build(ctx, exprFile)
 	if err != nil {
 		return "", fmt.Errorf("infra: build image for template %s: %w", tpl, err)
@@ -217,7 +255,7 @@ func (b *ImageBuilder) Build(ctx context.Context, tpl string, build config.Build
 		return "", fmt.Errorf("infra: template %s: loaded tag %q does not match computed tag %q", tpl, loadedTag, tag)
 	}
 	b.appendManifest(ctx, tag, tpl, tarball)
-	b.logger.InfoContext(ctx, "image loaded", "template", tpl, "tag", tag)
+	logger.InfoContext(ctx, "image loaded", "template", tpl, "tag", tag)
 	return tag, nil
 }
 
@@ -233,22 +271,19 @@ func (b *ImageBuilder) tagLock(tag string) *sync.Mutex {
 	return l
 }
 
-// stageExpr writes the rendered expression (and a copy of the declared
-// overlay, so the expression only ever imports ./overlay.nix and no
+// stageExpr writes the rendered expression (and the already-read overlay
+// bytes, so the expression only ever imports ./overlay.nix and no
 // user-controlled path is spliced into Nix source) into a fresh temp dir.
-func (b *ImageBuilder) stageExpr(expr, overlayPath string) (exprFile string, cleanup func(), err error) {
+// The overlay bytes come from the caller's single read — staging never
+// re-reads the file, so what the tag hashed is exactly what the build imports.
+func (b *ImageBuilder) stageExpr(expr string, overlay []byte, withOverlay bool) (exprFile string, cleanup func(), err error) {
 	dir, err := os.MkdirTemp("", "faber-image-")
 	if err != nil {
 		return "", nil, fmt.Errorf("infra: stage nix expression: %w", err)
 	}
 	cleanup = func() { os.RemoveAll(dir) }
-	if overlayPath != "" {
-		data, rerr := os.ReadFile(overlayPath)
-		if rerr != nil {
-			cleanup()
-			return "", nil, fmt.Errorf("infra: overlay %s: %w", overlayPath, rerr)
-		}
-		if werr := os.WriteFile(filepath.Join(dir, stagedOverlayName), data, 0o644); werr != nil {
+	if withOverlay {
+		if werr := os.WriteFile(filepath.Join(dir, stagedOverlayName), overlay, 0o644); werr != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("infra: stage overlay: %w", werr)
 		}

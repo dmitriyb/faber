@@ -13,6 +13,14 @@ package contract
 
 import "strings"
 
+// ContractVersion is the faber↔faber-box result-contract schema version:
+// the shape of the env contract in and the result/handoff records out.
+// Independent of the application version — bumped only when that shape
+// changes. faber-box ships from the host as the same build, so a version
+// mismatch at either end is a FABER_BOX_BIN-misconfiguration detector
+// (a stale or foreign sequencer binary), not a migration path.
+const ContractVersion = 1
+
 // Environment variable names of the box env contract. The host side
 // (BuildRunSpec in the agent package) emits them; the sequencer's env phase
 // validates them. Absence of an optional name means the feature is off — no
@@ -90,6 +98,16 @@ const (
 	// stdin read on it. The signal and the payload are set together, never one
 	// without the other (see the pipeline scheduler's RunSpec assembly seam).
 	EnvSecretsStdin = "FABER_SECRETS_STDIN"
+
+	// EnvContractVersion carries the host's ContractVersion. The box refuses
+	// a mismatching value (a stale FABER_BOX_BIN cannot half-speak the
+	// contract); absence is tolerated for direct sequencer invocations.
+	EnvContractVersion = "FABER_CONTRACT_VERSION"
+
+	// EnvInputSlots is the comma-separated list of ALL declared input slot
+	// names (not just the required ones), so the box can record slot-keyed
+	// handoff inputs — the slot→token mapping is lossy in reverse.
+	EnvInputSlots = "FABER_INPUT_SLOTS"
 
 	// InputEnvPrefix prefixes one variable per bound input slot:
 	// FABER_INPUT_<SLOT>, the typed-inputs contract for hooks and agent.

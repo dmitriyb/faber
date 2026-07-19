@@ -62,10 +62,31 @@ re-derive config path + workflow + params from the journal header
 re-run cmdRun pipeline with the journal attached
 ```
 
-The journal header records config hash, workflow, params, and IR hash; resume
-refuses (with a clear message) if the current config desugars to a different IR
-hash unless `--fresh` is given — silently mixing journals across configs is the
-one mistake this must prevent.
+The journal header records config hash, workflow, params, IR hash, and the
+schema stamps (journal format, IR version). Resume's guards run in order,
+each refusing with a clear message unless `--fresh` is given: a journal
+format this binary does not speak (no auto-migration), an IR version the
+current engine does not emit (an engine upgrade — the message names the
+engine, never the operator's config), and finally a different IR hash
+(config drift). Silently mixing journals across configs — or across engine
+schemas — is the mistake this must prevent. The executor's resume path
+re-checks the failure-module versions of the same guards plus the recorded
+image tags; the CLI guards exist to refuse before the full config pipeline
+re-runs.
+
+### cmdUpgradeCheck
+
+```
+runs := deps.Audit.AuditRuns()   // read-only, format-tolerant kind probe
+blocking := live (lock held) ∪ unfinished (no run-end marker)
+exit 1 listing blocking runs; --force acknowledges and exits 0
+```
+
+The read-only pre-upgrade guard ("faber is not upgraded mid-run"): it never
+mutates a journal and never updates faber — the binary swap is external. A
+pre-versioning journal (no format stamp) reports as unfinished-unknown and
+blocks; across a schema bump the in-flight runs are finished on the old
+binary or restarted `--fresh`.
 
 ### cmdAddKey / cmdListKeys
 

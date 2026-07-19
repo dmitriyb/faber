@@ -44,7 +44,7 @@ Scheduler (normal execution) ── step becomes ready ──► compute input-h
         │                    hit, status ok            miss / status failed
         │                    skip; reuse payload       run the step normally
         ▼
-faber run --no-cache   → new run dir + journal, empty prior map, no lookups
+faber resume <run> --fresh   → new run dir + journal, empty prior map, no lookups
 faber resume --interactive <run> <step>
                        → rebuild failed step's box (image, bindings, inputs,
                          handoff ro-mounted) → operator shell → no journal write
