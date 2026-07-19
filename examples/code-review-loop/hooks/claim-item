@@ -1,0 +1,10 @@
+#!/bin/sh
+# prelude hook: deterministic pre-agent setup. Runs after the clone, before
+# the agent, with the delegated credentials only. Typical duties: create the
+# work branch, mark the item claimed in your tracker (via its CLI), record
+# the branch as the step's declared side-effect in bundle.env so faber can
+# verify it exists after the agent phase.
+set -eu
+branch="work/${FABER_INPUT_ITEM}"
+git -C "$(basename "${FABER_INPUT_REPO}" .git 2>/dev/null || echo .)" checkout -b "${branch}" 2>/dev/null || true
+echo "BRANCH=${branch}" >> "${FABER_BUNDLE_DIR}/bundle.env"

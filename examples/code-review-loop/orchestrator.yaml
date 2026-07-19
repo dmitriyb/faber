@@ -1,0 +1,122 @@
+version: 1
+
+# The production-shaped example: implement a work item, review it in a bounded
+# loop, merge when approved. Three role identities, an egress-locked network,
+# a pinned git gateway, and delegated credentials. This is the spec's
+# reference acceptance workflow presented as user documentation — every
+# domain-specific behavior lives in the hooks/ scripts, not in faber.
+
+network:
+  name: agents-internal              # docker network create --internal agents-internal
+  proxy: http://egress:8888          # your allow-listing egress proxy (companion service)
+  no_proxy: [gateway, localhost, 127.0.0.1]
+
+remote:
+  url: ssh://git@gateway/srv/git     # the box's ONLY reachable git remote
+  host_key_file: ./keys/gateway_host_key.pub   # pinned: StrictHostKeyChecking=yes
+
+credentials:
+  resolver: ./hooks/get-token        # get_token(service): opaque, host-side
+  services:
+    agent-api:
+      mode: proxy                    # box talks to an unauthenticated local endpoint;
+      endpoint: http://token-proxy:8402   # the proxy injects auth — no token in the box
+
+identities:                          # one ephemeral ssh-agent + one key per box
+  implementer: {key: ./keys/implementer}
+  reviewer:    {key: ./keys/reviewer}
+  merger:      {key: ./keys/merger}
+
+templates:
+  implement:
+    build:
+      packages: [git, openssh, go, gopls, claude-code]
+      overlay: ./nix/overlay.nix     # your derivations for CLIs not in nixpkgs
+    run:
+      identity: implementer
+      resources: {memory: 8g, cpus: 4}
+      env: {FABER_AGENT_CLI: claude}
+    skill: implement
+    hooks:
+      context: ./hooks/gather-context
+      prelude: ./hooks/claim-item
+      on_failure: ./hooks/release-item
+    inputs:
+      repo: {type: string, required: true}
+      item: {type: string, required: true}
+    output:
+      branch: {type: string, required: true}
+      pr:     {type: int,    required: true}
+
+  review:
+    build:
+      packages: [git, openssh, go, claude-code]
+      overlay: ./nix/overlay.nix
+    run:
+      identity: reviewer
+      env: {FABER_AGENT_CLI: claude}
+    skill: review
+    hooks:
+      context: ./hooks/fetch-pr
+    inputs:
+      repo: {type: string, required: true}
+      pr:   {type: int,    required: true}
+    output:
+      verdict: {type: string, enum: [approved, changes], required: true}
+
+  fix:
+    build:
+      packages: [git, openssh, go, gopls, claude-code]
+      overlay: ./nix/overlay.nix
+    run:
+      identity: implementer
+      env: {FABER_AGENT_CLI: claude}
+    skill: fix
+    hooks:
+      context: ./hooks/fetch-pr
+    inputs:
+      repo: {type: string, required: true}
+      pr:   {type: int,    required: true}
+    output:
+      status: {type: string, required: true}
+
+  merge:
+    build:
+      packages: [git, openssh]
+    run:
+      identity: merger
+      env: {FABER_AGENT_CLI: claude}
+    skill: merge
+    inputs:
+      repo: {type: string, required: true}
+      pr:   {type: int,    required: true}
+    output:
+      merged: {type: bool, required: true}
+
+workflows:
+  task:
+    params:
+      repo: {type: string, required: true}
+      item: {type: string, required: true}
+    steps:
+      - id: implement
+        use: implement
+        with: {repo: "${params.repo}", item: "${params.item}"}
+
+      - id: review-cycle
+        loop:
+          max: 3                                       # bound; exhaustion = failure
+          until: steps.review.verdict == "approved"
+          steps:
+            - id: review
+              use: review
+              with: {repo: "${params.repo}", pr: "${steps.implement.pr}"}
+            - id: fix
+              use: fix
+              when: steps.review.verdict == "changes"
+              with: {repo: "${params.repo}", pr: "${steps.implement.pr}"}
+
+      - id: merge
+        use: merge
+        when: steps.review.verdict == "approved"       # post-loop ref = final executed iteration
+        with: {repo: "${params.repo}", pr: "${steps.implement.pr}"}

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+{
+  echo "# Migrate ${FABER_INPUT_MODULE}"
+  echo
+  echo "Apply the migration recipe to this module only, commit signed, push a branch."
+} > "${FABER_BUNDLE_DIR}/CONTEXT.md"

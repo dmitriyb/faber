@@ -1,0 +1,12 @@
+#!/bin/sh
+# context hook: turn the step's typed inputs into the agent's prompt body.
+# Contract: inputs arrive as FABER_INPUT_*; write a non-empty CONTEXT.md into
+# $FABER_BUNDLE_DIR and exit 0, or the step aborts before the agent starts.
+# Replace the body with your tracker/spec lookups — faber never sees them.
+set -eu
+{
+  echo "# Work item ${FABER_INPUT_ITEM}"
+  echo
+  echo "Repository: ${FABER_INPUT_REPO} (already cloned into the workspace)"
+  echo "Implement the item end to end, commit signed, and push a branch."
+} > "${FABER_BUNDLE_DIR}/CONTEXT.md"

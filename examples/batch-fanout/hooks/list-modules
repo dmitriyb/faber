@@ -1,0 +1,15 @@
+#!/bin/sh
+# data-source command: emit the fan-out set. Contract: JSON on stdout,
+# {"items": [{"id": <unique>, "deps": [ids...], ...extra fields}]}. Extra
+# fields are bindable as ${item.<field>}; deps pointing outside the set are
+# ignored. An empty items list is a no-op run; malformed output fails the
+# generate node before anything launches. Replace with your real query
+# (tracker CLI, repo scan, service catalog).
+set -eu
+cat <<'JSON'
+{"items": [
+  {"id": "pkg/db",     "deps": []},
+  {"id": "pkg/queue",  "deps": []},
+  {"id": "pkg/api",    "deps": ["pkg/db", "pkg/queue"]}
+]}
+JSON

@@ -1,0 +1,61 @@
+version: 1
+
+# Fan a sub-workflow out over a data source at run time. The `members` command
+# emits {"items": [{"id": ..., "deps": [...], ...extra fields}]}; faber
+# instantiates the `migrate` workflow once per item, binds item fields into
+# its params, and derives inter-instance ordering from each item's deps —
+# independent items run in parallel, dependents wait.
+
+network:
+  name: agents-internal
+  proxy: http://egress:8888
+  no_proxy: [gateway, localhost, 127.0.0.1]
+
+remote:
+  url: ssh://git@gateway/srv/git
+  host_key_file: ./keys/gateway_host_key.pub
+
+identities:
+  migrator: {key: ./keys/migrator}
+
+templates:
+  migrate-module:
+    build:
+      packages: [git, openssh, go, claude-code]
+    run:
+      identity: migrator
+      env: {FABER_AGENT_CLI: claude}
+    skill: migrate
+    hooks:
+      context: ./hooks/module-context
+      on_failure: ./hooks/abandon-branch
+    inputs:
+      repo:   {type: string, required: true}
+      module: {type: string, required: true}
+    output:
+      branch:  {type: string, required: true}
+      changed: {type: bool,   required: true}
+
+workflows:
+  migrate:
+    params:
+      repo:   {type: string, required: true}
+      module: {type: string, required: true}
+    steps:
+      - id: migrate
+        use: migrate-module
+        with: {repo: "${params.repo}", module: "${params.module}"}
+
+  rollout:
+    params:
+      repo: {type: string, required: true}
+    sources:
+      modules:
+        command: ./hooks/list-modules     # emits {"items":[{"id":"pkg/db","deps":[]}, ...]}
+        args: ["${params.repo}"]
+    steps:
+      - id: migrations
+        generate:
+          source: modules
+          workflow: migrate
+          with: {repo: "${params.repo}", module: "${item.id}"}
