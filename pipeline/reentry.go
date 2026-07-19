@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -68,7 +70,7 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	if !ok {
 		return fmt.Errorf("pipeline: interactive re-entry: step %s preserved no handoff state to reconstruct from", t.StepID)
 	}
-	raw, err := os.ReadFile(handoffPath)
+	raw, err := contract.ReadBoundedFile(handoffPath)
 	if err != nil {
 		return fmt.Errorf("pipeline: interactive re-entry: read handoff record: %w", err)
 	}
@@ -76,8 +78,15 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	if err := json.Unmarshal(raw, &handoff); err != nil {
 		return fmt.Errorf("pipeline: interactive re-entry: parse handoff record: %w", err)
 	}
-	tag := ""
-	if r.Images != nil {
+	inputs, err := handoffInputs(handoff, node.Template)
+	if err != nil {
+		return fmt.Errorf("pipeline: interactive re-entry: %w", err)
+	}
+	// Prefer the tag the run was journaled against: re-entry reconstructs
+	// the box the step actually ran, even when a pin or faber upgrade has
+	// since moved the current tag derivation.
+	tag := t.Header.Images[node.Template.Name]
+	if tag == "" && r.Images != nil {
 		if tag, err = r.Images.Tag(node.Template); err != nil {
 			return fmt.Errorf("pipeline: interactive re-entry: resolve image tag: %w", err)
 		}
@@ -86,7 +95,12 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	if attempt < 1 {
 		attempt = 1
 	}
-	sessionDir := filepath.Join(t.RunDir, "interactive", pathToken(t.StepID))
+	// The session dir and container name carry a per-session salt: two
+	// concurrent sessions on the same step must never share mounts (the
+	// second's setup would clear the first's live session dir) or collide on
+	// the container name.
+	salt := sessionSalt()
+	sessionDir := filepath.Join(t.RunDir, "interactive", pathToken(t.StepID)+"-"+salt)
 	resultDir := filepath.Join(sessionDir, "result")
 	scratchDir := filepath.Join(sessionDir, "scratch")
 	if err := os.MkdirAll(resultDir, 0o755); err != nil {
@@ -95,6 +109,9 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
 		return fmt.Errorf("pipeline: interactive re-entry: %w", err)
 	}
+	// A session is observation, not execution: nothing durable may accumulate
+	// under the salted dir, so it goes when the shell exits.
+	defer os.RemoveAll(sessionDir)
 
 	skillsHost, skillsCleanup, err := stageSkills(node.Template.Skills, sessionDir)
 	if err != nil {
@@ -107,7 +124,7 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		Attempt:     attempt,
 		Template:    node.Template,
 		Image:       tag,
-		Inputs:      handoff.Inputs,
+		Inputs:      inputs,
 		ResultDir:   resultDir,
 		EntryBinary: r.EntryBinary,
 		ContextHook: node.Template.Hooks.Context,
@@ -138,7 +155,7 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		Identity:     identity,
 		IdentityRole: node.Template.Identity,
 		Runtime:      node.Template.Runtime,
-		Repo:         handoff.Inputs["repo"],
+		Repo:         inputs["repo"],
 		ScratchDir:   scratchDir,
 	})
 	if err != nil {
@@ -154,13 +171,48 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		shell = []string{"/bin/sh"}
 	}
 	spec.Entry = shell
-	spec.Name = spec.Name + "-i" + strconv.Itoa(attempt)
+	spec.Name = spec.Name + "-i" + strconv.Itoa(attempt) + "-" + salt
 	spec.Mounts = append(spec.Mounts, infra.Mount{
 		Host:      filepath.Dir(handoffPath),
 		Container: containerHandoffDir,
 		ReadOnly:  true,
 	})
 	return r.Interactive.RunInteractive(ctx, spec)
+}
+
+// handoffInputs maps a handoff record's Inputs onto the slot-named run
+// contract. A record marked HandoffKeyingSlot is already slot-keyed and used
+// as is. A pre-versioning record is keyed by env tokens; the template's
+// declared slots translate it forward (slot → token is total; the reverse is
+// lossy, which is why the box now records slots). A record with no usable
+// inputs while the template requires some is refused with a clear message
+// rather than surfacing as per-slot contract violations.
+func handoffInputs(h contract.Handoff, tpl *config.ResolvedTemplate) (map[string]string, error) {
+	inputs := h.Inputs
+	if h.Keying != contract.HandoffKeyingSlot {
+		inputs = make(map[string]string, len(h.Inputs))
+		for slot := range tpl.Inputs {
+			if v, ok := h.Inputs[contract.SlotToken(slot)]; ok {
+				inputs[slot] = v
+			}
+		}
+	}
+	for slot, def := range tpl.Inputs {
+		if def.Required && inputs[slot] == "" {
+			return nil, fmt.Errorf(
+				"handoff record carries no value for required input %q (keying %q) — the record may predate this faber or was truncated; re-run the step instead",
+				slot, h.Keying)
+		}
+	}
+	return inputs, nil
+}
+
+// sessionSalt mints the short random token distinguishing concurrent
+// interactive sessions on one step (dir suffix and container-name suffix).
+func sessionSalt() string {
+	var b [4]byte
+	rand.Read(b[:]) // never fails per crypto/rand contract
+	return hex.EncodeToString(b[:])
 }
 
 // findIRNode looks a node id up across the IR, recursing into inlined
