@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -56,6 +57,13 @@ func (b *RemoteBinding) Prepare(_ context.Context, step StepSpec) (Contribution,
 	if r.URL == "" {
 		return Contribution{}, errors.New("remote configured without a url")
 	}
+	// The repo value is a resolved step input — possibly an upstream box's
+	// output — spliced into the clone URL. It must be a plain repository
+	// path: no traversal, no URL metacharacters, no whitespace or control
+	// bytes that could re-shape the URL the box clones and pushes.
+	if err := checkRepoShape(step.Repo); err != nil {
+		return Contribution{}, fmt.Errorf("repo input %q: %w", step.Repo, err)
+	}
 	args := []string{"-e", EnvRemoteURL + "=" + cloneURL(r.URL, step.Repo)}
 	switch {
 	case r.HostKeyFile != "" && r.TOFU:
@@ -78,6 +86,24 @@ func (b *RemoteBinding) Prepare(_ context.Context, step StepSpec) (Contribution,
 // cloneURL splices the resolved repo input into the gateway URL prefix.
 func cloneURL(prefix, repo string) string {
 	return strings.TrimSuffix(prefix, "/") + "/" + repo + ".git"
+}
+
+// repoShape is the closed grammar for a spliced repo path: slash-separated
+// segments of [A-Za-z0-9._-], no leading slash, no empty segment.
+var repoShape = regexp.MustCompile(`^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`)
+
+// checkRepoShape rejects a repo value that could re-shape the clone URL or
+// climb the gateway's path space.
+func checkRepoShape(repo string) error {
+	if !repoShape.MatchString(repo) {
+		return fmt.Errorf("not a plain repository path (segments of [A-Za-z0-9._-] separated by '/')")
+	}
+	for _, seg := range strings.Split(repo, "/") {
+		if seg == "." || seg == ".." {
+			return fmt.Errorf("path segment %q is not allowed", seg)
+		}
+	}
+	return nil
 }
 
 // readHostKeyLine reads the pinned gateway host key host-side: a trimmed

@@ -121,3 +121,53 @@ func TestExtractResultRecomputesUnthreaded(t *testing.T) {
 		t.Fatalf("unthreaded = %v", got.Unthreaded)
 	}
 }
+
+// Verifies ff8e85704b0a (§1 contract handshake): the host asserts the
+// record's stamped contract version on extract — an unstamped record (a
+// writer that predates stamping) and a wrong stamp both surface as a
+// contract-version failure naming FABER_BOX_BIN, never interpreted as if
+// they spoke this contract.
+func TestExtractAssertsContractVersion(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(`{"status":"ok","payload":{"field":"v"},"attempt":1}`) // no contract stamp
+	if err := os.WriteFile(filepath.Join(dir, contract.ResultFile), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ExtractResult(dir, OutputSchema{"field": config.FieldDef{Type: "string"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StatusFailed || res.Error.Reason != contract.ReasonContractVersion {
+		t.Fatalf("unstamped record must fail contract-version, got %+v", res)
+	}
+	if !strings.Contains(res.Error.Detail, "FABER_BOX_BIN") {
+		t.Fatalf("detail must point at FABER_BOX_BIN: %s", res.Error.Detail)
+	}
+
+	// A wrong stamp likewise.
+	raw = []byte(`{"status":"ok","contract":99,"payload":{"field":"v"},"attempt":1}`)
+	if err := os.WriteFile(filepath.Join(dir, contract.ResultFile), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = ExtractResult(dir, OutputSchema{"field": config.FieldDef{Type: "string"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StatusFailed || res.Error.Reason != contract.ReasonContractVersion {
+		t.Fatalf("mismatched stamp must fail contract-version, got %+v", res)
+	}
+
+	// The stamped writer (WriteResultFile) passes.
+	if err := contract.WriteResultFile(dir, contract.Result{
+		Status: contract.StatusOK, Payload: map[string]any{"field": "v"}, Attempt: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err = ExtractResult(dir, OutputSchema{"field": config.FieldDef{Type: "string"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StatusOK {
+		t.Fatalf("stamped record must extract ok, got %+v", res)
+	}
+}

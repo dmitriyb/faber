@@ -119,7 +119,18 @@ func (m *exactMeter) Actual(_ context.Context, r ResultView) ([]Cost, error) {
 	if len(m.fields) > 0 && r.Usage != nil {
 		var total int64
 		for _, f := range m.fields {
-			total += r.Usage[f]
+			v, ok := r.Usage[f]
+			if !ok {
+				// A renamed vendor field would otherwise silently read as
+				// zero and under-charge every step from here on.
+				m.logger.Warn("configured usage field absent from the sidecar; it contributes zero",
+					"node", r.NodeID, "field", f)
+				continue
+			}
+			// Saturating, matching the ledger: usage is box-authored bytes
+			// (already clamped >= 0 at read), and a multi-field sum must not
+			// wrap negative before it reaches Settle.
+			total = satAdd(total, v)
 		}
 		return []Cost{{Unit: m.unit, Amount: total}}, nil
 	}
@@ -194,7 +205,16 @@ func (m *reportedMeter) Actual(_ context.Context, r ResultView) ([]Cost, error) 
 	}
 	byUnit := map[Unit]int64{}
 	for field, unit := range m.fields {
-		byUnit[unit] += r.Usage[field]
+		v, ok := r.Usage[field]
+		if !ok {
+			m.logger.Warn("configured usage field absent from the sidecar; it contributes zero",
+				"node", r.NodeID, "field", field)
+			if _, seen := byUnit[unit]; !seen {
+				byUnit[unit] = 0 // enroll the unit so a zero cost is still reported
+			}
+			continue
+		}
+		byUnit[unit] = satAdd(byUnit[unit], v)
 	}
 	costs := make([]Cost, 0, len(byUnit))
 	for _, u := range sortedUnits(byUnit) {

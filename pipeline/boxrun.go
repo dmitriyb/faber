@@ -105,6 +105,13 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	attemptDir := filepath.Join(box.RunDir, "boxes", pathToken(box.NodeID), "attempt-"+strconv.Itoa(box.Attempt))
 	resultDir := filepath.Join(attemptDir, "result")
 	scratchDir := filepath.Join(attemptDir, "scratch")
+	// A reused attempt dir (a resumed run's attempt numbering restarts; a
+	// crashed launch may have deposited files) can hold a stale result.json
+	// that ExtractResult would adopt as this attempt's outcome. Clear it so
+	// whatever the extractor reads was written by this attempt's container.
+	if err := os.RemoveAll(attemptDir); err != nil {
+		return BoxResult{}, fmt.Errorf("pipeline: box %s: clear stale attempt dir: %w", box.NodeID, err)
+	}
 	if err := os.MkdirAll(resultDir, 0o755); err != nil {
 		return BoxResult{}, fmt.Errorf("pipeline: box %s: %w", box.NodeID, err)
 	}
@@ -187,15 +194,36 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	if err != nil {
 		return BoxResult{}, err
 	}
-	res := adaptResult(rec, box, runRes)
-	return BoxResult{Result: res, Usage: readUsage(resultDir)}, nil
+	if runErr != nil && rec.Status == agent.StatusFailed && rec.Error != nil && rec.Error.Reason == contract.ReasonBoxVanished {
+		// The container never produced a record because the actuation itself
+		// failed (daemon unreachable, bad flag, missing image). The true cause
+		// must live in the failure record, not at debug level — otherwise the
+		// operator sees only a synthetic "box vanished" while each retry burns
+		// against the same dead daemon.
+		rec.Error.Detail = fmt.Sprintf("container actuation failed: %v (%s; output tail: %s)",
+			runErr, rec.Error.Detail, outputTail(runRes.Output, 2048))
+	}
+	res := adaptResult(rec, box, runRes, log)
+	return BoxResult{Result: res, Usage: readUsage(resultDir, log)}, nil
+}
+
+// outputTail renders the last max bytes of captured container output for a
+// failure record's detail.
+func outputTail(out []byte, max int) string {
+	if len(out) > max {
+		out = out[len(out)-max:]
+	}
+	return string(out)
 }
 
 // adaptResult maps the agent module's attempt record onto the failure
 // module's result shape. Only ok payloads thread; a failed record's handoff
 // pointer is re-rooted under the run directory so the interactive mode can
-// resolve it.
-func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult) failure.Result {
+// resolve it — and, because the pointer is box-authored bytes, it must
+// resolve strictly under the attempt's result dir (the same discipline the
+// skill stager applies to names): a traversal like "../../.." would otherwise
+// bind an arbitrary host directory into the operator's re-entry container.
+func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult, log *slog.Logger) failure.Result {
 	out := failure.Result{
 		Attempt: box.Attempt,
 		Timing: failure.Timing{
@@ -222,12 +250,25 @@ func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult) failu
 	if rec.Error != nil {
 		errRec = &failure.ErrorRecord{Reason: sanitizeBoxReason(rec.Error.Reason), Detail: rec.Error.Detail}
 		if rec.Error.Handoff != "" {
-			errRec.Handoff = filepath.Join("boxes", pathToken(box.NodeID),
-				"attempt-"+strconv.Itoa(box.Attempt), "result", rec.Error.Handoff)
+			resultRel := filepath.Join("boxes", pathToken(box.NodeID), "attempt-"+strconv.Itoa(box.Attempt), "result")
+			joined := filepath.Join(resultRel, rec.Error.Handoff)
+			if !pathWithin(joined, resultRel) {
+				log.Warn("box-authored handoff pointer escapes the attempt result dir; dropping it",
+					"step", box.NodeID, "handoff", rec.Error.Handoff)
+				errRec.Detail += " (handoff pointer escaped the attempt result dir and was dropped)"
+			} else {
+				errRec.Handoff = joined
+			}
 		}
 	}
 	out.Error = errRec
 	return out
+}
+
+// pathWithin reports whether the cleaned relative path p lies strictly under
+// base (itself clean, relative, separator-normalized).
+func pathWithin(p, base string) bool {
+	return strings.HasPrefix(p, base+string(filepath.Separator))
 }
 
 // sanitizeBoxReason namespaces box-authored failure reasons that collide with
@@ -243,16 +284,36 @@ func sanitizeBoxReason(reason string) string {
 	return reason
 }
 
-// readUsage decodes the advisory usage sidecar; absence or malformation is
-// simply no usage.
-func readUsage(resultDir string) map[string]int64 {
-	raw, err := os.ReadFile(filepath.Join(resultDir, contract.UsageFile))
+// maxUsageBytes bounds the advisory usage sidecar read — the box writes a
+// small flat object; anything larger is not a usage report.
+const maxUsageBytes = 1 << 20
+
+// readUsage decodes the advisory usage sidecar. Absence is simply no usage;
+// malformation and oversize are logged (a silently dropped sidecar reads as
+// "the vendor reported nothing" and quietly disables the reported tier); and
+// values are clamped non-negative — the sidecar is box-authored bytes, and a
+// negative count must never reach the budget ledger as a refund.
+func readUsage(resultDir string, log *slog.Logger) map[string]int64 {
+	f, err := os.Open(filepath.Join(resultDir, contract.UsageFile))
 	if err != nil {
+		return nil // absent: the box deposited no usage
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, maxUsageBytes+1))
+	if err != nil || len(raw) > maxUsageBytes {
+		log.Warn("usage sidecar unreadable or over the size bound; ignoring it", "err", err, "bytes", len(raw))
 		return nil
 	}
 	var usage map[string]int64
 	if err := json.Unmarshal(raw, &usage); err != nil {
+		log.Warn("usage sidecar undecodable; ignoring it (metering's reported tier will see no usage)", "err", err)
 		return nil
+	}
+	for k, v := range usage {
+		if v < 0 {
+			log.Warn("negative usage value clamped to zero", "field", k, "value", v)
+			usage[k] = 0
+		}
 	}
 	return usage
 }
