@@ -64,6 +64,7 @@ func TestJournalRoundTrip(t *testing.T) {
 	}
 	wantHdr := hdr
 	wantHdr.Kind = KindHeader
+	wantHdr.Format = JournalFormat // stamped by appendHeader
 	if !reflect.DeepEqual(rp.Header, wantHdr) {
 		t.Fatalf("header round trip:\nwant %+v\ngot  %+v", wantHdr, rp.Header)
 	}
@@ -158,7 +159,7 @@ func TestJournalTornLastLine(t *testing.T) {
 func TestJournalCorruptMiddleLineFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "journal.jsonl")
-	hdrLine, _ := marshalLine(Header{Kind: KindHeader, RunID: "run-1"})
+	hdrLine, _ := marshalLine(Header{Kind: KindHeader, Format: JournalFormat, RunID: "run-1"})
 	content := string(hdrLine) + "{torn garbage\n" + `{"kind":"cost","step_id":"task/a","input_hash":"h","cost":{}}` + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -310,6 +311,7 @@ func TestLoadHeaderSeam(t *testing.T) {
 		Workflow:   hdr.Workflow,
 		Params:     hdr.Params,
 		IRHash:     hdr.IRHash,
+		Format:     JournalFormat,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("seam header:\nwant %+v\ngot  %+v", want, got)
@@ -346,5 +348,148 @@ func TestJournalAppendRejectsOversized(t *testing.T) {
 	}
 	if len(rp.Results) != 1 {
 		t.Fatalf("want exactly the small record, got %d", len(rp.Results))
+	}
+}
+
+// Verifies bff0f92afc29 (§1 versioning): replay fails closed on any format
+// stamp other than this binary's — a higher stamp names the newer writer, a
+// lower (or absent) stamp names the no-auto-migration rule — and never
+// silently misinterprets records.
+func TestJournalFormatGuard(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, hdr string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(hdr+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	newer := write("newer.jsonl", `{"kind":"header","format":99,"run_id":"r"}`)
+	if _, err := Load(newer, nil); err == nil || !strings.Contains(err.Error(), "newer faber") {
+		t.Fatalf("want newer-writer refusal, got %v", err)
+	}
+
+	older := write("older.jsonl", `{"kind":"header","run_id":"r"}`)
+	if _, err := Load(older, nil); err == nil || !strings.Contains(err.Error(), "no auto-migration") {
+		t.Fatalf("want no-auto-migration refusal for a pre-versioning journal, got %v", err)
+	}
+}
+
+// Verifies bff0f92afc29: the run-end marker round-trips — absent while the
+// run is mid-flight, present (last-wins) once an execution finishes.
+func TestJournalRunEndReplay(t *testing.T) {
+	store := NewStore(t.TempDir(), nil)
+	j, err := store.Begin(diamondHeader("run-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp, err := store.Load("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rp.End != nil {
+		t.Fatal("a run with no run-end marker must replay End == nil")
+	}
+	if err := j.AppendRunEnd(RunEndRecord{Status: RunEndAborted, Detail: "ctx canceled"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.AppendRunEnd(RunEndRecord{Status: RunEndSettled, Failed: 2}); err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	rp, err = store.Load("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rp.End == nil || rp.End.Status != RunEndSettled || rp.End.Failed != 2 {
+		t.Fatalf("run-end replay must be last-wins, got %+v", rp.End)
+	}
+}
+
+// Verifies bff0f92afc29 (IN-F4): the torn-tail drop applies only to an
+// UNTERMINATED final line (a crash artifact); a newline-terminated malformed
+// final line completed its write and is a hard error, never dropped.
+func TestJournalTerminatedCorruptFinalLine(t *testing.T) {
+	dir := t.TempDir()
+	hdrLine, _ := marshalLine(Header{Kind: KindHeader, Format: JournalFormat, RunID: "run-1"})
+
+	torn := filepath.Join(dir, "torn.jsonl")
+	if err := os.WriteFile(torn, append(hdrLine, `{"kind":"cost","step`...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(torn, nil); err != nil {
+		t.Fatalf("unterminated final fragment must be dropped as torn, got %v", err)
+	}
+
+	terminated := filepath.Join(dir, "terminated.jsonl")
+	if err := os.WriteFile(terminated, append(hdrLine, "{\"kind\":\"cost\",\"step\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(terminated, nil); err == nil {
+		t.Fatal("a newline-terminated malformed final line is real corruption and must fail loudly")
+	}
+}
+
+// Verifies 87f006277d2c (§1 upgrade guard): AuditRuns reports liveness (lock
+// held), completeness (run-end present), and the format stamp — tolerantly,
+// across journal vintages the replay path refuses.
+func TestAuditRuns(t *testing.T) {
+	store := NewStore(t.TempDir(), nil)
+
+	done, err := store.Begin(diamondHeader("run-complete"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := done.AppendRunEnd(RunEndRecord{Status: RunEndSettled}); err != nil {
+		t.Fatal(err)
+	}
+	done.Close()
+
+	interrupted, err := store.Begin(diamondHeader("run-interrupted"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted.Close()
+
+	live, err := store.Begin(diamondHeader("run-live"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+
+	// A pre-versioning journal, hand-written without a format stamp.
+	oldDir := store.RunDir("run-old")
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "journal.jsonl"),
+		[]byte(`{"kind":"header","run_id":"run-old"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	audits, err := store.AuditRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]config.RunAudit{}
+	for _, a := range audits {
+		byID[a.RunID] = a
+	}
+	if len(byID) != 4 {
+		t.Fatalf("want 4 audited runs, got %v", audits)
+	}
+	if a := byID["run-complete"]; !a.Complete || a.Live || a.Format != JournalFormat {
+		t.Fatalf("run-complete: %+v", a)
+	}
+	if a := byID["run-interrupted"]; a.Complete || a.Live {
+		t.Fatalf("run-interrupted: %+v", a)
+	}
+	if a := byID["run-live"]; !a.Live || a.Complete {
+		t.Fatalf("run-live: %+v", a)
+	}
+	if a := byID["run-old"]; a.Complete || a.Format != 0 {
+		t.Fatalf("run-old: %+v", a)
 	}
 }

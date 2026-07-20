@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,8 @@ type fakeContainers struct {
 	specs  []infra.RunSpec
 	record *contract.Result // nil writes nothing (box vanished)
 	usage  map[string]int64
+	runErr error  // actuation failure returned by Run
+	output []byte // captured container output tail
 }
 
 func (f *fakeContainers) Run(ctx context.Context, spec infra.RunSpec) (infra.RunResult, error) {
@@ -44,7 +47,7 @@ func (f *fakeContainers) Run(ctx context.Context, spec infra.RunSpec) (infra.Run
 		raw, _ := json.Marshal(f.usage)
 		os.WriteFile(filepath.Join(resultDir, contract.UsageFile), raw, 0o644)
 	}
-	return infra.RunResult{ExitCode: 0, Started: testBase, Duration: 2e9}, nil
+	return infra.RunResult{ExitCode: 0, Output: f.output, Started: testBase, Duration: 2e9}, f.runErr
 }
 
 // fakeBindings records Prepare calls and returns a fixed argv fragment. When
@@ -232,6 +235,7 @@ func TestBoxRun_InteractiveReentry(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := contract.WriteHandoffFile(handoffDir, contract.Handoff{
+		Keying: contract.HandoffKeyingSlot,
 		Phase:  "agent",
 		Reason: "agent-failed",
 		Inputs: map[string]string{"out": "v"},
@@ -364,5 +368,257 @@ func TestBoxRun_ReservedReasonsSanitized(t *testing.T) {
 	}
 	if got.Result.Error.Reason != "rate-limit" {
 		t.Errorf("non-reserved reason mangled: %q", got.Result.Error.Reason)
+	}
+}
+
+// Verifies a0f44481f57b: a reused attempt dir (a resumed run's attempt
+// numbering restarts at 1) is cleared before launch — a stale result.json
+// left by an abandoned earlier process must never be adopted as the current
+// attempt's outcome. The box writes nothing here, so anything but a
+// box-vanished failure means the stale record leaked through.
+func TestBoxRun_StaleAttemptDirCleared(t *testing.T) {
+	attempt := boxAttempt(t)
+	staleDir := filepath.Join(attempt.RunDir, "boxes", pathToken(attempt.NodeID), "attempt-1", "result")
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := contract.WriteResultFile(staleDir, contract.Result{
+		Status: contract.StatusOK, Payload: map[string]any{"out": "stale"}, Attempt: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	boxes := &AgentBoxes{Containers: &fakeContainers{}, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	got, err := boxes.RunAttempt(context.Background(), attempt)
+	if err != nil {
+		t.Fatalf("run attempt: %v", err)
+	}
+	if got.Result.Status != failure.StatusFailed || got.Result.Error.Reason != contract.ReasonBoxVanished {
+		t.Fatalf("stale result adopted as the attempt's outcome: %+v", got.Result)
+	}
+}
+
+// Verifies 87f006277d2c: interactive sessions are per-session isolated — two
+// re-entries of the same failed step get distinct container names and
+// distinct session dirs (a second session must never clear the first's live
+// mounts), and a finished session removes its dir (observation leaves no
+// state behind).
+func TestBoxRun_InteractiveSessionsIsolated(t *testing.T) {
+	store := failure.NewStore(t.TempDir(), nil)
+	ir := testIR("w", []config.Node{agentNode("w/x", "out")}, nil)
+	hash, _ := config.HashIR(ir)
+	seed, err := store.Fresh(failure.Header{RunID: "run-s", Workflow: "w", IRHash: hash, Started: testBase})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoffRel := filepath.Join("boxes", "x", "attempt-1", "result")
+	handoffDir := filepath.Join(store.RunDir("run-s"), handoffRel)
+	if err := os.MkdirAll(handoffDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := contract.WriteHandoffFile(handoffDir, contract.Handoff{
+		Keying: contract.HandoffKeyingSlot,
+		Phase:  "agent", Reason: "agent-failed", Inputs: map[string]string{"out": "v"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Journal.AppendResult(failure.ResultRecord{StepID: "w/x", InputHash: "h", Result: failure.Result{
+		Status:  failure.StatusFailed,
+		Error:   &failure.ErrorRecord{Reason: "agent-failed", Detail: "died", Handoff: filepath.Join(handoffRel, contract.HandoffFile)},
+		Attempt: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	seed.Journal.Close()
+
+	ir.Nodes[0].Template.Env = map[string]string{contract.EnvAgentCLI: "agent-cli"}
+	ir.Nodes[0].Template.Inputs = map[string]config.ParamDef{"out": {Type: "string", Required: true}}
+	interactive := &fakeInteractive{}
+	re := &Reentry{IR: ir, Images: fakeTags{}, Bindings: &fakeBindings{},
+		Interactive: interactive, EntryBinary: "/usr/local/bin/faber-box"}
+
+	if err := store.Interactive(context.Background(), "run-s", "w/x", re); err != nil {
+		t.Fatal(err)
+	}
+	first := interactive.spec.Name
+	if err := store.Interactive(context.Background(), "run-s", "w/x", re); err != nil {
+		t.Fatal(err)
+	}
+	second := interactive.spec.Name
+	if first == second {
+		t.Fatalf("two sessions share the container name %q", first)
+	}
+	entries, err := os.ReadDir(filepath.Join(store.RunDir("run-s"), "interactive"))
+	if err == nil && len(entries) > 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("finished sessions left state behind: %v", names)
+	}
+}
+
+// Verifies a0f44481f57b / L-P1c's round trip: handoff inputs reach the
+// reconstructed box under slot names in both keyings — a slot-keyed record
+// passes through untouched; a pre-versioning token-keyed record (no keying
+// marker) translates forward through the template's declared slots; and a
+// record with no usable value for a required slot refuses with a clear
+// message instead of a per-slot contract violation.
+func TestBoxRun_HandoffInputKeying(t *testing.T) {
+	tpl := testTemplate("worker", "out")
+	tpl.Inputs = map[string]config.ParamDef{
+		"out":      {Type: "string", Required: true},
+		"work-dir": {Type: "string"},
+	}
+
+	slotKeyed := contract.Handoff{Keying: contract.HandoffKeyingSlot,
+		Inputs: map[string]string{"out": "v", "work-dir": "w"}}
+	got, err := handoffInputs(slotKeyed, tpl)
+	if err != nil {
+		t.Fatalf("slot-keyed: %v", err)
+	}
+	if got["out"] != "v" || got["work-dir"] != "w" {
+		t.Fatalf("slot-keyed inputs mangled: %v", got)
+	}
+
+	tokenKeyed := contract.Handoff{Inputs: map[string]string{"OUT": "v", "WORK_DIR": "w"}}
+	got, err = handoffInputs(tokenKeyed, tpl)
+	if err != nil {
+		t.Fatalf("token-keyed: %v", err)
+	}
+	if got["out"] != "v" || got["work-dir"] != "w" {
+		t.Fatalf("token-keyed record must translate through declared slots: %v", got)
+	}
+
+	empty := contract.Handoff{Inputs: map[string]string{}}
+	if _, err := handoffInputs(empty, tpl); err == nil ||
+		!strings.Contains(err.Error(), `required input "out"`) {
+		t.Fatalf("empty inputs with a required slot must refuse clearly, got %v", err)
+	}
+}
+
+// Verifies 87f006277d2c (§1, FE-F1): interactive re-entry reconstructs the
+// box with the image tag the run was journaled against, not the current
+// derivation — after an engine or pin upgrade the operator still sees the
+// box the step actually ran.
+func TestBoxRun_InteractivePrefersJournaledTag(t *testing.T) {
+	store := failure.NewStore(t.TempDir(), nil)
+	ir := testIR("w", []config.Node{agentNode("w/x", "out")}, nil)
+	hash, _ := config.HashIR(ir)
+	tplName := ir.Nodes[0].Template.Name
+	seed, err := store.Fresh(failure.Header{RunID: "run-t", Workflow: "w", IRHash: hash,
+		Images: map[string]string{tplName: "img/" + tplName + ":journaled"}, Started: testBase})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoffRel := filepath.Join("boxes", "x", "attempt-1", "result")
+	handoffDir := filepath.Join(store.RunDir("run-t"), handoffRel)
+	if err := os.MkdirAll(handoffDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := contract.WriteHandoffFile(handoffDir, contract.Handoff{
+		Keying: contract.HandoffKeyingSlot,
+		Phase:  "agent", Reason: "agent-failed", Inputs: map[string]string{"out": "v"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Journal.AppendResult(failure.ResultRecord{StepID: "w/x", InputHash: "h", Result: failure.Result{
+		Status:  failure.StatusFailed,
+		Error:   &failure.ErrorRecord{Reason: "agent-failed", Detail: "died", Handoff: filepath.Join(handoffRel, contract.HandoffFile)},
+		Attempt: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	seed.Journal.Close()
+
+	ir.Nodes[0].Template.Env = map[string]string{contract.EnvAgentCLI: "agent-cli"}
+	ir.Nodes[0].Template.Inputs = map[string]config.ParamDef{"out": {Type: "string", Required: true}}
+	interactive := &fakeInteractive{}
+	re := &Reentry{IR: ir, Images: fakeTags{}, Bindings: &fakeBindings{},
+		Interactive: interactive, EntryBinary: "/usr/local/bin/faber-box"}
+	if err := store.Interactive(context.Background(), "run-t", "w/x", re); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := interactive.spec.Image, "img/"+tplName+":journaled"; got != want {
+		t.Fatalf("re-entry image %q, want the journaled tag %q (current derivation is %q)",
+			got, want, "img/"+tplName+":test")
+	}
+}
+
+// Verifies a0f44481f57b (TB-F1): a box-authored handoff pointer is untrusted
+// bytes — one that cleans to an escape of the attempt result dir is dropped
+// (with a note in the detail), never journaled, so interactive re-entry can
+// never bind-mount an arbitrary host directory.
+func TestBoxRun_HandoffEscapeDropped(t *testing.T) {
+	for _, handoff := range []string{"../../../../etc", "..", "a/../../.."} {
+		containers := &fakeContainers{record: &contract.Result{
+			Status:  contract.StatusFailed,
+			Error:   &contract.ResultError{Reason: "agent-failed", Detail: "died", Handoff: handoff},
+			Attempt: 1,
+		}}
+		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+		got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
+		if err != nil {
+			t.Fatalf("run attempt: %v", err)
+		}
+		if got.Result.Error.Handoff != "" {
+			t.Errorf("escaping handoff %q survived as %q", handoff, got.Result.Error.Handoff)
+		}
+		if !strings.Contains(got.Result.Error.Detail, "dropped") {
+			t.Errorf("dropped pointer must be noted in the detail: %s", got.Result.Error.Detail)
+		}
+	}
+	// A benign nested pointer still resolves under the result dir.
+	containers := &fakeContainers{record: &contract.Result{
+		Status:  contract.StatusFailed,
+		Error:   &contract.ResultError{Reason: "agent-failed", Detail: "died", Handoff: "handoff.json"},
+		Attempt: 1,
+	}}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(got.Result.Error.Handoff, filepath.Join("result", "handoff.json")) {
+		t.Fatalf("benign handoff mangled: %q", got.Result.Error.Handoff)
+	}
+}
+
+// Verifies a0f44481f57b (TB-F3/FE-F7): usage sidecar values are clamped
+// non-negative before they reach the meter, and a malformed sidecar is no
+// usage (logged, not silently adopted).
+func TestBoxRun_UsageClampedAndBounded(t *testing.T) {
+	containers := &fakeContainers{
+		record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1},
+		usage:  map[string]int64{"tokens": -50, "cents": 7},
+	}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage["tokens"] != 0 || got.Usage["cents"] != 7 {
+		t.Fatalf("negative usage must clamp to zero: %v", got.Usage)
+	}
+}
+
+// Verifies a0f44481f57b (L-P1a): when the container actuation itself failed
+// and no record exists, the synthesized failure carries the true cause and
+// an output tail — not just "box vanished" with the cause at debug level.
+func TestBoxRun_ActuationErrorSurfaced(t *testing.T) {
+	containers := &fakeContainers{runErr: errors.New("docker daemon unreachable"),
+		output: []byte("Cannot connect to the Docker daemon\n")}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Result.Error.Reason != contract.ReasonBoxVanished {
+		t.Fatalf("reason %q", got.Result.Error.Reason)
+	}
+	for _, want := range []string{"docker daemon unreachable", "Cannot connect"} {
+		if !strings.Contains(got.Result.Error.Detail, want) {
+			t.Errorf("detail lacks %q: %s", want, got.Result.Error.Detail)
+		}
 	}
 }

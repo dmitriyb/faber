@@ -61,11 +61,15 @@ func (e *GenerateExpander) Expand(ctx context.Context, n *config.Node,
 }
 ```
 
-`validateItems` checks: ids non-empty and unique; every `${item.field}` the
-binding template references exists on every item with a bindable type; and the
-in-set dep edges are acyclic (Kahn over the item set) — a cyclic item set can
-never splice into the DAG, so it is rejected as a contract violation naming
-the cycle path, before any instance exists.
+`validateItems` checks: ids non-empty, unique, and inside the closed
+identifier grammar (`itemIDPattern`); every `${item.field}` the binding
+template references exists on every item with a bindable type; and the in-set
+dep edges are acyclic (Kahn over the item set) — a cyclic item set can never
+splice into the DAG, so it is rejected as a contract violation naming the
+cycle path, before any instance exists. `expand` then bounds the splice:
+items x per-instance nodes over `maxExpandedNodes` (10000, the desugarer's
+unroll ceiling's run-time twin) is a contract error before any instance
+exists.
 
 ## instantiate
 

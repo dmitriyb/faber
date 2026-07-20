@@ -16,6 +16,7 @@ images:
 templates:
   box:
 ` + templateBody + `
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
@@ -50,6 +51,7 @@ version: 1
 templates:
   box:
     build: {packages: [git], pin: {rev: "25.11", sha256: "sha256:abc"}}
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
@@ -140,6 +142,7 @@ version: 1
 templates:
   box:
     build: {packages: [git], pin: {sha256: "sha256:abc"}}
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}

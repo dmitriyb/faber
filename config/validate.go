@@ -29,6 +29,49 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 var memoryPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[bkmgBKMG]?$`)
 
+// stepIDPattern is the closed grammar for step ids. Node ids are built from
+// them with the reserved namespacing characters ('/' for scope, '@' for loop
+// iterations, '[' ']' for generate instances, '"' for CEL keys), so a step id
+// containing one could collide with a desugared id or break the canonical
+// steps["<id>"] form — caught here, not as a duplicate-node abort at run
+// start. The grammar is also reference-total: a dot would make the id
+// unreferenceable in ${steps...} bindings (the ref grammar splits on dots)
+// and a digit-first id unreferenceable in when: (CEL identifiers are
+// letter-first), so both fail at declaration, not at the referencing site.
+var stepIDPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+
+// slotNamePattern is the closed grammar for input-slot and param names: they
+// embed into env-variable names (FABER_INPUT_<TOKEN>) and CEL references, so
+// the charset is the env-safe one and the first character is a letter.
+var slotNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+
+// EnvToken is the canonical slot/param/service name → env-token mapping
+// (uppercase, '-'→'_'). It is the single source both halves of the box env
+// contract use: the agent contract's SlotToken delegates here, so validate-
+// time collision checks and run-time export can never disagree.
+func EnvToken(name string) string {
+	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+}
+
+// RunnerOwnedEnv are the process-runner variables (beyond the engine-owned
+// names) that user-named material — credential services, bundle sidecars —
+// must never shadow inside the box.
+var RunnerOwnedEnv = map[string]bool{"PATH": true, "HOME": true, "GIT_SSH_COMMAND": true, "SSH_AUTH_SOCK": true}
+
+// EngineOwnedEnv reports whether an environment name belongs to the engine
+// or security env contract: the whole FABER_ namespace plus the forwarded
+// agent socket. The single source for validate-time checks and the box
+// contract's run-time gate (agent/contract delegates here).
+func EngineOwnedEnv(key string) bool {
+	return strings.HasPrefix(key, "FABER_") || key == "SSH_AUTH_SOCK"
+}
+
+// ReservedContainerPaths are the container paths the box run contract and
+// the security bindings own; template volumes may not touch them. The
+// run-spec assembler consumes this same list (a cross-package test asserts
+// it covers the security module's mount constants).
+var ReservedContainerPaths = []string{"/faber", "/run/secrets", "/ssh-agent", "/workspace", "/home/box", "/tmp"}
+
 // pinCharset restricts a per-toolset nixpkgs pin's rev/sha256 to a splice-safe
 // charset. Because a pin may now be user-supplied YAML that is spliced into
 // infra's rendered fetchTarball call, its fields are validated here at the
@@ -147,10 +190,22 @@ func (v *validator) checkRemote() {
 }
 
 func (v *validator) checkCredentials() {
+	tokens := map[string]string{} // env token -> first service claiming it
 	for _, name := range sortedKeys(v.cfg.Credentials.Services) {
 		svc := v.cfg.Credentials.Services[name]
 		if !serviceNamePattern.MatchString(name) {
 			v.addf("credentials.services."+name, "invalid service name (must match %s)", serviceNamePattern)
+		} else if tok := EnvToken(name); RunnerOwnedEnv[tok] || EngineOwnedEnv(tok) {
+			// The box exports each secret under its uppercased name; a service
+			// named "path" or "home" would shadow the runner-owned variable in
+			// every hook and agent invocation.
+			v.addf("credentials.services."+name, "service name exports the engine- or runner-owned variable %s inside the box; rename the service", tok)
+		} else if first, dup := tokens[tok]; dup {
+			// The box exports each secret under its env token last-wins; two
+			// services sharing a token would silently shadow one another.
+			v.addf("credentials.services."+name, "service name collides with %q: both export the env variable %s", first, tok)
+		} else {
+			tokens[tok] = name
 		}
 		if !serviceModes[svc.Mode] {
 			v.addf("credentials.services."+name+".mode", "unknown mode %q (legal: proxy, file, helper)", svc.Mode)
@@ -243,7 +298,44 @@ func (v *validator) checkTemplates() {
 		}
 		v.checkParamDefs(path+".inputs", t.Inputs)
 		v.checkParamDefs(path+".output", t.Output)
+		v.checkRunContract(path, t)
 	}
+}
+
+// checkRunContract mirrors the run-spec assembler's statically checkable
+// refusals (agent.BuildRunSpec) at validate altitude, so a template that
+// cannot launch any box fails `faber validate`, not each step at run time:
+// the agent CLI must be named, template env may not claim engine- or
+// security-owned variables, and template volumes may not overlap the
+// reserved container paths.
+func (v *validator) checkRunContract(path string, t TemplateDef) {
+	if t.Run.Env["FABER_AGENT_CLI"] == "" {
+		v.addf(path+".run.env.FABER_AGENT_CLI", "required (faber defaults no agent vendor); name the agent CLI binary the box invokes")
+	}
+	for _, key := range sortedKeys(t.Run.Env) {
+		if key == "FABER_AGENT_CLI" {
+			continue // the one documented template-env exception
+		}
+		if EngineOwnedEnv(key) {
+			v.addf(path+".run.env."+key, "engine- or security-owned name (only FABER_AGENT_CLI may be set here)")
+		}
+	}
+	for _, host := range sortedKeys(t.Run.Volumes) {
+		container := t.Run.Volumes[host]
+		for _, r := range ReservedContainerPaths {
+			if containerPathUnder(container, r) || containerPathUnder(r, container) {
+				v.addf(path+".run.volumes."+host, "container path %q overlaps the reserved path %q", container, r)
+				break
+			}
+		}
+	}
+}
+
+// containerPathUnder reports whether cleaned path a equals b or lies beneath
+// it (the run-spec assembler's overlap rule).
+func containerPathUnder(a, b string) bool {
+	a, b = filepath.ToSlash(filepath.Clean(a)), filepath.ToSlash(filepath.Clean(b))
+	return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/")
 }
 
 // checkToolset enforces the image/build dual-mode: exactly one form, the named
@@ -373,6 +465,23 @@ func (v *validator) checkLink(fieldPath, link string) {
 }
 
 func (v *validator) checkParamDefs(path string, defs map[string]ParamDef) {
+	// Name grammar and env-token disjointness: slot and param names embed
+	// into FABER_INPUT_<TOKEN> variables, and the token mapping (upper-case,
+	// '-'→'_') is lossy — two declared names sharing a token would silently
+	// misbind one value to the other's variable.
+	tokens := map[string]string{} // token -> first name claiming it
+	for _, name := range sortedKeys(defs) {
+		if !slotNamePattern.MatchString(name) {
+			v.addf(path+"."+name, "invalid name %q (must match %s; names embed into env variables)", name, slotNamePattern)
+			continue
+		}
+		tok := EnvToken(name)
+		if first, dup := tokens[tok]; dup {
+			v.addf(path+"."+name, "name collides with %q: both map to the env token %s", first, tok)
+		} else {
+			tokens[tok] = name
+		}
+	}
 	for _, name := range sortedKeys(defs) {
 		d := defs[name]
 		switch d.Type {
@@ -448,6 +557,8 @@ func (v *validator) checkSteps(path string, wf WorkflowDef, steps []StepDef, see
 		sp := fmt.Sprintf("%s[%d]", path, i)
 		if s.ID == "" {
 			v.addf(sp+".id", "required")
+		} else if !stepIDPattern.MatchString(s.ID) {
+			v.addf(sp+".id", "invalid step id %q (must match %s; '/', '@', '[', ']' and '\"' are reserved for node-id namespacing)", s.ID, stepIDPattern)
 		} else if first, dup := seen[s.ID]; dup {
 			v.addf(sp+".id", "duplicate step id %q (first declared at %s)", s.ID, first)
 		} else {

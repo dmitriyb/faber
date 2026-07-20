@@ -314,3 +314,138 @@ func TestWiringConditionFieldRefs(t *testing.T) {
 		}
 	})
 }
+
+// Verifies 72d49cc06ac6 (IN-F1): the condition AST discipline — only the
+// canonical steps["<dep>"].<field> and declared params.<name> forms survive
+// to run time. Hand-authored index forms, undeclared params, bare roots, and
+// item references all fail at validate, never as a mid-run condition error.
+func TestWiringConditionASTDiscipline(t *testing.T) {
+	cases := []struct {
+		name string
+		when string
+		want string
+	}{
+		{"hand-authored steps index escapes dep extraction",
+			`steps["task/implement"].pr > 0`,
+			`which the desugarer did not derive as a dependency`},
+		{"dynamic steps index",
+			`steps[params.repo].pr > 0`,
+			`indexes steps with a non-literal key`},
+		{"whole-payload read",
+			`steps.implement.pr > 0 && steps["task/implement"] == steps["task/implement"]`,
+			`without selecting a field`},
+		{"bare steps root",
+			`size(steps) > 0`,
+			`uses steps outside a steps.<step>.<field> reference`},
+		{"undeclared param",
+			`params.undeclared == "x"`,
+			`params.undeclared, which is not a declared param`},
+		{"undeclared param via index",
+			`params["undeclared"] == "x"`,
+			`params.undeclared, which is not a declared param`},
+		{"item is not available in conditions",
+			`item.id == "x"`,
+			`item, which is not available in conditions`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadRef(t)
+			cfg.Workflows["task"].Steps[2].When = tc.when
+			err := checkRef(t, cfg, "task")
+			wantErrContaining(t, err, tc.want)
+		})
+	}
+
+	t.Run("canonical forms pass", func(t *testing.T) {
+		cfg := loadRef(t)
+		cfg.Workflows["task"].Steps[2].When = `steps.implement.pr > 0 && params.repo != ""`
+		if err := checkRef(t, cfg, "task"); err != nil {
+			t.Fatalf("canonical condition must validate: %v", err)
+		}
+	})
+}
+
+// Verifies 72d49cc06ac6 (IN-F2): duplicate node ids anywhere in the flattened
+// graph are a wiring error — the per-level index would silently collapse
+// them and the executor would abort at run start.
+func TestWiringFlatDuplicateNodeIDs(t *testing.T) {
+	ir := &IR{
+		IRVersion: IRVersion,
+		Workflow:  "flow",
+		Nodes: []Node{
+			{ID: "a/x", Kind: KindAgent, Bindings: map[string]BindingDesc{}},
+			{ID: "sub", Kind: KindSubWorkflow, Bindings: map[string]BindingDesc{}, Sub: &IR{
+				IRVersion: IRVersion,
+				Workflow:  "inner",
+				Nodes:     []Node{{ID: "a/x", Kind: KindAgent, Bindings: map[string]BindingDesc{}}},
+			}},
+		},
+	}
+	err := CheckWiring(ir, &Config{Workflows: map[string]WorkflowDef{"flow": {}, "inner": {}}})
+	wantErrContaining(t, err, `duplicate node id "a/x"`)
+}
+
+// Verifies 72d49cc06ac6 (IN-F1, M1): a condition may reference only params
+// guaranteed present at evaluation — an optional param without a default may
+// be absent from the activation (root and sub scopes alike), so referencing
+// it is a validate error; defaulted params are guaranteed because the
+// desugarer bakes sub/instance-scope defaults into the scope bindings.
+func TestWiringConditionParamGuarantee(t *testing.T) {
+	cfg := loadRef(t)
+	wf := cfg.Workflows["task"]
+	wf.Params["maybe"] = ParamDef{Type: "string"} // optional, no default
+	wf.Params["tuned"] = ParamDef{Type: "string", Default: "x"}
+	cfg.Workflows["task"] = wf
+
+	cfg.Workflows["task"].Steps[2].When = `params.maybe == "y"`
+	err := checkRef(t, cfg, "task")
+	wantErrContaining(t, err, "optional without a default and may be absent at evaluation")
+
+	cfg.Workflows["task"].Steps[2].When = `params.tuned == "y"`
+	if err := checkRef(t, cfg, "task"); err != nil {
+		t.Fatalf("defaulted param must be referenceable: %v", err)
+	}
+}
+
+// Verifies 255893ae16eb (M1): the desugarer bakes declared defaults into
+// sub-workflow entry and generate bindings, so those scopes materialize
+// defaults exactly like the run entry does for root params.
+func TestDesugarBakesScopeDefaults(t *testing.T) {
+	cfg := loadRef(t)
+	wf := cfg.Workflows["task"]
+	wf.Params["tuned"] = ParamDef{Type: "string", Default: "fallback"}
+	cfg.Workflows["task"] = wf
+
+	ir, err := Desugar(cfg, "epic") // epic generates over task
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gen *Node
+	for i := range ir.Nodes {
+		if ir.Nodes[i].Kind == KindGenerate {
+			gen = &ir.Nodes[i]
+		}
+	}
+	if gen == nil {
+		t.Fatal("epic has no generate node")
+	}
+	b, ok := gen.Gen.Bindings["tuned"]
+	if !ok || b.Kind != BindLiteral || b.Value != "fallback" {
+		t.Fatalf("generate bindings must carry the baked default, got %+v", gen.Gen.Bindings["tuned"])
+	}
+	// An explicit binding wins over the default.
+	epic := cfg.Workflows["epic"]
+	epic.Steps[0].Generate.With["tuned"] = "explicit"
+	cfg.Workflows["epic"] = epic
+	ir, err = Desugar(cfg, "epic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range ir.Nodes {
+		if ir.Nodes[i].Kind == KindGenerate {
+			if got := ir.Nodes[i].Gen.Bindings["tuned"]; got.Value != "explicit" {
+				t.Fatalf("explicit binding must win over the default, got %+v", got)
+			}
+		}
+	}
+}

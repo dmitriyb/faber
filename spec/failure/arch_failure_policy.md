@@ -61,10 +61,14 @@ Per-step wall-clock timeouts and user-initiated abort are reserved
 (design edge case 6): a timeout would kill the in-flight container, tear down
 its bindings, run `on_failure`, and journal the interruption as a failure
 record with a distinct reason; user abort would do the same for every in-flight
-step. The first pass has neither — no step timeout exists (only the resource
-limits and any budget bound), and abort is process-level: killing faber
-abandons in-flight containers to their `--rm`, and the journal simply lacks
-records for them, which resume treats as absent steps.
+step. The first pass has no step timeout (only the resource limits and any
+budget bound), and abort is process-level. One cancellation behavior does
+exist inside the attempt loop: the loop head checks the run context, and a
+cancelled run settles the step with a `canceled` record carrying the real
+attempts' history — the remaining retries are never launched against a dead
+context (each would fully stage skills and bindings only to die). A killed
+process still abandons in-flight containers to their `--rm`; the journal
+simply lacks records for them, which resume treats as absent steps.
 
 Requirements implemented: Fail-stop and cleanup hooks; Opt-in retry with
 cleanup; Deferred: timeouts and cancellation.

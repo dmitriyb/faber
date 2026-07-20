@@ -20,14 +20,20 @@ CommandRunner with the node's resolved args) and reads stdout as:
 {"items": [{"id": "I-1", "deps": ["I-0"], ...}]}
 ```
 
-`id` (non-empty, unique in the set) and `deps` (list of ids) are the guaranteed
-fields; any other fields pass through for `${item.field}` binding. The engine
+`id` (non-empty, unique in the set, and inside the closed identifier grammar
+`[A-Za-z0-9][A-Za-z0-9_.-]*` — ids embed into instance node ids and into the
+canonical `steps["…"]` CEL keys, so the namespacing characters, quotes, and
+control bytes are contract violations) and `deps` (list of ids) are the
+guaranteed fields; any other fields pass through for `${item.field}` binding. The engine
 never learns what an item *is* — in the reference config it happens to be a
 work-item ID, but that fact lives entirely in the user's command and params.
 
 Contract enforcement, in order: command failure, unparseable JSON, a missing
-`items` key, a duplicate or empty `id`, an `${item.field}` the binding template
-references that some item lacks, or a dependency cycle within the set — each
+`items` key, a duplicate, empty, or out-of-grammar `id`, an `${item.field}` the
+binding template references that some item lacks, a dependency cycle within
+the set, or an expansion over the node ceiling (items x per-instance nodes
+bounded by the same 10000-node limit the desugarer's loop unrolling obeys;
+the data source's stdout is itself read bounded) — each
 fails the generate node with a structured data-source contract error naming
 the offending item. Nothing has been launched; standard failure propagation
 handles the node's dependents.

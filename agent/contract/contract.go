@@ -11,7 +11,15 @@
 // here.
 package contract
 
-import "strings"
+import "github.com/dmitriyb/faber/config"
+
+// ContractVersion is the faber↔faber-box result-contract schema version:
+// the shape of the env contract in and the result/handoff records out.
+// Independent of the application version — bumped only when that shape
+// changes. faber-box ships from the host as the same build, so a version
+// mismatch at either end is a FABER_BOX_BIN-misconfiguration detector
+// (a stale or foreign sequencer binary), not a migration path.
+const ContractVersion = 1
 
 // Environment variable names of the box env contract. The host side
 // (BuildRunSpec in the agent package) emits them; the sequencer's env phase
@@ -90,6 +98,16 @@ const (
 	// stdin read on it. The signal and the payload are set together, never one
 	// without the other (see the pipeline scheduler's RunSpec assembly seam).
 	EnvSecretsStdin = "FABER_SECRETS_STDIN"
+
+	// EnvContractVersion carries the host's ContractVersion. The box refuses
+	// a mismatching value (a stale FABER_BOX_BIN cannot half-speak the
+	// contract); absence is tolerated for direct sequencer invocations.
+	EnvContractVersion = "FABER_CONTRACT_VERSION"
+
+	// EnvInputSlots is the comma-separated list of ALL declared input slot
+	// names (not just the required ones), so the box can record slot-keyed
+	// handoff inputs — the slot→token mapping is lossy in reverse.
+	EnvInputSlots = "FABER_INPUT_SLOTS"
 
 	// InputEnvPrefix prefixes one variable per bound input slot:
 	// FABER_INPUT_<SLOT>, the typed-inputs contract for hooks and agent.
@@ -171,15 +189,19 @@ func InputEnv(slot string) string {
 }
 
 // SlotToken uppercases a slot name for env-var embedding, mapping "-" to "_".
+// It delegates to the config module's canonical mapping so validate-time
+// collision checks and the run-time export can never disagree.
 func SlotToken(slot string) string {
-	return strings.ToUpper(strings.ReplaceAll(slot, "-", "_"))
+	return config.EnvToken(slot)
 }
 
 // EngineOwnedEnv reports whether an environment name belongs to the engine or
 // security env contract: the whole FABER_ namespace (the box contract, input
 // slots, and the security module's service/helper handle names) plus the
 // forwarded agent socket variable. User-supplied environment (template env,
-// bundle sidecars) may never set these — the contract is engine-owned.
+// bundle sidecars) may never set these — the contract is engine-owned. The
+// rule lives in the config module (the validate-time gate) and is delegated
+// here so both altitudes share one source.
 func EngineOwnedEnv(key string) bool {
-	return strings.HasPrefix(key, "FABER_") || key == "SSH_AUTH_SOCK"
+	return config.EngineOwnedEnv(key)
 }

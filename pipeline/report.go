@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/failure"
@@ -474,9 +475,41 @@ func stepText(line StepLine) string {
 		fmt.Fprintf(&sb, "  after-failure-of=%s", line.Ancestor)
 	}
 	for _, k := range sortedKeys(line.Outputs) {
-		fmt.Fprintf(&sb, "  %s=%v", k, line.Outputs[k])
+		fmt.Fprintf(&sb, "  %s=%v", sanitizeTerm(k), sanitizeTerm(fmt.Sprintf("%v", line.Outputs[k])))
 	}
 	return sb.String()
+}
+
+// sanitizeTerm strips terminal control bytes from box-derived text before it
+// reaches the operator's terminal: all C0 controls (newlines included — the
+// report's lines are renderer-framed, and an embedded newline could spoof a
+// whole report line), DEL, and the C1 range — an escape sequence in a
+// payload value or an error detail must never re-style, retitle, clear, or
+// forge the operator's screen. The JSON report path needs none of this
+// (encoding escapes control bytes); this is for the human Text path only.
+func sanitizeTerm(s string) string {
+	// The fast path also requires valid UTF-8: a raw invalid byte (e.g. a bare
+	// C1 introducer 0x9b) is not a control *rune*, so ContainsFunc would miss
+	// it and return the bytes verbatim. The rebuild loop ranges over runes,
+	// mapping every invalid byte to U+FFFD, so it is self-sufficient — it does
+	// not lean on an upstream JSON round-trip to normalize the bytes first.
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, isTermControl) {
+		return s
+	}
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for _, r := range s {
+		if r == utf8.RuneError || isTermControl(r) {
+			sb.WriteRune(utf8.RuneError)
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
+func isTermControl(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
 }
 
 func textDuration(d string) string {
@@ -494,14 +527,19 @@ func (r *RunReport) failureBlocks() [][]string {
 		if line.Status != StateFailed || line.Error == nil {
 			return
 		}
-		b := []string{fmt.Sprintf("%s: %s: %s", line.ID, line.Error.Reason, line.Error.Detail)}
+		b := []string{fmt.Sprintf("%s: %s: %s", line.ID, sanitizeTerm(line.Error.Reason), sanitizeTerm(line.Error.Detail))}
 		if line.Error.Handoff != "" {
-			b = append(b, fmt.Sprintf("  handoff: %s", line.Error.Handoff))
+			b = append(b, fmt.Sprintf("  handoff: %s", sanitizeTerm(line.Error.Handoff)))
 		}
 		if line.Attempts > 1 {
 			b = append(b, fmt.Sprintf("  attempts: %d", line.Attempts))
 		}
-		b = append(b, fmt.Sprintf("  re-enter: faber resume %s --interactive %s", r.Run.RunID, line.ID))
+		// The re-enter suggestion is offered only when there is handoff state
+		// to reconstruct from — interactive mode refuses everything else, and
+		// a suggestion that leads to a refusal is worse than none.
+		if line.Error.Handoff != "" {
+			b = append(b, fmt.Sprintf("  re-enter: faber resume %s --interactive %s", r.Run.RunID, line.ID))
+		}
 		blocks = append(blocks, b)
 	}
 	for _, line := range r.Steps {

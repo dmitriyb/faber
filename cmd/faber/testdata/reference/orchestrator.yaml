@@ -34,6 +34,7 @@ templates:
       packages: [git, openssh, go, gopls, claude-code, item-tracker-cli, spec-mapper-cli]
       overlay: ./nix/overlay.nix   # user derivations for CLIs not in nixpkgs
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: implementer
       resources: {memory: 8g, cpus: 4}
     skill: implement               # the agent skill invoked headlessly in the box
@@ -53,6 +54,7 @@ templates:
       packages: [git, openssh, go, claude-code, item-tracker-cli, spec-mapper-cli]
       overlay: ./nix/overlay.nix
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: reviewer
     skill: review
     hooks:
@@ -68,6 +70,7 @@ templates:
       packages: [git, openssh, go, gopls, claude-code, item-tracker-cli, spec-mapper-cli]
       overlay: ./nix/overlay.nix
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: implementer
     skill: fix
     hooks:
@@ -82,6 +85,7 @@ templates:
     build:
       packages: [git, openssh]
     run:
+      env: {FABER_AGENT_CLI: agent-cli}
       identity: merger
     skill: merge
     inputs:

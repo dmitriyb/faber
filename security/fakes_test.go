@@ -60,6 +60,8 @@ func (f *fakeDocker) Kill(_ context.Context, name string) error {
 	return nil
 }
 
+func (f *fakeDocker) Remove(context.Context, string) error { return nil }
+
 // fakeAgent implements AgentController, tracking per-socket keys and
 // liveness. Start drops a socket file so directory-removal assertions are
 // real.

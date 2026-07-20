@@ -409,3 +409,43 @@ func TestTailBufferKeepsTail(t *testing.T) {
 		t.Fatalf("oversized write retained %q", got)
 	}
 }
+
+// Verifies 0c82c6478856: before launch, Run evicts any stale holder of the
+// deterministic container name (docker rm --force, idempotent) — a crashed
+// prior process leaves a container that both blocks the name and keeps
+// writing into the old attempt dir. The eviction precedes the run call.
+func TestRunEvictsStaleNameHolder(t *testing.T) {
+	docker := &fakeDocker{}
+	r := NewContainerRunner(docker, testLogger())
+	if _, err := r.Run(context.Background(), RunSpec{Name: "faber-e", Image: "faber/t:abc"}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	removes := docker.callsFor("remove")
+	if len(removes) != 1 || removes[0][1] != "faber-e" {
+		t.Fatalf("want one pre-launch eviction of faber-e, got %v", removes)
+	}
+	// Ordering: the eviction is recorded before the run.
+	var order []string
+	for _, c := range docker.calls {
+		if c[0] == "remove" || c[0] == "run" {
+			order = append(order, c[0])
+		}
+	}
+	if len(order) != 2 || order[0] != "remove" || order[1] != "run" {
+		t.Fatalf("eviction must precede launch, got %v", order)
+	}
+}
+
+// Verifies 0c82c6478856 (L-P3j): a relative bind host is refused before
+// launch — docker would silently read it as a named volume and detach the
+// result channel.
+func TestRunRejectsRelativeBindHost(t *testing.T) {
+	r := NewContainerRunner(&fakeDocker{}, testLogger())
+	_, err := r.Run(context.Background(), RunSpec{
+		Name: "faber-rel", Image: "faber/t:abc",
+		Mounts: []Mount{{Host: ".faber/runs/r1/result", Container: "/faber/result"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "named volume") {
+		t.Fatalf("want relative-host refusal, got %v", err)
+	}
+}

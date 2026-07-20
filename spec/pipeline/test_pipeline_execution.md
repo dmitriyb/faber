@@ -54,7 +54,7 @@ docker anywhere in this section.
 9. **Resume from journal.** Run scenario 3 killing the scheduler (context
    cancel) after implement settles; re-run with the same journal: implement is
    a cached hit (StepRunner never invoked for it), execution restarts at
-   review@1, and the final report marks implement `cached`. With `--no-cache`
+   review@1, and the final report marks implement `cached`. With `--fresh`
    every node re-runs.
 10. **Report golden files.** The settled runs of scenarios 3, 4, and 8 render
     text and `--json` reports matching golden files byte-for-byte; the JSON

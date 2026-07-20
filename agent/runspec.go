@@ -169,6 +169,7 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 
 	env := map[string]string{}
 	maps.Copy(env, tpl.Env)
+	env[contract.EnvContractVersion] = strconv.Itoa(contract.ContractVersion)
 	env[contract.EnvSkill] = tpl.Skill
 	env[contract.EnvResultDir] = contract.ContainerResultDir
 	env[contract.EnvBundleDir] = contract.ContainerBundleDir
@@ -176,6 +177,9 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	env[contract.EnvAttempt] = strconv.Itoa(spec.Attempt)
 	if len(required) > 0 {
 		env[contract.EnvRequiredInputs] = strings.Join(required, ",")
+	}
+	if slots := slices.Sorted(maps.Keys(tpl.Inputs)); len(slots) > 0 {
+		env[contract.EnvInputSlots] = strings.Join(slots, ",")
 	}
 	setIf := func(key, val string) {
 		if val != "" {
@@ -251,6 +255,8 @@ var reservedContainerPaths = []string{
 	security.ContainerSecretsDir,
 	security.ContainerAgentSocket,
 	contract.ContainerWorkspace,
+	contract.ContainerHome, // the box's HOME tmpfs — last-mount-wins would replace it
+	"/tmp",                 // the box's scratch tmpfs
 }
 
 // reservedMountConflict returns the reserved path a container mount path

@@ -330,3 +330,34 @@ func TestExecRunnerStructuredIO(t *testing.T) {
 		t.Fatal("Run(empty argv) succeeded, want error")
 	}
 }
+
+// Verifies e3dae1b52167 (F1-review): the meters sum usage saturating — a
+// crafted multi-field usage cannot wrap the intermediate sum negative, so no
+// negative cost is ever produced for the ledger to (also) clamp.
+func TestMeterActualSaturates(t *testing.T) {
+	log, _ := testLogger()
+	huge := int64(1) << 62
+	exact := newExactMeter("tokens", nil, 0, []string{"a", "b", "c"}, nil, log)
+	costs, err := exact.Actual(context.Background(), ResultView{NodeID: "n", Status: StatusOK,
+		Usage: map[string]int64{"a": huge, "b": huge, "c": huge}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range costs {
+		if c.Amount < 0 {
+			t.Fatalf("exact meter produced a negative saturating sum: %d", c.Amount)
+		}
+	}
+
+	rep := newReportedMeter("tokens", map[string]Unit{"a": "tokens", "b": "tokens"}, log)
+	costs, err = rep.Actual(context.Background(), ResultView{NodeID: "n",
+		Usage: map[string]int64{"a": huge, "b": huge}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range costs {
+		if c.Amount < 0 {
+			t.Fatalf("reported meter produced a negative saturating sum: %d", c.Amount)
+		}
+	}
+}

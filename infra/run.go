@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -98,6 +99,14 @@ func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, err
 	if spec.Name == "" || spec.Image == "" {
 		return RunResult{}, fmt.Errorf("infra: run: spec requires a container name and an image tag")
 	}
+	// A relative bind host would be read by docker as a NAMED VOLUME — the
+	// mount silently detaches from the intended host dir (the result channel
+	// above all). Absolutizing is the wiring's job; this is the floor.
+	for _, m := range spec.Mounts {
+		if m.Kind == KindBind && m.Host != "" && !filepath.IsAbs(m.Host) {
+			return RunResult{}, fmt.Errorf("infra: run %s: bind mount host path %q is relative (docker would read it as a named volume); absolutize it at the wiring", spec.Name, m.Host)
+		}
+	}
 	out := newTailBuffer(outputCap)
 	sink := io.MultiWriter(out, slogWriter(r.logger, "step", spec.Name))
 	var stdin io.Reader // nil unless a secrets payload rides stdin
@@ -108,6 +117,13 @@ func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, err
 		// cliRunner.runStreaming). Passing an *os.File here would reintroduce
 		// that hang.
 		stdin = bytes.NewReader(spec.StdinSecrets)
+	}
+	// Evict any stale holder of this deterministic name first: a crashed
+	// process (docker client killed, container survives) leaves a container
+	// that both blocks the name and keeps writing into the old attempt dir.
+	// Removal is idempotent; a failure here only foreshadows the run's own.
+	if err := r.docker.Remove(ctx, spec.Name); err != nil {
+		r.logger.WarnContext(ctx, "evict stale container before launch", "container", spec.Name, "err", err)
 	}
 	start := time.Now()
 	code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, sink)

@@ -71,7 +71,7 @@
     {
       "id": "17c51bae5f80",
       "name": "ResultExtractor",
-      "description": "Reads the result file from the result directory, validates it against the template's output schema, writes the fallback record when absent, and runs post-result verification. Owns the deferred non-JSON artifact seam.",
+      "description": "Reads the result file from the result directory, validates it against the template's output schema, writes the fallback record when absent, and runs post-result verification. Owns the deferred non-JSON artifact seam. Owns the faber↔faber-box result-contract schema version (contract: 1), stamped into the box env and into result.json and asserted host-side on extract — a mismatch detects a stale or foreign FABER_BOX_BIN, never a migration path.",
       "content": "arch_result_extractor.md",
       "implements": ["ff8e85704b0a", "f1ce19e94daa"]
     }

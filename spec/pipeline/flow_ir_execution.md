@@ -60,7 +60,7 @@ record of what ran — stop).
   dispatch.
 - `faber resume`: the same flow with the prior journal preloaded — hits at the
   lookup gate make resume a property of this flow, not a separate mode.
-  `--no-cache` (fresh) empties the lookup; interactive recovery replays up to
+  `--fresh` empties the lookup; interactive recovery replays up to
   the failed node and hands the operator its reconstructed box instead of
   dispatching it.
 - The report step runs unconditionally, even when the run errors mid-flight —

@@ -151,27 +151,29 @@ func TestResumeReRunsChangedOrFailed(t *testing.T) {
 
 // Verifies 87f006277d2c: resume refuses drift before trusting any skip
 // decision — a changed graph (IR hash) or changed params fails with an
-// explanation that points at --no-cache; nothing is looked up.
+// explanation that points at --fresh; nothing is looked up.
 func TestResumeRefusesDrift(t *testing.T) {
 	params := map[string]string{"target": "v"}
 	store := journaledRun(t, "run-1", params)
 
 	_, err := store.Resume(smallIR(true), "run-1", params) // config grew a step
-	if err == nil || !strings.Contains(err.Error(), "IR hash mismatch") || !strings.Contains(err.Error(), "--no-cache") {
-		t.Fatalf("want IR-hash refusal pointing at --no-cache, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "IR hash mismatch") || !strings.Contains(err.Error(), "--fresh") {
+		t.Fatalf("want IR-hash refusal pointing at --fresh, got %v", err)
 	}
 
 	_, err = store.Resume(smallIR(false), "run-1", map[string]string{"target": "changed"})
-	if err == nil || !strings.Contains(err.Error(), "params") || !strings.Contains(err.Error(), "--no-cache") {
-		t.Fatalf("want param refusal pointing at --no-cache, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "params") || !strings.Contains(err.Error(), "--fresh") {
+		t.Fatalf("want param refusal pointing at --fresh, got %v", err)
 	}
 
-	if _, err := store.Resume(smallIR(false), "run-1", params); err != nil {
+	seed, err := store.Resume(smallIR(false), "run-1", params)
+	if err != nil {
 		t.Fatalf("matching IR and params must resume: %v", err)
 	}
+	seed.Journal.Close()
 }
 
-// Verifies 87f006277d2c: fresh (--no-cache) ignores the journal — a new run
+// Verifies 87f006277d2c: fresh (--fresh) ignores the journal — a new run
 // id and journal, an empty prior map so every step runs, and the old journal
 // left byte-for-byte untouched as a record of the abandoned run.
 func TestFreshIgnoresJournal(t *testing.T) {
@@ -399,5 +401,44 @@ func TestReopenAfterTornTailRepairs(t *testing.T) {
 	}
 	if len(rp.Costs) != 1 {
 		t.Fatalf("cost record after repair lost: %d", len(rp.Costs))
+	}
+}
+
+// Verifies bff0f92afc29: resume replays journaled cost records into the seed
+// (RunSeed.Costs) so the executor folds prior spend into the budget ledger —
+// the fold arch_journal.md promises; fresh seeds carry none.
+func TestResumeSeedsJournaledCosts(t *testing.T) {
+	params := map[string]string{}
+	store := NewStore(t.TempDir(), nil)
+	j, err := store.Begin(Header{RunID: "run-1", Workflow: "main", Params: params,
+		IRHash: mustHashIR(t, smallIR(false))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.AppendCost(CostRecord{StepID: "task/a", InputHash: "h",
+		Cost: json.RawMessage(`[{"unit":"tokens","amount":5}]`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	seed, err := store.Resume(smallIR(false), "run-1", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Journal.Close()
+	if len(seed.Costs) != 1 || seed.Costs[0].StepID != "task/a" {
+		t.Fatalf("resume must seed journaled cost records, got %+v", seed.Costs)
+	}
+
+	fresh, err := store.Fresh(Header{RunID: NewRunID(), Workflow: "main",
+		IRHash: mustHashIR(t, smallIR(false))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Journal.Close()
+	if len(fresh.Costs) != 0 {
+		t.Fatalf("fresh seeds carry no prior costs, got %+v", fresh.Costs)
 	}
 }

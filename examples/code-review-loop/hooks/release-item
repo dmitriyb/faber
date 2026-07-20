@@ -1,0 +1,9 @@
+#!/bin/sh
+# on_failure hook: undo external side-effects of a failed step. Runs
+# HOST-SIDE with the failed step's inputs as FABER_INPUT_* and the error
+# record as JSON on stdin. Idempotent by design — it also runs between
+# retry attempts.
+set -eu
+err="$(cat)"    # {"reason": ..., "detail": ..., "handoff": ...}
+echo "releasing claim on ${FABER_INPUT_ITEM} after: ${err}" >&2
+# e.g.: tracker-cli release "${FABER_INPUT_ITEM}"; git push gateway --delete "work/${FABER_INPUT_ITEM}"

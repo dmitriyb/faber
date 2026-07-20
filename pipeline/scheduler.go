@@ -107,6 +107,12 @@ type scheduler struct {
 	runID  string
 	runDir string
 
+	// failed counts nodes settled failed by THIS execution — the exit-code
+	// source of truth, owned by the loop goroutine rather than re-derived by
+	// re-reading the journal at report time (a report-load failure must not
+	// turn a failed run into exit 0).
+	failed int
+
 	fatal error
 }
 
@@ -422,6 +428,9 @@ type boxJob struct {
 // launch starts the box worker for a slot-granted agent node.
 func (s *scheduler) launch(ctx context.Context, n *execNode) {
 	n.life = nsRunning
+	// Info-level, not debug: a multi-minute box with no start line reads as a
+	// hung run; start/settle pairs are the run's heartbeat.
+	s.log.Info("step started", "step", n.n.ID, "template", templateName(n.n.Template), "attempts_used", n.used)
 	retry := n.n.Retry - n.used
 	if retry < 0 {
 		retry = 0
@@ -488,8 +497,33 @@ func (s *scheduler) boxWorker(ctx context.Context, job boxJob) {
 	var costs []metering.Cost
 	var deferDec *metering.Decision
 	var deferErr *failure.ErrorRecord
+	var budgetStop *failure.ErrorRecord
 	deferAttempt := 0
 	runner := func(ctx context.Context, attempt int) (failure.Result, error) {
+		if attempt > 1 {
+			// Every attempt is admitted, not just the dispatch: the first
+			// attempt's reservation settled with its actuals, so a retry
+			// without re-admission would run outside the budget ledger and
+			// its Settle would record nothing (no reservation to key off).
+			dec, aerr := s.admit.Admit(ctx, step)
+			if aerr != nil {
+				budgetStop = &failure.ErrorRecord{Reason: reasonAdmission, Detail: aerr.Error()}
+				return deferEscape(), nil
+			}
+			switch dec.Kind {
+			case metering.Defer:
+				// Re-queue without consuming this retry, exactly like a
+				// rate-limit defer; the earlier attempts' history rides along.
+				deferDec, deferAttempt = &dec, job.base+attempt
+				return deferEscape(), nil
+			case metering.Reject:
+				// A budget rejection is terminal — spent only grows, so
+				// retrying the admission would burn the remaining attempts
+				// on no-op refusals.
+				budgetStop = &failure.ErrorRecord{Reason: reasonBudget, Detail: dec.Detail}
+				return deferEscape(), nil
+			}
+		}
 		br, runErr := s.boxes.RunAttempt(ctx, BoxAttempt{
 			RunID:    s.runID,
 			RunDir:   s.runDir,
@@ -533,6 +567,14 @@ func (s *scheduler) boxWorker(ctx context.Context, job boxJob) {
 		Retry:     job.retry,
 		OnFailure: job.onFailure,
 	}, runner)
+	if res.Error != nil && res.Error.Reason == failure.ReasonCanceled {
+		// The loop-head cancel returned before the first attempt's runner ran,
+		// so the pre-loop reservation was never settled. Release it (Settle is
+		// idempotent — a no-op if an attempt already settled) so the
+		// per-execution ledger's "every reservation settles" invariant holds
+		// even on abort. Its cost return is discarded: no attempt executed.
+		_, _ = s.admit.Settle(ctx, metering.ResultView{NodeID: job.id, Status: metering.StatusFailed})
+	}
 	if deferDec != nil {
 		// The converted attempt consumed no retry; the policy saw a synthetic
 		// success, so its between-attempt cleanup did not run — run it here
@@ -549,6 +591,21 @@ func (s *scheduler) boxWorker(ctx context.Context, job boxJob) {
 		})
 		return
 	}
+	if budgetStop != nil {
+		// A retry's re-admission refused terminally: the escape rode a
+		// synthetic success through the policy, so re-shape the settlement as
+		// the budget failure carrying the real attempts' history and costs.
+		now := s.clock.Now()
+		res = failure.Result{
+			Status:   failure.StatusFailed,
+			Error:    budgetStop,
+			Timing:   failure.Timing{Started: now, Finished: now},
+			Attempt:  len(res.Attempts) + 1,
+			Attempts: res.Attempts,
+		}
+		s.send(evSettled{id: job.id, res: res, costs: costs, executed: true, slot: true})
+		return
+	}
 	if res.Status == failure.StatusOK {
 		s.rld.Reset(job.id)
 	}
@@ -562,11 +619,15 @@ func (s *scheduler) cleanupAfterDefer(ctx context.Context, job boxJob, errRec *f
 	if job.onFailure == "" || errRec == nil {
 		return
 	}
+	// Detached-and-bounded only when the run is already aborted, exactly like
+	// the policy's own cleanup: a healthy run keeps the live context.
+	hctx, cancel := failure.CleanupContext(ctx)
+	defer cancel()
 	var err error
 	if s.policy.Hooks == nil {
 		err = fmt.Errorf("step declares on_failure but no hook runner is wired")
 	} else {
-		err = s.policy.Hooks.RunOnFailure(ctx, failure.HookInvocation{
+		err = s.policy.Hooks.RunOnFailure(hctx, failure.HookInvocation{
 			Script:  job.onFailure,
 			StepID:  job.id,
 			Attempt: attempt,
@@ -605,9 +666,10 @@ func (s *scheduler) step(ev event) {
 		if len(merged) > 0 {
 			res.Attempts = merged
 		}
-		// Costs stashed by earlier defer-converted dispatches merge into the
-		// settle's cost record so no settled attempt's accounting is lost.
-		s.settleResult(n, res, ev.executed, append(append([]metering.Cost{}, n.costs...), ev.costs...))
+		// Only this dispatch's costs are passed; the node's stashed costs
+		// (from earlier defer-converted dispatches) are folded inside
+		// settleResult, so they survive whichever settle path fires.
+		s.settleResult(n, res, ev.executed, ev.costs)
 	case evDeferred:
 		s.outstanding--
 		if ev.slot {
@@ -630,6 +692,12 @@ func (s *scheduler) step(ev event) {
 			Error:  &failure.ErrorRecord{Reason: reasonDeferred, Detail: ev.detail},
 		})
 		n.life = nsDeferred
+		// The waiting state is durable state: the defer is journaled when it
+		// happens, so a crash mid-wait leaves the timeline on disk instead of
+		// losing it with the never-settled node.
+		if err := s.journal.AppendDefer(failure.DeferRecord{StepID: ev.id, Until: ev.until, Detail: ev.detail}); err != nil && s.fatal == nil {
+			s.fatal = fmt.Errorf("pipeline: journal became unappendable; aborting the run: %w", err)
+		}
 		s.log.Info("step deferred", "step", ev.id, "until", ev.until, "detail", ev.detail)
 		if ev.until.IsZero() {
 			s.waitZero = append(s.waitZero, ev.id)
@@ -644,6 +712,13 @@ func (s *scheduler) step(ev event) {
 		}
 		id := ev.id
 		s.clock.AfterFunc(ev.until.Sub(now), func() { s.send(evWake{id: id}) })
+		// A timed defer released its slot and settled its attempts' costs —
+		// exactly the state change a zero-until parked node waits to re-check.
+		// Without this wake, parked admissible work would stall for the whole
+		// rate-limit window (a timed defer is not a settlement, and nothing
+		// else may be in flight). The just-deferred node itself is not in the
+		// parking lot (it has a timer), so no self-wake loop.
+		s.wakeParked()
 	case evWake:
 		n := s.g.nodes[ev.id]
 		if n != nil && n.life == nsDeferred {
@@ -809,12 +884,16 @@ func (s *scheduler) settleResult(n *execNode, res failure.Result, executed bool,
 	if err := s.journal.AppendResult(rec); err != nil && s.fatal == nil {
 		s.fatal = fmt.Errorf("pipeline: journal became unappendable; aborting the run: %w", err)
 	}
-	// A cost record is owed whenever a box executed on this dispatch, or when
-	// an earlier defer-converted dispatch of this node settled attempt costs
-	// that would otherwise vanish (e.g. a defer followed by a reject).
-	if executed || len(costs) > 0 {
-		raw, err := json.Marshal(costs)
-		if err != nil || len(costs) == 0 {
+	// The node's stashed costs (settled by earlier defer-converted dispatches)
+	// are folded here — the single settle point — so they survive whichever
+	// path settles the node, not only evSettled. A cost record is owed
+	// whenever a box executed on this dispatch or any prior dispatch settled
+	// costs that would otherwise vanish (e.g. a defer followed by a reject or
+	// a cheap-gate failure on re-dispatch).
+	allCosts := append(append([]metering.Cost{}, n.costs...), costs...)
+	if executed || len(allCosts) > 0 {
+		raw, err := json.Marshal(allCosts)
+		if err != nil || len(allCosts) == 0 {
 			raw = []byte("[]")
 		}
 		if err := s.journal.AppendCost(failure.CostRecord{StepID: n.n.ID, InputHash: n.hash, Cost: raw}); err != nil && s.fatal == nil {
@@ -835,6 +914,9 @@ func (s *scheduler) finish(n *execNode, status string) {
 	n.life = nsDone
 	n.status = status
 	s.g.done++
+	if status == StateFailed {
+		s.failed++
+	}
 	s.log.Info("step settled", "step", id, "status", status, "cached", n.cached)
 
 	if members := s.g.members[id]; len(members) > 0 && status != StateOK {

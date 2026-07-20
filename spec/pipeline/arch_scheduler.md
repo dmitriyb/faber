@@ -54,6 +54,36 @@ attempt consumes no retry budget. Its eventual record notes it was
 deferred-then-resolved, but it settles as exactly one of the four terminal
 states.
 
+Two defer shapes exist, with distinct wake protocols:
+
+- **Timed** (`until` set): a clock wake re-queues the node at the reset time.
+- **Zero-until** ("re-check on the next settlement", the budget-contention
+  shape): the node parks in the `waitZero` lot and every settlement drains
+  the lot. Two edges close the stall windows: a zero-until defer arriving
+  with nothing left in flight re-checks immediately (its releasing
+  settlement raced ahead of it), and a **timed** defer also drains the lot —
+  it released a slot and settled its attempts' costs, which is exactly the
+  state change a parked node waits on, and it is not itself a settlement.
+  The just-parked timed node has a clock wake, not a lot entry, so no
+  self-wake loop exists.
+
+Admission is per **attempt**, not per dispatch: a retry re-admits before it
+launches (the first attempt's reservation settled with its actuals), a
+mid-retry `defer` re-queues without consuming the retry, and a mid-retry
+`reject` settles the step failed immediately — spent only grows, so burning
+the remaining attempts on refusals would be noise.
+
+## Run preflight
+
+Before any run state exists (no journal, no run dir, no lock), every agent
+template reachable from the run — entry IR plus generate targets — must
+resolve its image tag and the docker daemon must already hold the image. One
+early, aggregated refusal (pointing at `faber build`) replaces a per-step
+launch-failure cascade that would burn each step's retry budget against a
+dead daemon or an unbuilt image. The preflight applies to every execute mode,
+resume included: uniform fail-fast, at the cost of requiring images present
+even for a fully-cached replay.
+
 ## Failure propagation
 
 When a node settles `failed` (final, after retries), the scheduler walks its

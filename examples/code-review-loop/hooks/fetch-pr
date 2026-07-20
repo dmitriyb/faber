@@ -1,0 +1,9 @@
+#!/bin/sh
+# context hook for review/fix: fetch the PR under review into the prompt body.
+set -eu
+{
+  echo "# Review PR #${FABER_INPUT_PR}"
+  echo
+  echo "Repository: ${FABER_INPUT_REPO}. Diff and discussion follow."
+  git log --oneline -20 2>/dev/null || true
+} > "${FABER_BUNDLE_DIR}/CONTEXT.md"

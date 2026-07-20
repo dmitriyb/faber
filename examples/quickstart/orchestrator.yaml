@@ -1,0 +1,30 @@
+version: 1
+
+# The smallest useful faber config: one template, one workflow, one step.
+# No network lock, no gateway, no credentials — the box runs on the default
+# docker network and clones nothing. Good for a first `validate/build/run`;
+# NOT a production posture (see docs/deployment.md for the sealed setup).
+
+templates:
+  summarize:
+    build:
+      packages: [coreutils, claude-code]
+    run:
+      env:
+        FABER_AGENT_CLI: claude        # which agent CLI the box invokes (no vendor default)
+    skill: summarize
+    inputs:
+      topic: {type: string, required: true}
+      audience: {type: string, required: false, default: engineers}
+    output:
+      summary:    {type: string, required: true}
+      confidence: {type: string, enum: [low, medium, high], required: true}
+
+workflows:
+  brief:
+    params:
+      topic: {type: string, required: true}
+    steps:
+      - id: summarize
+        use: summarize
+        with: {topic: "${params.topic}"}

@@ -449,3 +449,74 @@ func TestExecHookInputNameCollision(t *testing.T) {
 		}
 	}
 }
+
+// Verifies 9cb70f998931 (CC-F4): the retry loop short-circuits on a cancelled
+// context — remaining attempts are never launched against a dead context
+// (each would fully stage skills, bindings, and a docker kill), and the
+// canceled record carries the real attempts' history.
+func TestRetryCancelShortCircuit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	runner := func(_ context.Context, attempt int) (Result, error) {
+		calls++
+		cancel() // the run is aborted while the first attempt is in flight
+		return failedResult(ReasonAgent, "killed mid-attempt"), nil
+	}
+	p := &Policy{}
+	res := p.RunStep(ctx, StepSpec{ID: "task/x", Retry: 5}, runner)
+	if calls != 1 {
+		t.Fatalf("runner ran %d times, want 1 — no attempt may launch after cancellation", calls)
+	}
+	if res.Status != StatusFailed || res.Error.Reason != ReasonCanceled {
+		t.Fatalf("want a canceled record, got %+v", res)
+	}
+	if len(res.Attempts) != 1 || res.Attempts[0].Error.Reason != ReasonAgent {
+		t.Fatalf("the real attempt's history must ride along, got %+v", res.Attempts)
+	}
+
+	// Cancelled before the first attempt: nothing runs at all.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	calls2 := 0
+	res = p.RunStep(ctx2, StepSpec{ID: "task/y", Retry: 2}, func(context.Context, int) (Result, error) {
+		calls2++
+		return okResult(`{}`), nil
+	})
+	if calls2 != 0 || res.Error == nil || res.Error.Reason != ReasonCanceled {
+		t.Fatalf("pre-cancelled step must settle canceled without running (calls=%d, res=%+v)", calls2, res)
+	}
+}
+
+// ctxCheckingHooks reports the liveness of the context each invocation ran on.
+type ctxCheckingHooks struct{ errs []error }
+
+func (h *ctxCheckingHooks) RunOnFailure(ctx context.Context, _ HookInvocation) error {
+	h.errs = append(h.errs, ctx.Err())
+	return ctx.Err()
+}
+
+// Verifies 9796e2bddf7a (L-P3e): on_failure cleanup runs on a
+// cancellation-detached, time-bounded context — an aborted run is exactly
+// when releasing external side-effects matters, so cleanup must not inherit
+// the dead run context.
+func TestCleanupRunsOnDetachedContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	hooks := &ctxCheckingHooks{}
+	p := &Policy{Hooks: hooks}
+	calls := 0
+	runner := func(context.Context, int) (Result, error) {
+		calls++
+		cancel() // the operator aborts while the only attempt is in flight
+		return failedResult(ReasonAgent, "killed"), nil
+	}
+	res := p.RunStep(ctx, StepSpec{ID: "task/x", OnFailure: "./cleanup"}, runner)
+	if calls != 1 || res.Status != StatusFailed {
+		t.Fatalf("unexpected run shape: calls=%d res=%+v", calls, res)
+	}
+	if len(hooks.errs) != 1 {
+		t.Fatalf("terminal cleanup must run exactly once, ran %d times", len(hooks.errs))
+	}
+	if hooks.errs[0] != nil {
+		t.Fatalf("cleanup saw a dead context: %v", hooks.errs[0])
+	}
+}

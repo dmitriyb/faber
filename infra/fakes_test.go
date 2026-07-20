@@ -19,8 +19,9 @@ import (
 type fakeDocker struct {
 	mu         sync.Mutex
 	calls      [][]string
-	exists     map[string]bool // ImageExists / NetworkExists answers
-	loadTag    string          // tag Load reports
+	exists     map[string]bool  // ImageExists / NetworkExists answers
+	existsHook func(tag string) // runs on ImageExists, before the answer (race windows)
+	loadTag    string           // tag Load reports
 	loadErr    error
 	markLoaded bool // Load marks loadTag as existing (daemon-as-cache)
 	runFn      func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error)
@@ -49,6 +50,9 @@ func (f *fakeDocker) callsFor(verb string) [][]string {
 
 func (f *fakeDocker) ImageExists(ctx context.Context, tag string) (bool, error) {
 	f.record("image-exists", tag)
+	if f.existsHook != nil {
+		f.existsHook(tag)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.exists[tag], nil
@@ -102,18 +106,24 @@ func (f *fakeDocker) Kill(ctx context.Context, name string) error {
 	return f.killErr
 }
 
+func (f *fakeDocker) Remove(ctx context.Context, name string) error {
+	f.record("remove", name)
+	return nil
+}
+
 // fakeNix records the *contents* of each staged expression file (the file is
 // deleted after the call) plus whether a staged overlay sat beside it.
 type fakeNix struct {
-	mu           sync.Mutex
-	evalExprs    []string
-	evalOverlays []bool // overlay.nix staged beside the expr file?
-	evalResults  []json.RawMessage
-	evalErr      error
-	buildExprs   []string
-	buildOut     []string
-	buildErr     error
-	buildDelay   time.Duration // widens the single-flight race window
+	mu            sync.Mutex
+	evalExprs     []string
+	evalOverlays  []bool // overlay.nix staged beside the expr file?
+	evalResults   []json.RawMessage
+	evalErr       error
+	buildExprs    []string
+	buildOverlays [][]byte // staged overlay.nix bytes per Build (nil when absent)
+	buildOut      []string
+	buildErr      error
+	buildDelay    time.Duration // widens the single-flight race window
 }
 
 func (f *fakeNix) Eval(ctx context.Context, exprFile string, args []string) (json.RawMessage, error) {
@@ -141,8 +151,10 @@ func (f *fakeNix) Eval(ctx context.Context, exprFile string, args []string) (jso
 
 func (f *fakeNix) Build(ctx context.Context, exprFile string) ([]string, error) {
 	expr, _ := readStaged(exprFile)
+	overlay, _ := os.ReadFile(filepath.Join(filepath.Dir(exprFile), stagedOverlayName))
 	f.mu.Lock()
 	f.buildExprs = append(f.buildExprs, expr)
+	f.buildOverlays = append(f.buildOverlays, overlay)
 	delay, out, err := f.buildDelay, f.buildOut, f.buildErr
 	f.mu.Unlock()
 	if delay > 0 {

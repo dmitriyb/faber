@@ -141,3 +141,26 @@ func TestRemoteCloneURLSplice(t *testing.T) {
 		}
 	}
 }
+
+// Verifies 14a0498eb362 (L-P3i): the repo input — possibly an upstream box's
+// output — must be a plain repository path before it is spliced into the
+// clone URL; traversal and URL-reshaping shapes fail the step before launch.
+func TestRemoteRepoShape(t *testing.T) {
+	remote := &config.RemoteDef{URL: "ssh://git@gw/srv/git", TOFU: true}
+	b := NewRemoteBinding(nil)
+	for _, bad := range []string{"../up", "a/../b", "a b", "a;rm", "a\nb", "/abs", "a//b", ".", "..", "a?x=1", "a#f", "org/../../top"} {
+		if _, err := b.Prepare(context.Background(), StepSpec{Remote: remote, Repo: bad}); err == nil {
+			t.Errorf("repo %q must be refused", bad)
+		}
+	}
+	for _, good := range []string{"sandbox", "org/repo", "a.b/c-d_e"} {
+		c, err := b.Prepare(context.Background(), StepSpec{Remote: remote, Repo: good})
+		if err != nil {
+			t.Errorf("repo %q must pass: %v", good, err)
+			continue
+		}
+		if len(c.Args) == 0 || !strings.Contains(c.Args[1], good+".git") {
+			t.Errorf("repo %q did not splice: %v", good, c.Args)
+		}
+	}
+}

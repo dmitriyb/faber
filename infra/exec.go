@@ -37,6 +37,9 @@ type DockerClient interface {
 	NetworkExists(ctx context.Context, name string) (bool, error)
 	ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error)
 	Kill(ctx context.Context, name string) error
+	// Remove force-removes a container by name (docker rm -f), running or
+	// stopped; an absent container is success, so eviction is idempotent.
+	Remove(ctx context.Context, name string) error
 }
 
 // GitClient is the typed git seam. Only plumbing verbs with byte-stable

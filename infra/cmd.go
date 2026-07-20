@@ -35,6 +35,9 @@ func setupProcess(cmd *exec.Cmd) {
 		}
 		return nil
 	}
+	// WaitDelay's SIGKILL reaches only the direct child; a SIGTERM-ignoring
+	// grandchild survives it, but the force-closed pipes still unblock Wait,
+	// so shutdown completes regardless.
 	cmd.WaitDelay = killGrace
 }
 

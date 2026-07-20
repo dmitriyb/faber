@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,26 +24,40 @@ import (
 
 // stateDir is where faber keeps host-side state: run journals under runs/,
 // the infra image manifest under infra/. Overridable for tests and multi-root
-// setups; relative paths resolve against the working directory by design (a
-// run's journal lives beside the config that produced it).
+// setups; a relative value resolves against the working directory (a run's
+// journal lives beside the config that produced it) but is absolutized HERE —
+// state-dir paths end up as docker -v host paths, and docker reads a relative
+// host path as a named volume, silently detaching every result mount.
 func stateDir() string {
-	if d := os.Getenv("FABER_STATE_DIR"); d != "" {
-		return d
+	d := os.Getenv("FABER_STATE_DIR")
+	if d == "" {
+		d = ".faber"
 	}
-	return ".faber"
+	abs, err := filepath.Abs(d)
+	if err != nil {
+		return d // Abs fails only on an unreadable cwd; the run will fail loudly
+	}
+	return abs
 }
 
 // boxBinary locates the faber-box sequencer to bind-mount into containers:
-// next to the faber executable unless FABER_BOX_BIN overrides.
+// next to the faber executable unless FABER_BOX_BIN overrides. Absolutized
+// for the same docker -v reason as stateDir.
 func boxBinary() string {
-	if b := os.Getenv("FABER_BOX_BIN"); b != "" {
+	b := os.Getenv("FABER_BOX_BIN")
+	if b == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			b = "faber-box"
+		} else {
+			b = filepath.Join(filepath.Dir(exe), "faber-box")
+		}
+	}
+	abs, err := filepath.Abs(b)
+	if err != nil {
 		return b
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return "faber-box"
-	}
-	return filepath.Join(filepath.Dir(exe), "faber-box")
+	return abs
 }
 
 // wireDeps builds the config.Deps injection for the real binary. The wiring
@@ -58,6 +73,7 @@ func wireDeps(stdout, stderr io.Writer) config.Deps {
 		Prover:   builder.PackageProver(),
 		Builder:  builder.ConfigBuilder(),
 		Journal:  store,
+		Audit:    store,
 		Executor: &wiredExecutor{stdout: stdout, docker: docker, builder: builder, store: store},
 		Registry: registryController{},
 	}
@@ -180,10 +196,11 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			GitEmail:    os.Getenv("FABER_GIT_EMAIL"),
 			Log:         logger,
 		},
-		Hooks:     &failure.ExecHookRunner{Log: logger},
-		Source:    infra.NewCommandRunner(logger),
-		Workflows: opts.Targets,
-		Images:    images,
+		Hooks:      &failure.ExecHookRunner{Log: logger},
+		Source:     infra.NewCommandRunner(logger),
+		Workflows:  opts.Targets,
+		Images:     images,
+		ImageCheck: w.docker,
 		Reentry: &pipeline.Reentry{
 			IR:          ir,
 			Images:      images,
@@ -201,7 +218,27 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 		},
 		Out: w.stdout,
 	}
-	return ex.Execute(ctx, ir, params, opts, logger)
+	// The machine-readable report goes wherever --report-json points; "-"
+	// means stdout (after the human report, which also writes there). A file
+	// target buffers in memory and is written only if a report was actually
+	// produced, so an interactive session or a pre-scheduler failure leaves
+	// no stale/empty file behind, and the close error is surfaced.
+	var jsonBuf *bytes.Buffer
+	switch opts.ReportJSON {
+	case "":
+	case "-":
+		ex.JSONOut = w.stdout
+	default:
+		jsonBuf = &bytes.Buffer{}
+		ex.JSONOut = jsonBuf
+	}
+	runErr := ex.Execute(ctx, ir, params, opts, logger)
+	if jsonBuf != nil && jsonBuf.Len() > 0 {
+		if werr := os.WriteFile(opts.ReportJSON, jsonBuf.Bytes(), 0o644); werr != nil && runErr == nil {
+			return fmt.Errorf("faber: write --report-json target: %w", werr)
+		}
+	}
+	return runErr
 }
 
 // imageTagger adapts infra's deterministic tag derivation to the pipeline's

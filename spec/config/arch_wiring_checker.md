@@ -36,6 +36,12 @@ changed.
 
 Run in order, all violations collected:
 
+0. **Flat id uniqueness.** Node ids must be unique across the whole flattened
+   graph, sub-workflow levels included — the per-level indexes would silently
+   collapse a duplicate and the executor would abort at run start. (The
+   Loader's step-id grammar reserves the namespacing characters `/`, `@`,
+   `[`, `]`, `"` so authored ids cannot collide with desugared ones.)
+
 1. **Reference resolution.** Every data edge's `from` names an existing node and
    a field declared in that node's output schema. Selector nodes expose their
    underlying step's schema. Generate item bindings (`${item.field}`) are checked
@@ -57,10 +63,16 @@ Run in order, all violations collected:
    must already be acyclic if the Desugarer is correct — this check is
    defense-in-depth and catches hand-authored IR.
 
-5. **Condition sanity.** Every `when:`/`until:` CEL expression compiles in an
-   environment typed from the step results it references (delegated to the
-   pipeline module's ConditionEvaluator compilation entry point); referenced
-   steps must precede the condition's node.
+5. **Condition sanity.** Every `when:`/`until:` CEL expression compiles in
+   the shared condition environment (the same entry point the pipeline
+   module's ConditionEvaluator re-checks at load); referenced steps must
+   precede the condition's node; and a walk of the checked AST enforces the
+   canonical reference discipline — `steps` only as the desugarer's
+   `steps["<node-id>"].<field>` form with the id in the derived dep set,
+   `params` only naming a declared param of the level's workflow scope, and
+   no `item` (the run-time activation binds only steps and params). A
+   hand-authored index form or an undeclared name fails validate, never
+   mid-run.
 
 6. **Tool-subset rule.** A step's declared tool needs (if the step declares any)
    must be a subset of its template's `build.packages`. Validation is

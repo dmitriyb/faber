@@ -88,3 +88,21 @@ func TestInputEnvNaming(t *testing.T) {
 		t.Fatalf("SlotToken = %q", got)
 	}
 }
+
+// Verifies ff8e85704b0a (L-P3h): container-written record reads are
+// size-bounded — an oversize result.json is an error at the boundary, never
+// a truncated read or a host-memory balloon.
+func TestReadResultFileBounded(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, ResultFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(MaxRecordBytes + 2); err != nil { // sparse: no real 64MB written
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := ReadResultFile(dir); err == nil || !strings.Contains(err.Error(), "record bound") {
+		t.Fatalf("oversize record must refuse with the bound named, got %v", err)
+	}
+}

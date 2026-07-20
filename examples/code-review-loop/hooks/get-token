@@ -1,0 +1,6 @@
+#!/bin/sh
+# credential resolver: get_token(service) -> token on stdout. Host-side only;
+# the box never sees this output in proxy/helper mode. Wire to your keychain:
+#   pass show "faber/$1"   |   rbw get "$1"   |   security find-generic-password ...
+set -eu
+exec pass show "faber/$1"

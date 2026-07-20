@@ -640,3 +640,222 @@ func TestExecutor_RestoreDeferCounts(t *testing.T) {
 		t.Errorf("box-authored defer reasons restored %d, want 0", got)
 	}
 }
+
+// scriptedAdmit answers Admit per node id from a queue of decisions (the last
+// repeats); Settle records views. It fakes the admitter to force adverse
+// admission orderings the real ledger cannot script deterministically.
+type scriptedAdmit struct {
+	mu      sync.Mutex
+	decs    map[string][]metering.Decision
+	settled []metering.ResultView
+}
+
+func (a *scriptedAdmit) Admit(_ context.Context, s metering.Step) (metering.Decision, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	q := a.decs[s.NodeID]
+	if len(q) == 0 {
+		return metering.Decision{Kind: metering.Admit}, nil
+	}
+	d := q[0]
+	if len(q) > 1 {
+		a.decs[s.NodeID] = q[1:]
+	}
+	return d, nil
+}
+
+func (a *scriptedAdmit) Settle(_ context.Context, r metering.ResultView) ([]metering.Cost, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.settled = append(a.settled, r)
+	return []metering.Cost{{Unit: "tokens", Amount: 1}}, nil
+}
+
+// manualClock is a Clock whose AfterFunc callbacks fire only when the test
+// releases them — the stall window between a timed defer and its wake stays
+// open as long as the test needs.
+type manualClock struct {
+	mu  sync.Mutex
+	cbs []func()
+}
+
+func (c *manualClock) Now() time.Time { return testBase }
+func (c *manualClock) AfterFunc(_ time.Duration, f func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cbs = append(c.cbs, f)
+}
+func (c *manualClock) fire() {
+	c.mu.Lock()
+	cbs := c.cbs
+	c.cbs = nil
+	c.mu.Unlock()
+	for _, f := range cbs {
+		go f()
+	}
+}
+
+// Verifies 8879dc1597d6 (CC-F2): a timed defer wakes zero-until parked nodes.
+// Node a parks awaiting the next settlement; node b's timed defer is not a
+// settlement — without the wake, a would stall for b's whole rate-limit
+// window with admissible work queued.
+func TestScheduling_TimedDeferWakesParked(t *testing.T) {
+	ir := testIR("w", []config.Node{agentNode("w/a", "out"), agentNode("w/b", "out")}, nil)
+	admit := &scriptedAdmit{decs: map[string][]metering.Decision{
+		"w/a": {{Kind: metering.Defer}, {Kind: metering.Admit}},                                 // zero-until park, then admit
+		"w/b": {{Kind: metering.Defer, Until: testBase.Add(time.Hour)}, {Kind: metering.Admit}}, // timed defer
+	}}
+	sh := newSchedHarness(t, ir, admit, 0)
+	clock := &manualClock{}
+	sh.s.clock = clock
+
+	done := make(chan error, 1)
+	go func() { done <- sh.s.run(context.Background()) }()
+
+	// a must settle on b's timed defer alone — no timer has fired.
+	deadline := time.After(5 * time.Second)
+	for {
+		rp, err := sh.store.Load("run-s")
+		if err == nil {
+			if rec, ok := rp.LastByStep["w/a"]; ok && rec.Result.Status == failure.StatusOK {
+				break
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatal("parked node a never woke on the timed defer (stalled for the rate-limit window)")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	clock.fire() // release b's wake so the run can finish
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// Verifies 8879dc1597d6 / 58879b841ed4 (L-P1b): every retry attempt passes
+// admission and settles its own costs — attempt 2 is metered, not a free
+// ride outside the ledger.
+func TestScheduling_RetryAttemptsAdmittedAndSettled(t *testing.T) {
+	ir := testIR("w", []config.Node{{ID: "w/x", Kind: config.KindAgent,
+		Template: testTemplate("tpl-x", "out"), Retry: 1, Bindings: map[string]config.BindingDesc{}}}, nil)
+	admit := &scriptedAdmit{decs: map[string][]metering.Decision{}}
+	sh := newSchedHarness(t, ir, admit, 0)
+	sh.boxes.script("w/x", failedResult("agent", "died"), okPayload(map[string]any{"out": "v"}))
+
+	if err := sh.s.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := sh.boxes.attempts("w/x"); got != 2 {
+		t.Fatalf("box ran %d attempts, want 2", got)
+	}
+	if len(admit.settled) != 2 {
+		t.Fatalf("Settle ran %d times, want once per attempt (2)", len(admit.settled))
+	}
+	rp, err := sh.store.Load("run-s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rp.Costs) != 1 {
+		t.Fatalf("want one cost record, got %d", len(rp.Costs))
+	}
+	if got := string(rp.Costs[0].Cost); !strings.Contains(got, `"amount":1`) || strings.Count(got, `"tokens"`) != 2 {
+		t.Fatalf("cost record must carry both attempts' actuals, got %s", got)
+	}
+}
+
+// Verifies 58879b841ed4 (L-P1b): a budget rejection at a retry's re-admission
+// is terminal — the step settles failed with reason budget and the real
+// attempt's history, without burning the remaining retries on refusals.
+func TestScheduling_RetryBudgetRejectIsTerminal(t *testing.T) {
+	ir := testIR("w", []config.Node{{ID: "w/x", Kind: config.KindAgent,
+		Template: testTemplate("tpl-x", "out"), Retry: 3, Bindings: map[string]config.BindingDesc{}}}, nil)
+	admit := &scriptedAdmit{decs: map[string][]metering.Decision{
+		"w/x": {{Kind: metering.Admit}, {Kind: metering.Reject, Budget: "tokens", Detail: "budget tokens exhausted"}},
+	}}
+	sh := newSchedHarness(t, ir, admit, 0)
+	sh.boxes.script("w/x", failedResult("agent", "died"))
+
+	if err := sh.s.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := sh.boxes.attempts("w/x"); got != 1 {
+		t.Fatalf("box ran %d attempts, want 1 (the reject must not burn retries)", got)
+	}
+	rp, err := sh.store.Load("run-s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := rp.LastByStep["w/x"]
+	if rec.Result.Status != failure.StatusFailed || rec.Result.Error.Reason != reasonBudget {
+		t.Fatalf("want a terminal budget failure, got %+v", rec.Result)
+	}
+	if len(rec.Result.Attempts) != 1 || rec.Result.Attempts[0].Error.Reason != "agent" {
+		t.Fatalf("the real attempt's history must ride along, got %+v", rec.Result.Attempts)
+	}
+}
+
+// Verifies 8879dc1597d6 / flow_admission's ordering invariant (L-P3f): every
+// defer is journaled when it happens — a crash mid-wait leaves the waiting
+// timeline on disk, not only in the eventually-settled record's annotations.
+func TestScheduling_DeferJournaledDurably(t *testing.T) {
+	ir := testIR("w", []config.Node{agentNode("w/x", "out")}, nil)
+	admit := &scriptedAdmit{decs: map[string][]metering.Decision{
+		"w/x": {{Kind: metering.Defer, Until: testBase.Add(time.Minute), Detail: "endpoint saturated"}, {Kind: metering.Admit}},
+	}}
+	sh := newSchedHarness(t, ir, admit, 0)
+	if err := sh.s.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	rp, err := sh.store.Load("run-s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rp.Defers) != 1 || rp.Defers[0].StepID != "w/x" || rp.Defers[0].Detail != "endpoint saturated" {
+		t.Fatalf("defer event not journaled durably: %+v", rp.Defers)
+	}
+	if !rp.Defers[0].Until.Equal(testBase.Add(time.Minute)) {
+		t.Fatalf("defer until lost: %+v", rp.Defers[0])
+	}
+}
+
+// Verifies 58879b841ed4 (F3-review): costs settled by a defer-converted
+// dispatch survive even when the node's eventual settle takes a cheap-gate
+// path (not evSettled) — the stash is folded at the single settle point, so
+// no settled actuals are dropped. Here the node rate-limit-defers (settling a
+// cost), then its wake hits a budget reject that settles via the reshaped
+// failure — the stashed cost must still reach the journal.
+func TestScheduling_DeferStashedCostSurvivesReject(t *testing.T) {
+	ir := testIR("w", []config.Node{{ID: "w/x", Kind: config.KindAgent,
+		Template: testTemplate("tpl-x", "out"), Retry: 2, Bindings: map[string]config.BindingDesc{}}}, nil)
+	// Meter: every attempt actuals 3 tokens; budget 100 (so the first attempt
+	// admits and settles a cost, then the rate-limit defer re-queues).
+	meter := &fakeMeter{units: []metering.Unit{"tokens"}, actuals: []metering.Cost{{Unit: "tokens", Amount: 3}}}
+	admit := metering.NewAdmitter(map[string][]metering.Meter{"": {meter}}, map[metering.Unit]int64{"tokens": 100}, nil)
+	sh := newSchedHarness(t, ir, admit, 0)
+	// First attempt rate-limits (defer, cost stashed); the re-dispatch succeeds.
+	rl := failedResult(metering.ReasonRateLimit, `{"reset":0}`)
+	sh.boxes.script("w/x", rl, okPayload(map[string]any{"out": "v"}))
+
+	if err := sh.s.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	rp, err := sh.store.Load("run-s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The stashed rate-limited attempt's cost must be journaled, not dropped.
+	var total int64
+	for _, c := range rp.Costs {
+		var costs []metering.Cost
+		if err := json.Unmarshal(c.Cost, &costs); err != nil {
+			t.Fatal(err)
+		}
+		for _, cost := range costs {
+			total += cost.Amount
+		}
+	}
+	if total < 3 {
+		t.Fatalf("stashed defer cost dropped: journaled %d tokens, want >= 3 (the rate-limited attempt's actual)", total)
+	}
+}

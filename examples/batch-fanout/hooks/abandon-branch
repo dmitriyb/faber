@@ -1,0 +1,6 @@
+#!/bin/sh
+# on_failure: delete the orphan branch a failed migration may have pushed.
+set -eu
+cat > /dev/null   # error record on stdin; unused here
+echo "abandoning migration branch for ${FABER_INPUT_MODULE}" >&2
+# e.g.: git push gateway --delete "migrate/${FABER_INPUT_MODULE}"
