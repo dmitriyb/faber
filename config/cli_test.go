@@ -528,3 +528,23 @@ func TestCLIHelpAndReportJSON(t *testing.T) {
 		t.Fatalf("got %d (%+v): %s", code, exec.opts, stderr)
 	}
 }
+
+// Verifies the version surface: all three spellings dispatch identically, a
+// zero-valued BuildInfo (an unstamped local build) falls back to
+// dev/none/unknown rather than printing empty fields, and a stamped BuildInfo
+// prints exactly what was injected.
+func TestCLIVersion(t *testing.T) {
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}} {
+		code, stdout, stderr := runCLI(t, Deps{}, args...)
+		if code != 0 || stdout != "faber dev (commit none, built unknown)\n" {
+			t.Errorf("%v: got code %d, stdout %q, stderr %q", args, code, stdout, stderr)
+		}
+	}
+
+	info := BuildInfo{Version: "v1.2.3", Commit: "abcdef0", Date: "2026-07-21T00:00:00Z"}
+	code, stdout, stderr := runCLI(t, Deps{BuildInfo: info}, "version")
+	want := "faber v1.2.3 (commit abcdef0, built 2026-07-21T00:00:00Z)\n"
+	if code != 0 || stdout != want {
+		t.Fatalf("got code %d, stdout %q, stderr %q; want stdout %q", code, stdout, stderr, want)
+	}
+}

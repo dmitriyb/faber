@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "spec/**"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "spec/**"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build, vet, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      # push-to-main gets the race detector too — pull_request stays the fast
+      # gate; -race roughly doubles wall time and is worth paying only once
+      # a change has already merged.
+      - name: Test (race)
+        if: github.event_name == 'push'
+        run: go test -race ./...
+
+  # The realinfra-tagged suite (infra/, pipeline/, security/) needs a working
+  # docker daemon and, for infra/'s suite specifically, a working nix with
+  # network access to fetch the pinned nixpkgs. Its own doc comments already
+  # scope it as a real/acceptance-machine suite ("go test -tags realinfra"),
+  # not a hosted-CI one — GitHub-hosted runners have docker but not nix, and
+  # wiring a nix installer plus trusting the nixpkgs substituter to behave
+  # predictably on every push is a real source of flakiness this pipeline
+  # does not take on. It stays local/acceptance-machine only; see
+  # docs/deploy.md and spec/delivery/arch_ci.md.

@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  id-token: write # required for SLSA provenance
+  attestations: write # required for artifact attestations
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history for the changelog
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Write SSH signing key
+        # ssh-keygen ships with the runner image (OpenSSH is preinstalled on
+        # every GitHub-hosted runner) — no separate tool install needed.
+        env:
+          SSH_SIGNING_KEY: ${{ secrets.SSH_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SSH_SIGNING_KEY" ]; then
+            echo "::error::SSH_SIGNING_KEY is not set — see RELEASE-SETUP.md"
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/ssh-signing.key"
+          umask 077
+          printf '%s\n' "$SSH_SIGNING_KEY" > "$key_path"
+          # ssh-keygen refuses to load a private key with group/other
+          # permissions set, even under a strict umask on some runner images.
+          chmod 600 "$key_path"
+          echo "SSH_SIGNING_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign install.sh
+        # install.sh is not a GoReleaser-managed artifact (it is not built per
+        # target), so it is signed here directly while the key is still
+        # available, using the identical `ssh-keygen -Y sign -n file` invocation
+        # GoReleaser's signs block uses. Its content is version-agnostic, so it
+        # (and its signature) are byte-identical across releases.
+        run: |
+          cp install.sh dist/install.sh
+          ssh-keygen -Y sign -f "$SSH_SIGNING_KEY_PATH" -n file dist/install.sh
+
+      - name: Remove SSH signing key
+        if: always()
+        run: rm -f "$SSH_SIGNING_KEY_PATH"
+
+      - name: Generate per-artifact checksums
+        # dist/checksums.txt is the consolidated file; this adds one .sha256
+        # per archive so a single binary can be verified without the rest.
+        run: |
+          cd dist
+          for f in faber_*.tar.gz faber-box_*.tar.gz; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - name: Generate release manifest
+        run: |
+          ./scripts/generate-manifest.sh dist "${GITHUB_REF_NAME}" ok | tee dist/manifest.json
+
+      - name: Upload manifest, per-artifact checksums, and install.sh to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" dist/manifest.json \
+            dist/faber_*.tar.gz.sha256 dist/faber-box_*.tar.gz.sha256 \
+            dist/install.sh dist/install.sh.sig --clobber
+
+      - name: Generate SLSA provenance attestation
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/faber_*.tar.gz
+            dist/faber-box_*.tar.gz

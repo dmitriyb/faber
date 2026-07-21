@@ -21,6 +21,17 @@ import (
 )
 
 func main() {
+	// The box is normally invoked with no args (env-var driven, as the
+	// container's fixed entrypoint); a leading version token is the one
+	// exception, checked before anything phase-sequencer-related starts.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "--version", "-v":
+			printVersion(os.Stdout)
+			return
+		}
+	}
+
 	// Logs are structured JSON on stderr: the container log is the box's
 	// only human channel, and the host asserts phase order from these lines.
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))

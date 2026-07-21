@@ -119,12 +119,13 @@ func (e *RegistryUsageError) Unwrap() error { return e.Err }
 
 // Deps injects the future modules' capabilities into the CLI.
 type Deps struct {
-	Prover   PackageProver
-	Builder  ImageBuilder
-	Executor Executor
-	Journal  JournalStore
-	Audit    RunAuditor
-	Registry RegistryController
+	Prover    PackageProver
+	Builder   ImageBuilder
+	Executor  Executor
+	Journal   JournalStore
+	Audit     RunAuditor
+	Registry  RegistryController
+	BuildInfo BuildInfo
 }
 
 // Run is the faber CLI: subcommand dispatch, exit-code contract, and logging
@@ -142,6 +143,8 @@ func RunWithDeps(args []string, stdout, stderr io.Writer, deps Deps) int {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "version", "--version", "-v":
+		return cmdVersion(stdout, deps.BuildInfo)
 	case "validate":
 		return cmdValidate(rest, stdout, stderr, deps)
 	case "build":
@@ -167,6 +170,7 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: faber <command> [flags]
 
 commands:
+  version    print version, commit, and build date (also: --version, -v)
   validate   load, desugar, and check every workflow; --emit-ir prints the IR
   build      build template images
   run        execute a workflow: faber run <workflow> --param k=v ...
