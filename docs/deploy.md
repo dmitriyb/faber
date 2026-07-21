@@ -6,6 +6,15 @@ run journals, and everything security-critical is either a `docker run`
 binding or a companion service you already operate. Deploying it is therefore
 mostly about preparing the host and the companion topology.
 
+Both binaries — `faber` (the host CLI) and `faber-box` (bind-mounted
+read-only into every box; a static `linux` binary regardless of the host's
+own OS) — come from the signed GitHub release; see the README's install
+section. `faber` looks for `faber-box` next to its own executable by
+default; set `FABER_BOX_BIN` to relocate it. Building from source instead
+(`go build ./cmd/faber`, `CGO_ENABLED=0 GOOS=linux go build ./cmd/faber-box`)
+works identically — the release pipeline runs the same build, just
+cross-compiled and signed; see `spec/delivery/arch_release.md`.
+
 ## Host requirements
 
 | Component | Why | Notes |
@@ -13,21 +22,9 @@ mostly about preparing the host and the companion topology.
 | Linux host (or VM) | boxes, tmpfs secret mounts, ssh-agent sockets | the engine targets Linux; macOS works via a docker VM (see socket-group note below) |
 | Docker daemon | runs the boxes | rootful or rootless; the CLI is driven with structured output modes only |
 | Nix ≥ 2.4 | builds template images | `nix-command` is passed via `--extra-experimental-features`; images come from `dockerTools.buildLayeredImage`, no Dockerfiles |
-| Go toolchain | building faber itself | build-time only |
 | ssh-agent, ssh-add, ssh-keygen | ephemeral identity agents | stock OpenSSH |
 
-## Install
-
-```sh
-go build -o /usr/local/bin/faber ./cmd/faber
-CGO_ENABLED=0 GOOS=linux go build -o /usr/local/bin/faber-box ./cmd/faber-box
-```
-
-`faber-box` is the engine-owned entry program bind-mounted read-only into
-every box; it must be a static Linux binary (hence `CGO_ENABLED=0`). Faber
-looks for it next to its own executable; set `FABER_BOX_BIN` to relocate it.
-
-Verify the install against a real daemon and nix:
+Verify a build against a real daemon and nix:
 
 ```sh
 go test -tags realinfra ./infra/ ./pipeline/   # build/run round trips, package proof, kill-on-cancel
@@ -40,11 +37,7 @@ faber build    --config examples/quickstart/orchestrator.yaml
 `FABER_STATE_DIR` (default `.faber`, resolved against the working directory)
 holds:
 
-- `runs/<run-id>/journal.jsonl` — the append-only run journal plus per-box
-  attempt directories (result records, failure handoffs). This is the only
-  state `faber resume` needs; treat it as disposable-after-triage or archive
-  it for audit. Journals never contain resolved input values or secrets —
-  only hashes, statuses, and error records.
+- `runs/<run-id>/journal.jsonl` — the append-only run journal plus per-box attempt directories (result records, failure handoffs). This is the only state `faber resume` needs; treat it as disposable-after-triage or archive it for audit. Journals never contain resolved input values or secrets — only hashes, statuses, and error records.
 - `infra/images.jsonl` — append-only bookkeeping of loaded images for a
   future GC command.
 
@@ -102,25 +95,10 @@ upstream credential.
 
 ## Keys and credentials
 
-- **Identities**: `identities: {<role>: {key: <ref>}}` — the ref is
-  interpreted by your resolver/tooling (file path, hardware-key handle). Per
-  step, faber spawns an ephemeral ssh-agent, loads exactly that one key, and
-  forwards only the socket; the private key never enters the box. On macOS
-  docker VMs, set the identity binding's socket group if the box user can't
-  read the forwarded socket.
-- **Host key pinning**: commit your gateway's public host key and reference
-  it as `remote.host_key_file`. `tofu: true` (accept-new) is for sandboxes
-  only; configuring neither aborts the run — there is no silent fallback.
-- **API credentials**: prefer `mode: proxy` (auth injected outside the box)
-  or `mode: helper`; `mode: file` is the explicit degraded path — the
-  resolver's token is written to a tmpfs-backed read-only mount and shredded
-  after the step, but it *is* readable inside that box. The resolver
-  (`credentials.resolver`) is any executable: `get_token(service)` on argv,
-  token on stdout, invoked host-side only. Wire it to `pass`, `rbw`, your
-  keychain, or your secrets manager.
-- **Commit identity**: set `FABER_GIT_NAME` / `FABER_GIT_EMAIL` for the
-  committer identity boxes use; signing keys always come from the forwarded
-  agent.
+- **Identities**: `identities: {<role>: {key: <ref>}}` — the ref is interpreted by your resolver/tooling (file path, hardware-key handle). Per step, faber spawns an ephemeral ssh-agent, loads exactly that one key, and forwards only the socket; the private key never enters the box. On macOS docker VMs, set the identity binding's socket group if the box user can't read the forwarded socket.
+- **Host key pinning**: commit your gateway's public host key and reference it as `remote.host_key_file`. `tofu: true` (accept-new) is for sandboxes only; configuring neither aborts the run — there is no silent fallback.
+- **API credentials**: prefer `mode: proxy` (auth injected outside the box) or `mode: helper`; `mode: file` is the explicit degraded path — the resolver's token is written to a tmpfs-backed read-only mount and shredded after the step, but it *is* readable inside that box. The resolver (`credentials.resolver`) is any executable: `get_token(service)` on argv, token on stdout, invoked host-side only. Wire it to `pass`, `rbw`, your keychain, or your secrets manager.
+- **Commit identity**: set `FABER_GIT_NAME` / `FABER_GIT_EMAIL` for the committer identity boxes use; signing keys always come from the forwarded agent.
 
 ## Budgets and metering
 
@@ -153,47 +131,24 @@ startup rather than silently not enforcing.
 
 - `run.runtime: runsc` (per template) switches the container runtime (e.g.
   gVisor) for hardened isolation — argv-only, the image is unchanged.
-- `network.nftables: true` is the proxy-less egress mode: baked rules loaded
-  by a root entrypoint with `NET_ADMIN`, dropping to the agent user. It is an
-  explicit choice; a network section with neither `proxy` nor `nftables`
-  fails validate, so a capability grant can never happen by omission.
-- Template env and volumes are screened: engine- and security-owned names
-  (`FABER_*`, `SSH_AUTH_SOCK`, reserved mount paths) are rejected at validate
-  or spec-build time rather than silently overridden.
+- `network.nftables: true` is the proxy-less egress mode: baked rules loaded by a root entrypoint with `NET_ADMIN`, dropping to the agent user. It is an explicit choice; a network section with neither `proxy` nor `nftables` fails validate, so a capability grant can never happen by omission.
+- Template env and volumes are screened: engine- and security-owned names (`FABER_*`, `SSH_AUTH_SOCK`, reserved mount paths) are rejected at validate or spec-build time rather than silently overridden.
 
 ## Operations
 
-- **Failures**: the run report names each failed step, its reason, and a
-  ready-made `faber resume <run-id> --interactive <step>` line that reopens
-  the failed box (same image, bindings, inputs, with the failure handoff
-  mounted read-only) for diagnosis.
-- **Resume**: `faber resume <run-id>` skips journal hits by
-  `(step-id, input-hash)` — a changed input, template, or image tag re-runs
-  automatically. The journal pins the IR hash; if the config drifted, resume
-  refuses (fix the config back, or `--fresh` to re-run everything under a new
-  run id).
-- **Upgrades**: run `faber upgrade-check` first — it is the read-only
-  pre-flight encoding "faber is not upgraded mid-run": non-zero while any
-  run is live (its lock is held) or unfinished (no run-end marker in its
-  journal), listing them; `--force` acknowledges. The binary swap itself is
-  external. On-disk artifacts are schema-versioned (journal format, IR
-  version, the faber↔faber-box contract, per-template image tags recorded at
-  run start), and resume fails closed on any mismatch — an engine-side
-  change is named as such, never blamed on your config, and there is no
-  auto-migration: finish in-flight runs on the old binary or `--fresh` them.
-  Same YAML must still produce byte-identical IR (`validate --emit-ir` is
-  diffable and golden-tested).
-- **Abort**: SIGINT/SIGTERM cancels the run; in-flight containers are killed
-  by name and bindings torn down. There are no per-step timeouts in v0.1 —
-  bound runaway steps with metering budgets or external supervision.
+- **Failures**: the run report names each failed step, its reason, and a ready-made `faber resume <run-id> --interactive <step>` line that reopens the failed box (same image, bindings, inputs, with the failure handoff mounted read-only) for diagnosis.
+- **Resume**: `faber resume <run-id>` skips journal hits by `(step-id, input-hash)` — a changed input, template, or image tag re-runs automatically. The journal pins the IR hash; if the config drifted, resume refuses (fix the config back, or `--fresh` to re-run everything under a new run id).
+- **Upgrades**: run `faber upgrade-check` first — it is the read-only pre-flight encoding "faber is not upgraded mid-run": non-zero while any run is live (its lock is held) or unfinished (no run-end marker in its journal), listing them; `--force` acknowledges. The binary swap itself is external. On-disk artifacts are schema-versioned (journal format, IR version, the faber↔faber-box contract, per-template image tags recorded at run start), and resume fails closed on any mismatch — an engine-side change is named as such, never blamed on your config, and there is no auto-migration: finish in-flight runs on the old binary or `--fresh` them. Same YAML must still produce byte-identical IR (`validate --emit-ir` is diffable and golden-tested).
+- **Abort**: SIGINT/SIGTERM cancels the run; in-flight containers are killed by name and bindings torn down. There are no per-step timeouts in v0.1 — bound runaway steps with metering budgets or external supervision.
 
 ## CI
 
-Two tiers, matching the repo's own gate:
-
-1. Every commit, any runner: `go build ./... && go vet ./... && go test ./...`
-   — hermetic, needs no docker/nix/agent CLI.
-2. On a docker+nix runner (or a dedicated acceptance host):
-   `go test -tags realinfra ./infra/ ./pipeline/`, then
-   `faber validate && faber build` against your real configs, and the
-   acceptance workflows against your staging companion services.
+The repo's own gate (`go build ./... && go vet ./... && go test ./...`, `-race`
+on `main`, nightly fuzz) is hermetic — no docker, nix, or agent CLI needed;
+see `spec/delivery/arch_ci.md`. The `realinfra`-tagged suite
+(`go test -tags realinfra ./...`) needs a real docker daemon and, for
+`infra/`'s cases, a working `nix` with network access to the pinned
+nixpkgs — it stays a local/acceptance-machine suite, not a hosted-CI one
+(see `spec/delivery/arch_ci.md` for why). Run it on a docker+nix machine
+before trusting a build against your real configs and staging companion
+services.

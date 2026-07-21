@@ -3,7 +3,7 @@ version: 1
 # The smallest useful faber config: one template, one workflow, one step.
 # No network lock, no gateway, no credentials — the box runs on the default
 # docker network and clones nothing. Good for a first `validate/build/run`;
-# NOT a production posture (see docs/deployment.md for the sealed setup).
+# NOT a production posture (see docs/deploy.md for the sealed setup).
 
 templates:
   summarize:
