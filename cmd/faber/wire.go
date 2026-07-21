@@ -70,12 +70,13 @@ func wireDeps(stdout, stderr io.Writer) config.Deps {
 		filepath.Join(stateDir(), "infra"), wlog)
 	store := failure.NewStore(filepath.Join(stateDir(), "runs"), wlog)
 	return config.Deps{
-		Prover:   builder.PackageProver(),
-		Builder:  builder.ConfigBuilder(),
-		Journal:  store,
-		Audit:    store,
-		Executor: &wiredExecutor{stdout: stdout, docker: docker, builder: builder, store: store},
-		Registry: registryController{},
+		Prover:    builder.PackageProver(),
+		Builder:   builder.ConfigBuilder(),
+		Journal:   store,
+		Audit:     store,
+		Executor:  &wiredExecutor{stdout: stdout, docker: docker, builder: builder, store: store},
+		Registry:  registryController{},
+		BuildInfo: config.BuildInfo{Version: version, Commit: commit, Date: date},
 	}
 }
 

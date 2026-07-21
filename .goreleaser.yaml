@@ -1,0 +1,124 @@
+version: 2
+
+project_name: faber
+
+builds:
+  - id: faber
+    main: ./cmd/faber
+    binary: faber
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    # faber is the host-side CLI: it drives docker/nix and never runs inside
+    # a container, so it ships for every operator platform faber supports.
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+  - id: faber-box
+    main: ./cmd/faber-box
+    binary: faber-box
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    # faber-box is bind-mounted read-only into every box and runs as the
+    # container's own entrypoint (agent/contract.ContainerEntry) — it never
+    # runs on the host process directly, so it ships linux-only. A darwin
+    # operator host still needs a linux/<arch> faber-box (Docker Desktop
+    # shares the host path into its own Linux VM); there is no darwin build
+    # of this binary because it could never execute inside a linux box.
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: faber
+    ids: [faber]
+    formats:
+      - tar.gz
+    name_template: >-
+      faber_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    files:
+      - README.md
+      - LICENSE
+
+  - id: faber-box
+    ids: [faber-box]
+    formats:
+      - tar.gz
+    name_template: >-
+      faber-box_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  # Per-build checksums (one .sha256 per archive) plus this consolidated file,
+  # matching the manifest step's assumptions in release.yml.
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+signs:
+  - id: ssh
+    cmd: ssh-keygen
+    # The release workflow writes SSH_SIGNING_KEY to a runner-local temp file
+    # (chmod 600 — ssh-keygen refuses to load a key with looser permissions)
+    # and exports its path as SSH_SIGNING_KEY_PATH before this runs — the
+    # secret itself never appears in an argv (visible via /proc to other
+    # processes) or a template-expanded command line.
+    #
+    # `-n file` is the SSHSIG namespace: it domain-separates release-artifact
+    # signatures from git commit signatures (`-n git`), so a signature
+    # produced under one namespace is never valid under the other.
+    args:
+      - "-Y"
+      - "sign"
+      - "-f"
+      - "{{ .Env.SSH_SIGNING_KEY_PATH }}"
+      - "-n"
+      - "file"
+      - "${artifact}"
+    artifacts: archive
+    # ssh-keygen -Y sign always writes <artifact>.sig next to the input; there
+    # is no flag to redirect it, so this must match that fixed naming exactly.
+    signature: "${artifact}.sig"
+    output: true
+
+snapshot:
+  version_template: "{{ .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # manifest.json is generated and attached by a dedicated release.yml step
+  # (from dist/artifacts.json + dist/metadata.json), not by GoReleaser itself.
+  prerelease: auto

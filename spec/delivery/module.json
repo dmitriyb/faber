@@ -1,0 +1,78 @@
+{
+  "name": "delivery",
+  "description": "faber's release pipeline: how the `faber` and `faber-box` binaries get from a tagged commit to downloadable, verifiable artifacts. Binaries and a verified install script only — no container image is published (faber's boxes are built locally from pinned Nix toolsets at run time, never baked into a distributed image). Generic module: the executable `.goreleaser.yaml` and the CI workflow files are the source of truth for how artifacts are built; this module documents intent and does not define a bespoke delivery-metadata schema. NOTE: this module.json is a hand-authored SEED in spexmachina's format — identity hashes (requirement id/preq_id, component spec_node_id) and spec/.snapshot.json are generated when run through `spex` / the /spec skill; they are intentionally omitted here. It is deliberately NOT registered in spec/project.json's modules[] list (bringing it to full conformance and registering it is a separately-deferred task), so it does not participate in `spex validate`.",
+  "requirements": [
+    {
+      "type": "functional",
+      "title": "Cross-architecture binary release, two independent target matrices",
+      "description": "`faber` (the host CLI) releases for linux and darwin, each amd64 and arm64 (four targets) — it drives docker/nix from an operator's own machine, which may be either OS. `faber-box` (the in-container phase sequencer, bind-mounted read-only into every box and set as its entrypoint) releases linux-only, amd64 and arm64 (two targets) — it never runs on the host process directly, only inside a Linux container, so a darwin build would be dead weight; a darwin operator host still needs the linux/<arch> faber-box archive (Docker Desktop shares the host path into its own Linux VM, whose arch mirrors the host's by default). `.goreleaser.yaml`'s two `builds` entries (`faber`, `faber-box`), each with its own `goos`/`goarch` list, are the sole definition of both target sets."
+    },
+    {
+      "type": "functional",
+      "title": "Tiered CI by trigger",
+      "description": "pull_request runs the fast gate (go build, go vet, go test). push to main runs the same gate plus `-race`. A nightly schedule fuzzes every `func Fuzz*` discovered in the tree (spec/reviews/2026-07-18.md §5's plan; targets already exist on main in config/, failure/, and pipeline/), each under a bounded -fuzztime, with no hardcoded target list to fall out of sync as targets are added. push of a `v*` tag runs the release pipeline. Each workflow sets `concurrency: {cancel-in-progress: true}` scoped to its own ref, and the CI workflow ignores docs-only changes (`**.md`, `spec/**`) so prose edits don't burn a runner. The `realinfra`-tagged suite (infra/, pipeline/, security/) is deliberately NOT wired into any GitHub Actions workflow — its own doc comments already scope it as a real/acceptance-machine suite, `infra`'s cases additionally need a working nix with network access to the pinned nixpkgs (no nix on GitHub-hosted runners by default), and the release pipeline must not be blocked on it; it stays local/acceptance-machine only, run by hand before trusting a build."
+    },
+    {
+      "type": "functional",
+      "title": "Signed release artifacts (SSHSIG)",
+      "description": "Every release archive is signed with SSHSIG (`ssh-keygen -Y sign -n file`, Ed25519) via GoReleaser's `signs` block, built on SSHSIG from the first release (no prior minisign scheme ever existed for faber). The secret key is supplied to the release workflow as the `SSH_SIGNING_KEY` repository secret, written to a runner-local temp file for the duration of the job under `umask 077` AND an explicit `chmod 600` (ssh-keygen refuses to load a group/other-readable private key regardless of umask) and removed afterward — the key material never appears in an argv or a template-expanded command line. The corresponding public key is published in README.md so a downloader can verify with `ssh-keygen -Y verify` offline, independent of GitHub's availability, and is the same key faber's sibling tools (portitor, spexmachina) reuse."
+    },
+    {
+      "type": "functional",
+      "title": "SLSA build provenance",
+      "description": "`actions/attest-build-provenance` runs in the release workflow (permissions `id-token: write`, `attestations: write`) over every published archive (both `faber_*.tar.gz` and `faber-box_*.tar.gz`), producing an attestation verifiable with `gh attestation verify` — a second, GitHub-native chain of custody independent of the SSHSIG signature."
+    },
+    {
+      "type": "functional",
+      "title": "Machine-readable release manifest",
+      "description": "`scripts/generate-manifest.sh` derives `manifest.json` from GoReleaser's own `dist/artifacts.json` (per-archive name/goos/goarch/format) and `dist/metadata.json` (version/commit/date) — recomputing each artifact's sha256 and size directly from the archive bytes on disk rather than trusting an internal field name, so the manifest is self-verifying against what actually shipped. Shape: `{schema_version, tool, version, git_sha, git_ref, built_at, status, artifacts:[{name, target, sha256, size_bytes, archive_format}]}`. Covers both binaries' archives in one manifest — the `name` field alone distinguishes `faber_*` from `faber-box_*` entries; the schema itself carries no bespoke per-binary field. It is attached to the GitHub release alongside the binaries so a downstream consumer (e.g. a Nix overlay) can pin a per-target checksum programmatically instead of hand-copying it out of a release page."
+    },
+    {
+      "type": "functional",
+      "title": "Binaries and a verified install script — no container image",
+      "description": "The GitHub Releases page carries: both binaries' archives (six total: four `faber`, two `faber-box`), a consolidated `checksums.txt`, one `.sha256` per archive, one `.sig` per archive, `manifest.json`, and `install.sh` + `install.sh.sig`. `install.sh` is version-agnostic (resolves the latest release or an explicit `VERSION`, downloads and verifies both binaries' matching archives, installs them side by side) and is itself a signed release asset at a stable URL (`releases/latest/download/install.sh`) — GoReleaser signs only the archives it builds, so `install.sh`'s signature is produced by a dedicated workflow step using the identical `ssh-keygen -Y sign -n file` invocation, while the signing key is still materialized. No container image or package-manager formula is published: faber's boxes are built locally from pinned Nix toolsets at run time (no Dockerfile, no baked image), so there is no equivalent artifact for this pipeline to ship."
+    },
+    {
+      "type": "non-functional",
+      "title": "Deterministic, ldflags-stamped builds with an observable version surface",
+      "description": "Both builds run with `CGO_ENABLED=0`, `-trimpath`, and linker flags `-s -w` plus `-X main.version=… -X main.commit=… -X main.date=…` sourced from the triggering tag, commit, and build time. Each binary exposes what it received: `faber version` / `faber --version` / `faber -v` dispatch through `config.RunWithDeps` (the same in-process-testable CLI dispatch every other faber command uses, fed via `config.Deps.BuildInfo`); `faber-box version` / `--version` / `-v` is a direct pre-check in its own `main()` (it has no config-package CLI layer — it is an env-var-driven container entrypoint). A locally built binary of either keeps `dev`/`none`/`unknown` defaults rather than printing empty fields."
+    },
+    {
+      "type": "non-functional",
+      "title": "Locally provable before automation runs",
+      "description": "The identical `.goreleaser.yaml` and `scripts/generate-manifest.sh` that the release workflow drives also run unmodified via `goreleaser release --snapshot --clean` on a developer machine (snapshot mode skips publish/tag requirements) — the full build → archive → sign → checksum → manifest chain is provable without pushing a tag, holding CI secrets, or touching GitHub Actions. `install.sh`'s network path (resolve → download → verify → install, including the fail-closed path on a tampered artifact) is provable the same way against a throwaway local HTTP server serving the snapshot archives with the GitHub URLs swapped for `127.0.0.1` and a throwaway signing key substituted for `SIGNING_PUBKEY` — `sh -n install.sh` alone proves only syntax, nothing about the verify logic."
+    }
+  ],
+  "components": [
+    {
+      "name": "CIPipeline",
+      "description": "`.github/workflows/ci.yml` + `fuzz.yml`: the pull_request/push-to-main fast-then-race gate (go build, go vet, go test, and -race on push only), and the nightly fuzz job that discovers every `func Fuzz*` in the tree at run time via a two-line grep/awk loop (no hardcoded target list) and runs each with a bounded -fuzztime, uploading any failing corpus entry as a workflow artifact on failure. The `realinfra`-tagged suite is intentionally absent from both — see the Tiered CI requirement.",
+      "content": "arch_ci.md",
+      "implements": []
+    },
+    {
+      "name": "ReleasePipeline",
+      "description": "`.goreleaser.yaml` + `.github/workflows/release.yml`: on push of a `v*` tag, cross-compiles `faber` (linux/darwin × amd64/arm64) and `faber-box` (linux × amd64/arm64) via GoReleaser, archives each per-binary-per-target, computes per-artifact + consolidated sha256 checksums, and publishes the GitHub release — then layers on `manifest.json`, the signed `install.sh`, and the SLSA provenance attestation that GoReleaser itself does not produce.",
+      "content": "arch_release.md",
+      "implements": []
+    },
+    {
+      "name": "Manifest",
+      "description": "`scripts/generate-manifest.sh`: turns GoReleaser's `dist/artifacts.json` + `dist/metadata.json` into `manifest.json`, self-verifying each artifact's sha256/size from the archive bytes on disk. Generic — the shape is repo-agnostic and faber defines no bespoke delivery-metadata schema beyond it; `.goreleaser.yaml` is the source of truth this script reads from, never the other way around.",
+      "content": "arch_release.md",
+      "implements": []
+    },
+    {
+      "name": "Signing",
+      "description": "GoReleaser's `signs` block invokes `ssh-keygen -Y sign -n file` against each archive with a key the release workflow materializes from the `SSH_SIGNING_KEY` secret into a runner-local temp file (`umask 077` AND `chmod 600` — never umask alone; never argv, never a template-expanded command line) and removes afterward. A dedicated workflow step signs `install.sh` the same way while the key is still available (GoReleaser signs only the archives it builds). The public key is published in README.md. Signing, the sha256 checksums, and the SLSA attestation are three independent ways to trust a downloaded artifact — none is a substitute for another.",
+      "content": "arch_release.md",
+      "implements": []
+    },
+    {
+      "name": "InstallScript",
+      "description": "`install.sh`: version-agnostic (`VERSION` env override), detects host OS/arch, resolves and downloads the matching `faber` archive and the linux/<arch> `faber-box` archive (always linux, regardless of host OS — never silently skipped) plus both `.sig` files, verifies each against the embedded `SIGNING_PUBKEY` constant (byte-identical to the README's verify-block key — the two copies must be kept in sync by hand), and installs both binaries side by side so faber's default `FABER_BOX_BIN` resolution (next to its own executable) finds `faber-box` without configuration. Fails closed: any download or verification failure exits non-zero with nothing installed.",
+      "content": "arch_release.md",
+      "implements": []
+    }
+  ]
+}

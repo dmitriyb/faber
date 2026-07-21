@@ -38,6 +38,6 @@ Everything domain-specific is in `hooks/` (plain executables; inputs arrive
 as `FABER_INPUT_*`, context hooks write `CONTEXT.md` into `$FABER_BUNDLE_DIR`)
 and in the companion services you run beside faber — the gateway, egress
 proxy, and token proxy on the `agents-internal` network. See
-[`docs/deployment.md`](../../docs/deployment.md) for that topology, including
+[`docs/deploy.md`](../../docs/deploy.md) for that topology, including
 a docker-compose sketch. Replace `keys/` placeholders with your real key
 references and the pinned gateway host key before running.
