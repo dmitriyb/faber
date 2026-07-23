@@ -248,7 +248,18 @@ func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult, log *
 	out.Status = failure.StatusFailed
 	errRec := &failure.ErrorRecord{Reason: contract.ReasonBoxVanished, Detail: "failed record without an error body"}
 	if rec.Error != nil {
-		errRec = &failure.ErrorRecord{Reason: sanitizeBoxReason(rec.Error.Reason), Detail: rec.Error.Detail}
+		reason, detail := sanitizeBoxReason(rec.Error.Reason), rec.Error.Detail
+		if reason == "" {
+			// The box reported failure with an error body but named no reason
+			// (e.g. `"error":{}`). An empty reason fails Result.Validate, so
+			// synthesize the same fallback the missing-error-body case uses,
+			// keeping any detail the box did provide.
+			reason = contract.ReasonBoxVanished
+			if detail == "" {
+				detail = "box reported failure without a reason"
+			}
+		}
+		errRec = &failure.ErrorRecord{Reason: reason, Detail: detail}
 		if rec.Error.Handoff != "" {
 			resultRel := filepath.Join("boxes", pathToken(box.NodeID), "attempt-"+strconv.Itoa(box.Attempt), "result")
 			joined := filepath.Join(resultRel, rec.Error.Handoff)
