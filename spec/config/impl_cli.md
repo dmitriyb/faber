@@ -220,11 +220,14 @@ return deps.Installer.Upgrade(ctx, plan, stdout, stderr)   // runs the embedded 
 
 `upgrade` is thin dispatch, like `add-key`: it owns the guard (in Go, because
 it reads faber's run state) and the two path resolutions, then hands off to the
-`Installer` seam. `UpgradePlan.env()` renders the plan as the environment the
-embedded script reads (`FABER_UPGRADE`/`FABER_ROLLBACK`/`FABER_DRY_RUN`,
-`FABER_TARGET`/`FABER_BOX_TARGET`, `VERSION`, `FABER_CURRENT_VERSION`,
-`FABER_UPGRADE_FORCE`) — the mode signals are mutually exclusive (upgrade vs
-rollback) and `--force` is orthogonal to the mode. The real `Installer`
+`Installer` seam. `UpgradePlan.args()` renders the plan as the flags the
+embedded script parses (`--upgrade`/`--rollback`/`--check`, `--target`/
+`--box-target`, `--current`, `--force`) — the operator-facing contract is
+self-documenting flags, not env; the mode flags are mutually exclusive (upgrade
+vs rollback) and `--force` is orthogonal. Only the release pin (`VERSION`, via
+`UpgradePlan.scriptEnv()`) and the test-only origin bases stay env;
+`--current` is omitted for a `dev`/unstamped build (it cannot be ordered
+against a release tag). The real `Installer`
 (`EmbeddedInstaller`, wired in `cmd/faber/wire.go`) writes the `//go:embed`-ed
 `install.sh` to a private temp file and execs `sh` synchronously; the embedded
 copy (`config/install.sh`) is kept byte-identical to the released repo-root

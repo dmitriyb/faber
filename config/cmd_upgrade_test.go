@@ -138,13 +138,23 @@ func TestUpgradeEmbeddedMatchesReleased(t *testing.T) {
 	}
 }
 
-// Verifies the plan→environment mapping the embedded script reads: the mode
-// signals are mutually consistent (upgrade vs rollback), the target version is
-// only passed when requested, and force is orthogonal to the mode.
-func TestUpgradePlanEnv(t *testing.T) {
-	has := func(env []string, kv string) bool {
-		for _, e := range env {
-			if e == kv {
+// Verifies the plan→argv mapping the embedded script parses: the mode flags
+// are mutually consistent (--upgrade vs --rollback), --current is passed only
+// for a stamped version, the release pin travels as VERSION in the env (not a
+// flag), and --force is orthogonal to the mode.
+func TestUpgradePlanArgs(t *testing.T) {
+	has := func(ss []string, want string) bool {
+		for _, s := range ss {
+			if s == want {
+				return true
+			}
+		}
+		return false
+	}
+	// hasSeq reports whether flag is immediately followed by val.
+	hasSeq := func(ss []string, flag, val string) bool {
+		for i := 0; i < len(ss)-1; i++ {
+			if ss[i] == flag && ss[i+1] == val {
 				return true
 			}
 		}
@@ -152,31 +162,51 @@ func TestUpgradePlanEnv(t *testing.T) {
 	}
 
 	t.Run("upgrade to a specific version, forced", func(t *testing.T) {
-		env := UpgradePlan{FaberPath: "/f", BoxPath: "/b", TargetVersion: "v1.2.3", CurrentVersion: "v1.0.0", Force: true}.env()
-		for _, want := range []string{"FABER_UPGRADE=1", "VERSION=v1.2.3", "FABER_TARGET=/f", "FABER_BOX_TARGET=/b", "FABER_CURRENT_VERSION=v1.0.0", "FABER_UPGRADE_FORCE=1"} {
-			if !has(env, want) {
-				t.Errorf("env missing %q", want)
-			}
+		p := UpgradePlan{FaberPath: "/f", BoxPath: "/b", TargetVersion: "v1.2.3", CurrentVersion: "v1.0.0", Force: true}
+		args := p.args()
+		if !has(args, "--upgrade") || !has(args, "--force") {
+			t.Errorf("args missing --upgrade/--force: %v", args)
 		}
-		if has(env, "FABER_ROLLBACK=1") || has(env, "FABER_DRY_RUN=1") {
-			t.Error("upgrade env leaked a rollback/dry-run signal")
+		if !hasSeq(args, "--target", "/f") || !hasSeq(args, "--box-target", "/b") || !hasSeq(args, "--current", "v1.0.0") {
+			t.Errorf("args missing a target/current pairing: %v", args)
+		}
+		if has(args, "--rollback") || has(args, "--check") {
+			t.Errorf("upgrade args leaked a rollback/dry-run flag: %v", args)
+		}
+		// The release pin travels as VERSION in the env, never as a flag.
+		if has(args, "v1.2.3") || has(args, "--version") {
+			t.Errorf("target version must not appear in argv: %v", args)
+		}
+		if !has(p.scriptEnv(), "VERSION=v1.2.3") {
+			t.Error("scriptEnv missing VERSION=v1.2.3")
 		}
 	})
 
-	t.Run("rollback carries no upgrade or version signal", func(t *testing.T) {
-		env := UpgradePlan{FaberPath: "/f", BoxPath: "/b", TargetVersion: "v1.2.3", Rollback: true}.env()
-		if !has(env, "FABER_ROLLBACK=1") {
-			t.Error("rollback env missing FABER_ROLLBACK=1")
+	t.Run("dev current version is not passed as --current", func(t *testing.T) {
+		args := UpgradePlan{FaberPath: "/f", BoxPath: "/b", CurrentVersion: "dev"}.args()
+		if has(args, "--current") {
+			t.Errorf("dev build must not send --current: %v", args)
 		}
-		if has(env, "FABER_UPGRADE=1") || has(env, "VERSION=v1.2.3") {
-			t.Error("rollback env must not select upgrade or a target version")
+	})
+
+	t.Run("rollback carries no upgrade, current, or version signal", func(t *testing.T) {
+		p := UpgradePlan{FaberPath: "/f", BoxPath: "/b", TargetVersion: "v1.2.3", Rollback: true}
+		args := p.args()
+		if !has(args, "--rollback") {
+			t.Errorf("rollback args missing --rollback: %v", args)
+		}
+		if has(args, "--upgrade") || has(args, "--current") {
+			t.Errorf("rollback args must not select upgrade or --current: %v", args)
+		}
+		if has(p.scriptEnv(), "VERSION=v1.2.3") {
+			t.Error("rollback must not carry a VERSION pin")
 		}
 	})
 
 	t.Run("dry-run is an upgrade-mode variant", func(t *testing.T) {
-		env := UpgradePlan{FaberPath: "/f", BoxPath: "/b", DryRun: true}.env()
-		if !has(env, "FABER_UPGRADE=1") || !has(env, "FABER_DRY_RUN=1") {
-			t.Errorf("dry-run env = %v", env)
+		args := UpgradePlan{FaberPath: "/f", BoxPath: "/b", DryRun: true}.args()
+		if !has(args, "--upgrade") || !has(args, "--check") {
+			t.Errorf("dry-run args = %v", args)
 		}
 	})
 }

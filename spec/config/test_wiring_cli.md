@@ -90,7 +90,8 @@ param checking.
     is never half-upgraded. A pure-Go identity test asserts the `//go:embed`-ed
     `config/install.sh` is byte-identical to the released repo-root `install.sh`
     (fails the build on drift — the whole trust argument), and a table test pins
-    `UpgradePlan.env()`'s mode-exclusive signal mapping. The install.sh
+    `UpgradePlan.args()`'s mode-exclusive flag mapping (and that the release pin
+    travels as `VERSION` in the env, never as a flag). The install.sh
     resolve/download/verify/self-replace logic itself is proven by the delivery
     module's committed fake-server harness (`spec/delivery/test_delivery.md`).
 

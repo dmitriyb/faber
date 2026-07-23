@@ -45,7 +45,8 @@ type Installer interface {
 // UpgradePlan is everything the embedded script needs that the Go side
 // resolves: the exact target paths of the coupled pair, the requested version
 // (empty = latest), the current version (for the downgrade guard), and the
-// mode flags. It is translated to the script's env in env().
+// mode flags. It is translated to the script's flags in args(), with the
+// release pin carried as VERSION by scriptEnv().
 type UpgradePlan struct {
 	FaberPath      string // exact path of the running faber to replace
 	BoxPath        string // exact path of the installed faber-box to replace
@@ -56,27 +57,36 @@ type UpgradePlan struct {
 	Force          bool   // acknowledge the run guard; allow a downgrade; skip confirmation
 }
 
-// env renders the plan as the environment the embedded install.sh reads. It
-// extends the caller's environment so PATH and the like reach the script.
-func (p UpgradePlan) env() []string {
-	env := append(os.Environ(),
-		"FABER_TARGET="+p.FaberPath,
-		"FABER_BOX_TARGET="+p.BoxPath,
-		"FABER_CURRENT_VERSION="+p.CurrentVersion,
-	)
+// args renders the plan as the flags the embedded install.sh parses. The
+// operator-facing contract is flags, not env, so it is self-documenting; only
+// the release pin (VERSION) and the test-only origin bases stay env — see
+// scriptEnv. --current is passed only for a stamped release version, since a
+// dev/unstamped build cannot be ordered against a release tag.
+func (p UpgradePlan) args() []string {
 	if p.Rollback {
-		env = append(env, "FABER_ROLLBACK=1")
-	} else {
-		env = append(env, "FABER_UPGRADE=1")
-		if p.TargetVersion != "" {
-			env = append(env, "VERSION="+p.TargetVersion)
-		}
-		if p.DryRun {
-			env = append(env, "FABER_DRY_RUN=1")
-		}
+		return []string{"--rollback", "--target", p.FaberPath, "--box-target", p.BoxPath}
+	}
+	a := []string{"--upgrade", "--target", p.FaberPath, "--box-target", p.BoxPath}
+	if p.CurrentVersion != "" && p.CurrentVersion != "dev" {
+		a = append(a, "--current", p.CurrentVersion)
+	}
+	if p.DryRun {
+		a = append(a, "--check")
 	}
 	if p.Force {
-		env = append(env, "FABER_UPGRADE_FORCE=1")
+		a = append(a, "--force")
+	}
+	return a
+}
+
+// scriptEnv is the environment the embedded install.sh runs under: the
+// caller's environment (PATH and the like) plus the release pin as VERSION
+// when one was requested. Everything else the script needs arrives as flags
+// (see args); the signing key is never overridable.
+func (p UpgradePlan) scriptEnv() []string {
+	env := os.Environ()
+	if !p.Rollback && p.TargetVersion != "" {
+		env = append(env, "VERSION="+p.TargetVersion)
 	}
 	return env
 }
@@ -90,7 +100,7 @@ type EmbeddedInstaller struct{}
 // Upgrade writes the embedded script to a private temp file and runs it in the
 // mode the plan selects, synchronously. The script owns resolve, download,
 // SSHSIG verification, and the ETXTBSY-safe swap; this method only wires the
-// environment and the exit status.
+// flags/environment and the exit status.
 func (EmbeddedInstaller) Upgrade(ctx context.Context, plan UpgradePlan, stdout, stderr io.Writer) error {
 	dir, err := os.MkdirTemp("", "faber-upgrade-")
 	if err != nil {
@@ -101,8 +111,8 @@ func (EmbeddedInstaller) Upgrade(ctx context.Context, plan UpgradePlan, stdout, 
 	if err := os.WriteFile(script, installScript, 0o700); err != nil {
 		return fmt.Errorf("faber upgrade: stage the embedded installer: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "sh", script)
-	cmd.Env = plan.env()
+	cmd := exec.CommandContext(ctx, "sh", append([]string{script}, plan.args()...)...)
+	cmd.Env = plan.scriptEnv()
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {

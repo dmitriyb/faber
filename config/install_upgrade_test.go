@@ -131,18 +131,18 @@ func (h *harness) resetTargets() {
 	}
 }
 
-// run executes the signed script copy with the harness base env plus extras,
-// returning combined output and the exit error.
-func (h *harness) run(extra ...string) (string, error) {
+// run executes the signed script copy in the operator-facing flag contract:
+// --target/--box-target are always supplied (per harness), the caller passes
+// the mode flags (--upgrade/--rollback/--check/--force/--current …). Only the
+// test-only origin bases stay env, matching the real invocation.
+func (h *harness) run(flags ...string) (string, error) {
 	h.t.Helper()
-	cmd := exec.Command("sh", h.scriptPath)
+	args := append([]string{h.scriptPath, "--target", h.faberTarget, "--box-target", h.boxTarget}, flags...)
+	cmd := exec.Command("sh", args...)
 	cmd.Env = append(os.Environ(),
 		"FABER_API_BASE="+h.apiBase,
 		"FABER_DL_BASE="+h.dlBase,
-		"FABER_TARGET="+h.faberTarget,
-		"FABER_BOX_TARGET="+h.boxTarget,
 	)
-	cmd.Env = append(cmd.Env, extra...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -150,7 +150,7 @@ func (h *harness) run(extra ...string) (string, error) {
 func TestInstallUpgradeFakeServer(t *testing.T) {
 	t.Run("golden upgrade replaces both running binaries, keeps backups", func(t *testing.T) {
 		h := newHarness(t)
-		out, err := h.run("FABER_UPGRADE=1", "FABER_CURRENT_VERSION=v0.1.0")
+		out, err := h.run("--upgrade", "--current", "v0.1.0")
 		if err != nil {
 			t.Fatalf("upgrade failed: %v\n%s", err, out)
 		}
@@ -162,12 +162,12 @@ func TestInstallUpgradeFakeServer(t *testing.T) {
 
 	t.Run("rollback restores both from backup", func(t *testing.T) {
 		h := newHarness(t)
-		if out, err := h.run("FABER_UPGRADE=1", "FABER_CURRENT_VERSION=v0.1.0"); err != nil {
+		if out, err := h.run("--upgrade", "--current", "v0.1.0"); err != nil {
 			t.Fatalf("seed upgrade failed: %v\n%s", err, out)
 		}
 		assertContains(t, h.faberTarget, "NEW") // precondition: upgraded
 
-		out, err := h.run("FABER_ROLLBACK=1")
+		out, err := h.run("--rollback")
 		if err != nil {
 			t.Fatalf("rollback failed: %v\n%s", err, out)
 		}
@@ -186,7 +186,7 @@ func TestInstallUpgradeFakeServer(t *testing.T) {
 		tampered[len(tampered)/2] ^= 0xff
 		h.setFile(faberArchive, tampered)
 
-		out, err := h.run("FABER_UPGRADE=1", "FABER_CURRENT_VERSION=v0.1.0")
+		out, err := h.run("--upgrade", "--current", "v0.1.0")
 		if err == nil {
 			t.Fatalf("upgrade succeeded on a tampered artifact; want non-zero exit\n%s", out)
 		}
@@ -203,7 +203,7 @@ func TestInstallUpgradeFakeServer(t *testing.T) {
 
 	t.Run("dry-run verifies but changes nothing", func(t *testing.T) {
 		h := newHarness(t)
-		out, err := h.run("FABER_UPGRADE=1", "FABER_DRY_RUN=1", "FABER_CURRENT_VERSION=v0.1.0")
+		out, err := h.run("--upgrade", "--check", "--current", "v0.1.0")
 		if err != nil {
 			t.Fatalf("dry-run failed: %v\n%s", err, out)
 		}
@@ -219,7 +219,7 @@ func TestInstallUpgradeFakeServer(t *testing.T) {
 
 	t.Run("already up to date exits 0 without touching the pair", func(t *testing.T) {
 		h := newHarness(t)
-		out, err := h.run("FABER_UPGRADE=1", "FABER_CURRENT_VERSION="+fakeTag)
+		out, err := h.run("--upgrade", "--current", fakeTag)
 		if err != nil {
 			t.Fatalf("expected exit 0 when already current: %v\n%s", err, out)
 		}
@@ -231,7 +231,7 @@ func TestInstallUpgradeFakeServer(t *testing.T) {
 
 	t.Run("downgrade is refused without force and allowed with it", func(t *testing.T) {
 		h := newHarness(t)
-		out, err := h.run("FABER_UPGRADE=1", "FABER_CURRENT_VERSION=v0.9.0")
+		out, err := h.run("--upgrade", "--current", "v0.9.0")
 		if err == nil {
 			t.Fatalf("downgrade succeeded without --force:\n%s", out)
 		}
@@ -241,7 +241,7 @@ func TestInstallUpgradeFakeServer(t *testing.T) {
 		assertContains(t, h.faberTarget, "OLD")
 
 		h.resetTargets()
-		out, err = h.run("FABER_UPGRADE=1", "FABER_CURRENT_VERSION=v0.9.0", "FABER_UPGRADE_FORCE=1")
+		out, err = h.run("--upgrade", "--current", "v0.9.0", "--force")
 		if err != nil {
 			t.Fatalf("forced downgrade failed: %v\n%s", err, out)
 		}

@@ -19,7 +19,7 @@
 # via a pipe (curl ... | sh) skips that verification step and is not the
 # supported path.
 #
-# Upgrade mode (FABER_UPGRADE=1) reuses the identical resolve/download/verify
+# Upgrade mode (the --upgrade flag) reuses the identical resolve/download/verify
 # path but replaces the two currently-installed binaries in place instead of
 # installing into INSTALL_DIR. It is what `faber upgrade` runs: the same
 # script, embedded byte-for-byte into the faber binary, so there is nothing
@@ -47,24 +47,6 @@ SIGNING_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIhmCWVDP/Tcm3CqXNjTQTChbKxr
 
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
-# --- upgrade-mode inputs (all empty in the default install path) ---
-# FABER_UPGRADE=1 selects self-replace semantics: instead of install(1)-ing
-# into INSTALL_DIR, each of the two currently-installed binaries is replaced
-# in place via move-aside + rename. FABER_TARGET / FABER_BOX_TARGET are the
-# exact paths of the installed faber and faber-box to replace; `faber upgrade`
-# resolves them (os.Executable + the FABER_BOX_BIN convention) and passes
-# them here. FABER_CURRENT_VERSION drives the downgrade guard,
-# FABER_UPGRADE_FORCE allows a downgrade / skips confirmation, FABER_ROLLBACK
-# restores the previous pair from their .bak backups, and FABER_DRY_RUN
-# resolves and verifies the target release without touching disk.
-UPGRADE="${FABER_UPGRADE:-}"
-FABER_TARGET="${FABER_TARGET:-}"
-FABER_BOX_TARGET="${FABER_BOX_TARGET:-}"
-CURRENT_VERSION="${FABER_CURRENT_VERSION:-}"
-UPGRADE_FORCE="${FABER_UPGRADE_FORCE:-}"
-ROLLBACK="${FABER_ROLLBACK:-}"
-DRY_RUN="${FABER_DRY_RUN:-}"
-
 # Base URLs are overridable ONLY so the dry-run test harness can point the
 # resolve/download steps at a local fake server; they default to the real
 # GitHub endpoints, so the released script behaves identically when they are
@@ -87,6 +69,37 @@ need ssh-keygen
 need tar
 need mktemp
 need uname
+
+# --- upgrade-mode flags (none in the default install path) ---
+# `faber upgrade` invokes this script with flags rather than env, so the
+# operator-facing contract is self-documenting; only VERSION (a release pin)
+# and the test-only origin bases above stay env. --upgrade selects self-replace
+# semantics instead of install(1)-ing into INSTALL_DIR; --target / --box-target
+# are the exact installed faber and faber-box paths to replace (`faber upgrade`
+# resolves them via os.Executable and the FABER_BOX_BIN convention); --current
+# drives the downgrade guard; --force allows a downgrade / skips confirmation;
+# --rollback restores the previous pair from their .bak backups; --check /
+# --dry-run resolve and verify the target release without touching disk.
+UPGRADE=""
+FABER_TARGET=""
+FABER_BOX_TARGET=""
+CURRENT_VERSION=""
+UPGRADE_FORCE=""
+ROLLBACK=""
+DRY_RUN=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --upgrade) UPGRADE=1; shift ;;
+    --rollback) ROLLBACK=1; shift ;;
+    --check | --dry-run) DRY_RUN=1; shift ;;
+    --force) UPGRADE_FORCE=1; shift ;;
+    --target) FABER_TARGET="${2:?--target requires a value}"; shift 2 ;;
+    --box-target) FABER_BOX_TARGET="${2:?--box-target requires a value}"; shift 2 ;;
+    --current) CURRENT_VERSION="${2:?--current requires a value}"; shift 2 ;;
+    -*) fail "unknown option: $1" ;;
+    *) fail "unexpected argument: $1" ;;
+  esac
+done
 
 # ver_cmp A B: prints -1 if release A is older than B, 0 if equal, 1 if newer,
 # comparing the numeric major.minor.patch components (a leading v and any
