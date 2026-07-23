@@ -52,7 +52,7 @@
       "preq_id": "4267f6b0c531",
       "type": "functional",
       "title": "CLI commands",
-      "description": "Expose the engine as subcommands: faber validate (load, desugar, check wiring, prove package resolution, print all errors), faber build (build template images), faber run (execute a workflow with --param bindings and recovery-mode flags), faber resume (re-enter a journaled run). Structured slog logging: JSON handler for non-TTY, text for TTY, per-component child loggers, --log-level flag."
+      "description": "Expose the engine as subcommands: faber validate (load, desugar, check wiring, prove package resolution, print all errors), faber build (build template images), faber run (execute a workflow with --param bindings and recovery-mode flags), faber resume (re-enter a journaled run), faber upgrade-check (read-only pre-upgrade guard), faber upgrade (self-replace faber and faber-box to a newer signed release via the embedded install.sh, gated by upgrade-check), faber add-key / faber list-keys (manage the global role->fingerprint registry). Structured slog logging: JSON handler for non-TTY, text for TTY, per-component child loggers, --log-level flag."
     },
     {
       "id": "83bbad3814ba",
@@ -104,7 +104,7 @@
     {
       "id": "913ceeaf4730",
       "name": "CLI",
-      "description": "The faber entry point: flag parsing, subcommand dispatch (validate, build, run, resume), exit-code contract, and slog initialization with TTY detection and per-component child loggers.",
+      "description": "The faber entry point: flag parsing, subcommand dispatch (validate, build, run, resume, upgrade-check, upgrade, add-key, list-keys), exit-code contract, and slog initialization with TTY detection and per-component child loggers.",
       "content": "arch_cli.md",
       "implements": ["67c77533453d"],
       "uses": ["c21cc21b5668", "080a536721ed", "4b337a09e469"]

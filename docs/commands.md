@@ -7,12 +7,13 @@
 | `faber run <workflow>` | Execute with `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--report-json path\|-` |
 | `faber resume <run-id>` | Re-enter a journaled run; `--fresh` ignores the journal, `--interactive <step>` reopens the failed box with a shell |
 | `faber upgrade-check` | Read-only pre-upgrade guard: refuses while live or unfinished runs exist (`--force` acknowledges) |
+| `faber upgrade` | Update faber and faber-box to a newer signed release via the embedded `install.sh`; runs `upgrade-check` first, then self-replaces both binaries: `--check`/`--dry-run`, `--version vX.Y.Z`, `--rollback`, `--force` |
 | `faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--force]` | Register a role→fingerprint in the global identity registry |
 | `faber list-keys` | Print the global role→fingerprint registry |
 | `faber version` / `--version` / `-v` | Print version, commit, and build date |
 
 Common flags: `--config` (default `orchestrator.yaml`), `--log-level` (`debug`/`info`/`warn`/`error`), `--log-format` (`auto`/`json`/`text`; JSON when not a TTY).
-`add-key`/`list-keys`/`version` touch no `orchestrator.yaml` and take no `--config`.
+`upgrade-check`/`upgrade`/`add-key`/`list-keys`/`version` touch no `orchestrator.yaml` and take no `--config`.
 Exit codes: 0 ok, 1 validation/run failure, 2 usage.
 `--help`/`-h`/`help` print usage and exit 0 at every level: `faber --help`, `faber <command> --help`, `faber help <command>`.
 

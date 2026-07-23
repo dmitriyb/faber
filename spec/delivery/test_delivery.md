@@ -2,6 +2,7 @@
 
 Unlike most of faber's modules, this module's behavior lives mostly in CI-only YAML and one shell script rather than Go functions `go test` can exercise directly.
 Verification is therefore split between what CI enforces on every run and what was proven locally, once, against the real tool chain.
+The one exception is `install.sh`'s upgrade path (the self-replace logic `faber upgrade` drives): it is now covered by a committed fake-server Go harness that runs under the ordinary `go test ./...` gate, so its resolve/download/verify/self-replace/fail-closed/rollback behavior is regression coverage, not a one-time proof.
 
 ## What CI enforces (regression coverage)
 
@@ -9,6 +10,7 @@ Verification is therefore split between what CI enforces on every run and what w
 2. **Push-to-main race gate** — the same suite plus `go test -race ./...`; a data race introduced by any change (not just delivery code) surfaces within one push of merge, not at release time.
 3. **Nightly fuzz** — every `func Fuzz*` discovered in the tree runs for a bounded `-fuzztime`; a crashing input uploads as a `fuzz-failures` artifact (see `arch_ci.md`). This is regression coverage for the parsing/journal/extraction functions named in `spec/reviews/2026-07-18.md` §5, not for the delivery pipeline itself.
 4. **Release-job test gate** — `.github/workflows/release.yml` runs `go test ./...` before invoking GoReleaser, so a release build never ships from a red tree even if CI's own gate was somehow bypassed for the tagged commit.
+5. **`install.sh` upgrade harness + embed identity** (`config/install_upgrade_test.go`, `config/cmd_upgrade_test.go`) — a fake-server Go harness drives the real script (a copy of the canonical `install.sh` with only the `SIGNING_PUBKEY` line swapped for a throwaway key; URLs retargeted via the `FABER_API_BASE`/`FABER_DL_BASE` env seams, not by editing the script) against a local HTTP server shaped like GitHub's release endpoints, and asserts, for **both** binaries: golden two-binary self-replace (with `.bak` backups kept), `--rollback` restores both, a tampered artifact fails closed leaving both running binaries untouched (no `.new`/`.bak` residue), dry-run and already-up-to-date change nothing, and a downgrade is refused without `--force` and allowed with it. A pure-Go test asserts the `//go:embed`-ed `config/install.sh` is byte-identical to the released repo-root `install.sh` (fails the build on drift). This is the committed successor to the one-time fake-server proof in item 8 below, now covering the upgrade path rather than only install. `sh -n` proves only syntax; this proves the logic.
 
 ## What was proven locally (one-time, this module's local proof)
 

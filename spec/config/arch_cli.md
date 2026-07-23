@@ -39,8 +39,8 @@ for faber specifically:
 ## Subcommand registration pattern
 
 One file per subcommand under `config/` (`cmd_validate.go`, `cmd_build.go`,
-`cmd_run.go`, `cmd_resume.go`, `cmd_upgradecheck.go`, `cmd_addkey.go`,
-`cmd_listkeys.go`, plus `version.go`), each exporting a
+`cmd_run.go`, `cmd_resume.go`, `cmd_upgradecheck.go`, `cmd_upgrade.go`,
+`cmd_addkey.go`, `cmd_listkeys.go`, plus `version.go`), each exporting a
 `newXxxCmd(deps Deps) *cobra.Command` that registers its own flags and a
 `runXxxE(cmd *cobra.Command, ..., deps Deps) error` body — mirroring
 spexmachina's `cmd/spex/*.go` file-per-command split (`newXxxCmd()` +
@@ -48,8 +48,8 @@ spexmachina's `cmd/spex/*.go` file-per-command split (`newXxxCmd()` +
 `newXxxCmd` and `runXxxE` both take an explicit `deps Deps` parameter
 (closed over by the `RunE` closure), because faber's subcommands dispatch
 into not-yet-wired module seams (`PackageProver`, `ImageBuilder`, `Executor`,
-`JournalStore`, `RunAuditor`, `RegistryController`) that spexmachina's
-commands have no equivalent of.
+`JournalStore`, `RunAuditor`, `RegistryController`, `Installer`) that
+spexmachina's commands have no equivalent of.
 
 `NewRootCmd(deps Deps) *cobra.Command` wires every subcommand onto the root
 via `AddCommand`, exactly like spexmachina's `main.go`. `RunWithDeps` builds
@@ -76,6 +76,7 @@ subcommand.
 | `faber run <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
 | `faber resume <run-id> [--fresh] [--interactive <step-id>] [--report-json path\|-]` | journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
 | `faber upgrade-check [--force]` | run audit (failure module) -> refuse while live/unfinished runs exist | safe to swap the faber binary |
+| `faber upgrade [--check\|--dry-run] [--version vX.Y.Z] [--rollback] [--force]` | upgrade-check gate -> resolve faber/faber-box paths -> run the embedded install.sh in upgrade mode (`Installer` seam) | both binaries updated to (or rolled back to) the target release, or reported for `--check` |
 | `faber add-key --role <name> --fingerprint SHA256:… [--comment <c>] [--force]` | security.RoleRegistry load -> AddKey -> atomic save | the role points at the fingerprint (upsert or verified no-op) |
 | `faber list-keys` | security.RoleRegistry load -> print | the registry was read and printed |
 | `faber version` (also `--version` / `-v` on the root) | print version, commit, build date | — |
@@ -90,6 +91,25 @@ are thin dispatch; the store, validation, atomic write, idempotency, and
 `impl_role_registry.md`). A malformed `--fingerprint` or `--role`, or a
 missing required flag, is a usage error (exit 2); a refusal to re-point an
 existing role without `--force`, or an IO error, is exit 1.
+
+`upgrade` updates an installed faber — and its contract-version-coupled
+`faber-box` — to a newer signed release. It stays mechanism, not policy: the
+whole resolve/download/SSHSIG-verify/replace path is the delivery module's
+signed `install.sh` (`spec/delivery/arch_release.md`), embedded byte-for-byte
+into the already-trusted binary via `//go:embed` and run in an upgrade mode —
+one implementation, one copy of the signing key, and (because the script rides
+inside the signed binary rather than being fetched) nothing to
+fetch-and-verify-the-script. The subcommand itself only runs the read-only
+pre-upgrade guard first (the same `auditGate` body as `upgrade-check`: faber is
+not swapped mid-run; `--force` acknowledges), resolves the two installed paths
+(`os.Executable` + `EvalSymlinks` for faber; the `FABER_BOX_BIN`-or-next-to-faber
+convention, injected as `Deps.BoxBinary`, for faber-box), and hands a
+`UpgradePlan` to the `Installer` seam, which stages the embedded script and
+runs it synchronously. The two binaries are updated as a unit because a
+mismatched pair is a broken state (`agent/extract.go` `ReasonContractVersion`).
+The `Installer` seam keeps the config package free of `os/exec`-of-a-real-script
+at test time: the in-process CLI tests inject a recorder to prove the gate runs
+before any replace, without touching the network or disk.
 
 `faber --help`, `faber -h`, `faber help`, and every subcommand's `-h`/`--help`
 (e.g. `faber run --help`, `faber help run`) print usage and flag defaults to

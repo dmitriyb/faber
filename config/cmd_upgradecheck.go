@@ -30,14 +30,37 @@ func newUpgradeCheckCmd(deps Deps) *cobra.Command {
 // schema bump are finished on the old binary or restarted with --fresh.
 func runUpgradeCheckE(cmd *cobra.Command, deps Deps) error {
 	force, _ := cmd.Flags().GetBool("force")
-	if deps.Audit == nil {
-		return errors.New("faber upgrade-check: run auditing requires the failure module, which is not wired into this binary yet")
-	}
-	runs, err := deps.Audit.AuditRuns()
+	total, blocking, err := auditGate(deps)
 	if err != nil {
 		return err
 	}
-	var blocking []string
+	stdout := cmd.OutOrStdout()
+	if len(blocking) == 0 {
+		fmt.Fprintf(stdout, "upgrade-check: %d journaled run(s), none live or unfinished — safe to swap the faber binary\n", total)
+		return nil
+	}
+	fmt.Fprintf(stdout, "upgrade-check: %d of %d journaled run(s) block an upgrade:\n%s\n",
+		len(blocking), total, strings.Join(blocking, "\n"))
+	if force {
+		fmt.Fprintln(stdout, "--force: proceeding anyway; the listed runs must be finished on the old binary or restarted with --fresh after the swap")
+		return nil
+	}
+	return errors.New("faber upgrade-check: refusing — faber is not upgraded mid-run; finish or resume the listed runs first, or pass --force to acknowledge")
+}
+
+// auditGate is the shared read-only pre-upgrade guard: it enumerates
+// journaled runs and returns the human-readable lines for those that block an
+// upgrade (live, or unfinished with no run-end marker). total is the count of
+// all journaled runs. Both `faber upgrade-check` and `faber upgrade` run it
+// before any binary swap, encoding the rule "faber is not upgraded mid-run".
+func auditGate(deps Deps) (total int, blocking []string, err error) {
+	if deps.Audit == nil {
+		return 0, nil, errors.New("faber upgrade-check: run auditing requires the failure module, which is not wired into this binary yet")
+	}
+	runs, err := deps.Audit.AuditRuns()
+	if err != nil {
+		return 0, nil, err
+	}
 	for _, r := range runs {
 		switch {
 		case r.Live:
@@ -48,16 +71,5 @@ func runUpgradeCheckE(cmd *cobra.Command, deps Deps) error {
 			blocking = append(blocking, fmt.Sprintf("  %s  unfinished (no run-end marker; interrupted or crashed)", r.RunID))
 		}
 	}
-	stdout := cmd.OutOrStdout()
-	if len(blocking) == 0 {
-		fmt.Fprintf(stdout, "upgrade-check: %d journaled run(s), none live or unfinished — safe to swap the faber binary\n", len(runs))
-		return nil
-	}
-	fmt.Fprintf(stdout, "upgrade-check: %d of %d journaled run(s) block an upgrade:\n%s\n",
-		len(blocking), len(runs), strings.Join(blocking, "\n"))
-	if force {
-		fmt.Fprintln(stdout, "--force: proceeding anyway; the listed runs must be finished on the old binary or restarted with --fresh after the swap")
-		return nil
-	}
-	return errors.New("faber upgrade-check: refusing — faber is not upgraded mid-run; finish or resume the listed runs first, or pass --force to acknowledge")
+	return len(runs), blocking, nil
 }

@@ -80,6 +80,20 @@ param checking.
     discipline (belt-and-suspenders) so a bypassed validation still cannot write
     outside the per-attempt tree.
 
+14. **Upgrade gate and embed identity.** `faber upgrade` runs the same read-only
+    pre-upgrade guard as `upgrade-check` BEFORE any download or replace: with a
+    live run in the injected `RunAuditor`, it exits 1 and the injected `Installer`
+    recorder is **never** invoked; with `--force` it prints the acknowledgement,
+    exits 0, and the recorder runs with the resolved `UpgradePlan` (`--version`,
+    `BuildInfo.Version`, and `Deps.BoxBinary` propagated); an unwired
+    `Deps.BoxBinary` is a hard error (exit 1, recorder untouched) — a coupled pair
+    is never half-upgraded. A pure-Go identity test asserts the `//go:embed`-ed
+    `config/install.sh` is byte-identical to the released repo-root `install.sh`
+    (fails the build on drift — the whole trust argument), and a table test pins
+    `UpgradePlan.env()`'s mode-exclusive signal mapping. The install.sh
+    resolve/download/verify/self-replace logic itself is proven by the delivery
+    module's committed fake-server harness (`spec/delivery/test_delivery.md`).
+
 ## Edge cases
 
 - Unknown `--param name=v` (not in params interface): rejected, listing declared
