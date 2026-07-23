@@ -8,8 +8,9 @@ param checking.
 
 - `testdata/reference.yaml` plus a set of one-defect mutations of it, generated
   by patching the valid config (so each fixture stays minimal and current).
-- An in-process CLI harness calling `run(args, stderr)` and capturing exit code
-  + stderr.
+- An in-process CLI harness calling `RunWithDeps(args, stdout, stderr, deps)`
+  (`config/cli_test.go`'s `runCLI` helper) and capturing exit code, stdout, and
+  stderr — no subprocess spawned, per `arch_cli.md`'s "No hidden state".
 
 ## Scenarios
 
@@ -39,7 +40,10 @@ param checking.
 7. **CLI contract.** `faber` with no args exits 2 with usage; `validate` on the
    pristine reference exits 0 silently (logs only); `--emit-ir` writes canonical
    bytes to stdout and nothing else to stdout; `validate` exit codes and stderr
-   shape are stable across runs.
+   shape are stable across runs. `faber --help`, `faber -h`, and `faber help`
+   print usage to stdout and exit 0 — the case that was broken before the
+   cobra migration (`faber --help` used to fall through to the unknown-command
+   path: `unknown command "--help"`, exit 2, on stderr).
 8. **Resume guard.** `faber resume <id>` after the config changed (different IR
    hash) refuses with the mismatch message; `--fresh` proceeds.
 

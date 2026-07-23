@@ -14,6 +14,7 @@
 Common flags: `--config` (default `orchestrator.yaml`), `--log-level` (`debug`/`info`/`warn`/`error`), `--log-format` (`auto`/`json`/`text`; JSON when not a TTY).
 `add-key`/`list-keys`/`version` touch no `orchestrator.yaml` and take no `--config`.
 Exit codes: 0 ok, 1 validation/run failure, 2 usage.
+`--help`/`-h`/`help` print usage and exit 0 at every level: `faber --help`, `faber <command> --help`, `faber help <command>`.
 
 ## Environment
 

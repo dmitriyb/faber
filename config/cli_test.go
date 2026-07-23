@@ -91,6 +91,24 @@ func TestCLIContract(t *testing.T) {
 		}
 	})
 
+	// Verifies the gap this migration fixes: `faber --help` used to fail with
+	// "unknown command \"--help\"" (exit 2, on stderr). All three help
+	// spellings must now print usage to stdout and exit 0.
+	t.Run("top-level help prints usage to stdout and exits 0", func(t *testing.T) {
+		for _, args := range [][]string{{"--help"}, {"-h"}, {"help"}} {
+			code, stdout, stderr := runCLI(t, Deps{}, args...)
+			if code != 0 {
+				t.Errorf("%v: want exit 0, got %d, stderr: %s", args, code, stderr)
+			}
+			if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "Available Commands:") {
+				t.Errorf("%v: want usage listing on stdout, got: %s", args, stdout)
+			}
+			if stderr != "" {
+				t.Errorf("%v: help must not write to stderr, got: %s", args, stderr)
+			}
+		}
+	})
+
 	t.Run("pristine validate exits 0 silently", func(t *testing.T) {
 		code, stdout, stderr := runCLI(t, Deps{}, "validate", "--config", "testdata/reference.yaml")
 		if code != 0 {
@@ -501,9 +519,9 @@ func TestCLIResumeVersionGuards(t *testing.T) {
 	})
 }
 
-// Verifies 67c77533453d (L-P3i/L-P3h): -h/--help on run and resume prints
-// usage to stdout and exits 0 (never the exit-2 usage error), and
-// --report-json reaches the executor's options.
+// Verifies 67c77533453d (L-P3i/L-P3h), migrated to the cobra surface: -h/--help
+// on run and resume prints usage to stdout and exits 0 (never the exit-2
+// usage error), and --report-json reaches the executor's options.
 func TestCLIHelpAndReportJSON(t *testing.T) {
 	for _, args := range [][]string{
 		{"run", "-h"}, {"run", "--help"},
@@ -512,10 +530,10 @@ func TestCLIHelpAndReportJSON(t *testing.T) {
 		{"resume", "r-1", "--help"},
 	} {
 		code, stdout, stderr := runCLI(t, Deps{}, args...)
-		if code != 0 || !strings.Contains(stdout, "usage: faber "+args[0]) {
+		if code != 0 || !strings.Contains(stdout, "Usage:\n  faber "+args[0]) {
 			t.Errorf("%v: got code %d, stdout %q, stderr %q", args, code, stdout, stderr)
 		}
-		if !strings.Contains(stdout, "-log-level") {
+		if !strings.Contains(stdout, "--log-level") {
 			t.Errorf("%v: help lacks flag defaults:\n%s", args, stdout)
 		}
 	}
