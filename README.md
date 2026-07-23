@@ -38,7 +38,8 @@ curl -fsSL https://github.com/dmitriyb/faber/releases/latest/download/install.sh
 && curl -fsSL https://github.com/dmitriyb/faber/releases/latest/download/install.sh.sig -o install.sh.sig \
 && ssh-keygen -Y verify -f <(printf 'dvbozhko@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIhmCWVDP/Tcm3CqXNjTQTChbKxr223xMob9zc56Uuny release signing\n') \
      -I dvbozhko@gmail.com -n file -s install.sh.sig < install.sh \
-&& sh install.sh
+&& sh install.sh \
+&& rm -f install.sh install.sh.sig
 ```
 
 **fish:**
@@ -48,6 +49,7 @@ curl -fsSL https://github.com/dmitriyb/faber/releases/latest/download/install.sh
 and curl -fsSL https://github.com/dmitriyb/faber/releases/latest/download/install.sh.sig -o install.sh.sig
 and ssh-keygen -Y verify -f (printf 'dvbozhko@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIhmCWVDP/Tcm3CqXNjTQTChbKxr223xMob9zc56Uuny release signing\n' | psub) -I dvbozhko@gmail.com -n file -s install.sh.sig < install.sh
 and sh install.sh
+and rm -f install.sh install.sh.sig
 ```
 
 This downloads `install.sh`, verifies **the script itself** against the public key below, and only then runs it — never `curl | sh`.
