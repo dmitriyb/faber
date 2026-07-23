@@ -44,6 +44,19 @@ Signing, the sha256 checksums, and the SLSA attestation (below) are three indepe
 The release workflow signs it directly, immediately after `goreleaser release --clean` and before the signing key is removed, using the identical `ssh-keygen -Y sign -f "$SSH_SIGNING_KEY_PATH" -n file` invocation the `signs` block uses.
 It is then uploaded to the release alongside its `.sig`, so `releases/latest/download/install.sh` and `.../install.sh.sig` are always both present at a stable URL.
 
+## Upgrade mode (self-replace) — what `faber upgrade` runs
+
+The same `install.sh` carries an upgrade mode (the `--upgrade` flag) reusing its identical resolve/download/SSHSIG-verify path, but replacing the two currently-installed binaries in place instead of installing into `INSTALL_DIR`.
+It is what the config module's `faber upgrade` command runs (`spec/config/arch_cli.md`): the script is embedded byte-for-byte into the faber binary via `//go:embed` and executed from there — so for a given release the embedded copy is identical to the standalone `install.sh` a user verifies and runs by hand, and because it rides inside the already-trusted signed binary rather than being fetched, there is nothing to substitute and no fetch-and-verify-the-script step.
+The embedded copy lives at `config/install.sh`, kept byte-identical to this canonical repo-root `install.sh` by `go generate ./config` (a `//go:generate cp ../install.sh install.sh` directive) and enforced by a build-failing identity test — that identity is the whole security argument.
+
+Upgrade mode replaces **both** binaries as a unit, because a mismatched `faber`/`faber-box` pair is a broken state (they share a contract version — `agent/extract.go` `ReasonContractVersion`).
+Each verified binary is staged as a sibling `<target>.new` so the swap is a same-filesystem `rename(2)` (safe over a running binary; a `cp`/`install` over the running file would hit `ETXTBSY` on Linux, and a cross-filesystem `mv` from the temp workdir would fall back to the same in-place write), then `mv target → target.bak; mv target.new → target`.
+Both signatures are verified before either binary is touched, and on any mid-swap failure both roll back from their `.bak` — so the pair is never left mismatched (either both old or both new), which the config-side `upgrade-check` gate ("faber is not upgraded mid-run") makes safe by guaranteeing no live run spans the brief window between the two renames.
+It also adds a downgrade guard (equal → already up to date, exit 0; older → refuse unless `--force`), `--rollback` (restore both from `.bak`), a `RequireRoot` check with a clear "re-run elevated" message (no auto-sudo, unlike install mode's `sudo` retry), and a `--dry-run` that resolves and verifies without touching disk.
+The exact target paths and the mode signals arrive as flags (`--upgrade`/`--rollback`/`--check`, `--target`/`--box-target`, `--current`, `--force`) from the `faber upgrade` command — a self-documenting operator-facing contract; only the release pin (`VERSION`) and the test-only origin bases stay env.
+Two base-URL overrides (`FABER_API_BASE`/`FABER_DL_BASE`) exist solely so the fake-server harness can retarget resolve/download at a local server; they default to the exact real GitHub URLs, so the released script is unchanged when they are unset — and `SIGNING_PUBKEY` is deliberately **not** overridable, because verification is the trust anchor and must never depend on the environment.
+
 ## Publish (GoReleaser → GitHub Release)
 
 `goreleaser release --clean` (invoked via `goreleaser/goreleaser-action`) creates the GitHub release itself from the `v*` tag and uploads the six archives, `checksums.txt`, and the six `.sig` files.

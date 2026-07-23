@@ -100,6 +100,23 @@ dvbozhko@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIhmCWVDP/Tcm3CqXNjTQTChb
 This is the same key across all three verification paths above (SSHSIG install script, SSHSIG archives, and the `allowed_signers` line either way) — and the same key faber's sibling tools (portitor, spexmachina) use.
 It can also be pinned and cross-checked against GitHub's own copy at `https://api.github.com/users/dmitriyb/ssh_signing_keys`, once it is added under Settings → SSH and GPG keys → Signing keys — useful if this README itself is ever suspected of being tampered with in a fork or mirror.
 
+### Upgrading
+
+Once faber is installed, `faber upgrade` updates it — and its coupled `faber-box` — to the latest signed release in place, without re-downloading `install.sh`:
+
+```sh
+faber upgrade                 # to the latest release
+faber upgrade --version v0.1.4   # to a specific release
+faber upgrade --check         # resolve and verify the target, change nothing (also: --dry-run)
+faber upgrade --rollback      # restore the previous pair from their .bak backups
+```
+
+`faber upgrade` reuses the exact `install.sh` above, embedded byte-for-byte into the (already-verified, signed) faber binary — so the same resolve → download → SSHSIG-verify path runs, with nothing separate to fetch or trust.
+It first runs the `faber upgrade-check` guard (it refuses while a run is live or unfinished — faber is not swapped mid-run) and then replaces **both** binaries as a unit, since a mismatched `faber`/`faber-box` pair is a broken state (the two share a contract version).
+Both signatures are verified before either binary is touched (fail closed), and the previous pair is kept alongside the new one for `--rollback`.
+The freshness/downgrade gap noted above is narrowed here: `faber upgrade` refuses a target older than the installed version unless `--force` is given.
+`--force` also acknowledges the run guard and skips confirmation.
+
 ## Usage sketch
 
 ```sh

@@ -77,6 +77,8 @@ func wireDeps(stdout, stderr io.Writer) config.Deps {
 		Executor:  &wiredExecutor{stdout: stdout, docker: docker, builder: builder, store: store},
 		Registry:  registryController{},
 		BuildInfo: config.BuildInfo{Version: version, Commit: commit, Date: date},
+		Installer: config.EmbeddedInstaller{},
+		BoxBinary: boxBinary(),
 	}
 }
 

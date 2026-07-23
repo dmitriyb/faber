@@ -128,6 +128,12 @@ type Deps struct {
 	Audit     RunAuditor
 	Registry  RegistryController
 	BuildInfo BuildInfo
+	// Installer runs the embedded install.sh in upgrade mode (faber upgrade).
+	Installer Installer
+	// BoxBinary is the installed faber-box path, resolved by the integration
+	// layer with the same FABER_BOX_BIN-or-next-to-faber convention used to
+	// bind-mount it (cmd/faber/wire.go). Empty in the in-process test deps.
+	BoxBinary string
 }
 
 // cliError carries an explicit process exit code alongside the wrapped error,
@@ -162,6 +168,9 @@ commands:
   upgrade-check  read-only pre-upgrade guard: refuses while live or
              unfinished runs exist (faber is not upgraded mid-run);
              --force acknowledges and proceeds
+  upgrade    update faber and faber-box to a newer signed release via the
+             embedded install.sh; runs upgrade-check first, then self-replaces
+             both binaries: --check/--dry-run, --version vX.Y.Z, --rollback, --force
   add-key    register a role→fingerprint in the global registry:
              faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--force]
   list-keys  print the global role→fingerprint registry
@@ -208,6 +217,7 @@ func NewRootCmd(deps Deps) *cobra.Command {
 		newRunCmd(deps),
 		newResumeCmd(deps),
 		newUpgradeCheckCmd(deps),
+		newUpgradeCmd(deps),
 		newAddKeyCmd(deps),
 		newListKeysCmd(deps),
 	)

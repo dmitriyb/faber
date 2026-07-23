@@ -112,7 +112,7 @@ fresh `flag.FlagSet` used to be built per call.
 
 `addCommonFlags(cmd)` registers `--config`/`--log-level`/`--log-format`;
 `addLogFlags(cmd)` registers only the latter two, for `upgrade-check`,
-`add-key`, `list-keys` (no `--config` — see `arch_cli.md`). `readCommonFlags(cmd)`
+`upgrade`, `add-key`, `list-keys` (no `--config` — see `arch_cli.md`). `readCommonFlags(cmd)`
 reads all three back into a `commonFlags` struct with a `.logger(stderr)`
 convenience method (`InitLogging(logLevel, logFormat, stderr)`).
 
@@ -187,8 +187,8 @@ re-runs.
 ### runUpgradeCheckE (config/cmd_upgradecheck.go)
 
 ```
-runs := deps.Audit.AuditRuns()   // read-only, format-tolerant kind probe
-blocking := live (lock held) ∪ unfinished (no run-end marker)
+total, blocking := auditGate(deps)   // read-only, format-tolerant kind probe
+   blocking := live (lock held) ∪ unfinished (no run-end marker)
 print the report to cmd.OutOrStdout() either way;
 return an error (exit 1) listing blocking runs, unless --force (prints and returns nil, exit 0)
 ```
@@ -201,6 +201,42 @@ binary or restarted `--fresh`. The blocking-runs report itself always prints
 to stdout (both the "safe to swap" and the "blocks an upgrade" cases) — only
 the final refusal (no `--force`) becomes the returned `error`, so `RunWithDeps`
 prints it to stderr exactly once rather than the command printing it directly.
+The kind-probe body is factored into `auditGate(deps) (total, blocking, err)`
+so `runUpgradeE` reuses the identical guard rather than re-deriving it.
+
+### runUpgradeE (config/cmd_upgrade.go)
+
+```
+flags: --check/--dry-run (aliases), --version vX.Y.Z, --rollback, --force  (no --config)
+if deps.Installer == nil ⇒ error (exit 1): the installer is not wired
+total, blocking := auditGate(deps)                 // the SAME guard as upgrade-check
+  if blocking and not --force ⇒ error (exit 1), installer never invoked
+  if blocking and --force ⇒ print acknowledgement, proceed
+faberPath := os.Executable() then EvalSymlinks     // replace the real binary, not an alias
+boxPath   := EvalSymlinks(deps.BoxBinary)           // "" ⇒ hard error, not a partial upgrade
+plan := UpgradePlan{faberPath, boxPath, --version, BuildInfo.Version (or "dev"), dryRun, rollback, force}
+return deps.Installer.Upgrade(ctx, plan, stdout, stderr)   // runs the embedded install.sh, synchronously
+```
+
+`upgrade` is thin dispatch, like `add-key`: it owns the guard (in Go, because
+it reads faber's run state) and the two path resolutions, then hands off to the
+`Installer` seam. `UpgradePlan.args()` renders the plan as the flags the
+embedded script parses (`--upgrade`/`--rollback`/`--check`, `--target`/
+`--box-target`, `--current`, `--force`) — the operator-facing contract is
+self-documenting flags, not env; the mode flags are mutually exclusive (upgrade
+vs rollback) and `--force` is orthogonal. Only the release pin (`VERSION`, via
+`UpgradePlan.scriptEnv()`) and the test-only origin bases stay env;
+`--current` is omitted for a `dev`/unstamped build (it cannot be ordered
+against a release tag). The real `Installer`
+(`EmbeddedInstaller`, wired in `cmd/faber/wire.go`) writes the `//go:embed`-ed
+`install.sh` to a private temp file and execs `sh` synchronously; the embedded
+copy (`config/install.sh`) is kept byte-identical to the released repo-root
+`install.sh` by `go generate ./config` and a build-failing identity test — that
+identity is the whole trust argument, since the script is run from the signed
+binary rather than fetched (`spec/delivery/arch_release.md`). `boxPath` uses the
+same `FABER_BOX_BIN`-or-next-to-faber convention `cmd/faber/wire.go` bind-mounts
+faber-box with (`boxBinary()`), injected as `Deps.BoxBinary`, so the config
+package never learns the convention twice.
 
 ### runAddKeyE / runListKeysE (config/cmd_addkey.go, config/cmd_listkeys.go)
 
