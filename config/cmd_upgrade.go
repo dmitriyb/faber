@@ -44,24 +44,28 @@ type Installer interface {
 
 // UpgradePlan is everything the embedded script needs that the Go side
 // resolves: the exact target paths of the coupled pair, the requested version
-// (empty = latest), the current version (for the downgrade guard), and the
-// mode flags. It is translated to the script's flags in args(), with the
-// release pin carried as VERSION by scriptEnv().
+// (empty = resolve the latest, forward-only; else a named release the script
+// installs in any direction), the current version (which the script orders
+// against), and the mode flags. It is translated to the script's flags in
+// args(), with the release pin carried as VERSION by scriptEnv() — VERSION
+// unset is exactly what tells the script it is on the forward-only latest path.
 type UpgradePlan struct {
 	FaberPath      string // exact path of the running faber to replace
 	BoxPath        string // exact path of the installed faber-box to replace
-	TargetVersion  string // "" = latest; else a "vX.Y.Z" release tag
+	TargetVersion  string // "" = resolve latest (forward-only); else a "vX.Y.Z" release tag installed in any direction
 	CurrentVersion string // the running faber's version (BuildInfo.Version; "dev" if unstamped)
 	DryRun         bool   // resolve and verify only; replace nothing
 	Rollback       bool   // restore the previous pair from their .bak backups
-	Force          bool   // acknowledge the run guard; allow a downgrade; skip confirmation
 }
 
 // args renders the plan as the flags the embedded install.sh parses. The
 // operator-facing contract is flags, not env, so it is self-documenting; only
 // the release pin (VERSION) and the test-only origin bases stay env — see
 // scriptEnv. --current is passed only for a stamped release version, since a
-// dev/unstamped build cannot be ordered against a release tag.
+// dev/unstamped build cannot be ordered against a release tag. There is no
+// --force here: the active-runs guard is resolved entirely Go-side, and the
+// forward-only anomaly refusal is not overridable, so the script exposes no
+// override flag for either.
 func (p UpgradePlan) args() []string {
 	if p.Rollback {
 		return []string{"--rollback", "--target", p.FaberPath, "--box-target", p.BoxPath}
@@ -73,9 +77,6 @@ func (p UpgradePlan) args() []string {
 	if p.DryRun {
 		a = append(a, "--check")
 	}
-	if p.Force {
-		a = append(a, "--force")
-	}
 	return a
 }
 
@@ -83,8 +84,33 @@ func (p UpgradePlan) args() []string {
 // caller's environment (PATH and the like) plus the release pin as VERSION
 // when one was requested. Everything else the script needs arrives as flags
 // (see args); the signing key is never overridable.
+//
+// Three seams the operator's shell could carry are STRIPPED before the pin is
+// set — VERSION, FABER_API_BASE, and FABER_DL_BASE:
+//   - VERSION: the embedded script selects the explicit-release path vs the
+//     forward-only latest path SOLELY by whether VERSION is present in its
+//     environment, so an ambient VERSION (a very common name) exported in the
+//     operator's shell would leak in during a plain `upgrade`, flip it onto the
+//     explicit path, and silently disable the non-overridable forward-only
+//     anomaly refusal. VERSION is set here only from the --version flag
+//     (p.TargetVersion), never inherited.
+//   - FABER_API_BASE / FABER_DL_BASE: these redirect where the script resolves
+//     and downloads from. They default to the real GitHub endpoints when unset
+//     and exist ONLY for the shell test, which invokes install.sh directly (not
+//     via this command). An operator's `upgrade` must never honor an ambient
+//     override of the origin, so any inherited value is dropped rather than
+//     passed through — the production upgrade path always fetches from GitHub.
 func (p UpgradePlan) scriptEnv() []string {
-	env := os.Environ()
+	parent := os.Environ()
+	env := make([]string, 0, len(parent)+1)
+	for _, kv := range parent {
+		if strings.HasPrefix(kv, "VERSION=") ||
+			strings.HasPrefix(kv, "FABER_API_BASE=") ||
+			strings.HasPrefix(kv, "FABER_DL_BASE=") {
+			continue
+		}
+		env = append(env, kv)
+	}
 	if !p.Rollback && p.TargetVersion != "" {
 		env = append(env, "VERSION="+p.TargetVersion)
 	}
@@ -124,15 +150,28 @@ func (EmbeddedInstaller) Upgrade(ctx context.Context, plan UpgradePlan, stdout, 
 func newUpgradeCmd(deps Deps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrade",
-		Short: "Update the installed faber and faber-box to a newer signed release",
-		Long: `Update the installed faber — and its contract-version-coupled faber-box — to a
-newer signed release, as a unit.
+		Short: "Update the installed faber and faber-box forward to the latest signed release",
+		Long: `Update the installed faber — and its contract-version-coupled faber-box — to the
+latest signed release, as a unit. Upgrade is forward-only: it resolves the
+latest release and moves toward it.
 
-upgrade runs the read-only upgrade-check guard first (it refuses while a run is
-live or unfinished; --force acknowledges), then runs the install.sh that is
-embedded byte-for-byte in this signed binary: it resolves the target release,
-downloads both archives, verifies each SSHSIG signature, and self-replaces both
-binaries in place (move-aside + rename, keeping the previous pair at *.bak).
+upgrade runs the active-runs guard first (it refuses while a run is live or
+unfinished; --force proceeds anyway), then runs the install.sh that is embedded
+byte-for-byte in this signed binary: it resolves the target release, downloads
+both archives, verifies each SSHSIG signature, and self-replaces both binaries
+in place (move-aside + rename, keeping the previous pair at *.bak).
+
+If the resolved latest is OLDER than the installed version, upgrade hard-refuses
+and no flag overrides it — a latest that moved backward is a rollback anomaly
+(a compromised origin serving an old release as "latest"). To install an older
+release deliberately, name it with --version, which installs any release in any
+direction with no guard.
+
+  faber upgrade                 upgrade forward to the latest release
+  faber upgrade --check         report availability only; change nothing
+  faber upgrade --force         upgrade despite live/unfinished runs
+  faber upgrade --version vX.Y.Z install that exact release, any direction
+  faber upgrade --rollback      restore the previous pair from their .bak backups
 
 Both signatures are verified before either binary is replaced (fail closed), and
 a mid-replace failure rolls both back so the coupled pair is never left
@@ -144,20 +183,30 @@ builds its boxes from pinned Nix toolsets at run time).`,
 		},
 	}
 	addLogFlags(cmd)
-	cmd.Flags().Bool("check", false, "resolve and verify the target release but make no changes (alias for --dry-run)")
-	cmd.Flags().Bool("dry-run", false, "resolve and verify the target release but make no changes")
-	cmd.Flags().String("version", "", "upgrade to a specific release (vX.Y.Z) instead of the latest")
+	cmd.Flags().Bool("check", false, "report the latest release and change nothing; warns about (does not block on) active runs (alias for --dry-run)")
+	cmd.Flags().Bool("dry-run", false, "report the latest release and change nothing (alias for --check)")
+	cmd.Flags().String("version", "", "install a specific release (vX.Y.Z), any direction, instead of the forward-only latest")
 	cmd.Flags().Bool("rollback", false, "restore the previous faber and faber-box from their .bak backups")
-	cmd.Flags().Bool("force", false, "acknowledge live/unfinished runs, allow a downgrade, and skip confirmation")
+	cmd.Flags().Bool("force", false, "proceed even though live or unfinished runs exist (overrides the active-runs guard only)")
 	return cmd
 }
 
-// runUpgradeE updates the coupled faber/faber-box pair to a newer signed
-// release. It runs the read-only pre-upgrade guard first (the same logic as
-// `faber upgrade-check`): faber is never swapped out from under a live or
-// unfinished run; --force acknowledges and proceeds. Only after the guard
-// passes does it resolve the two installed paths and run the embedded,
-// already-verified install.sh in upgrade mode — the whole update lives in that
+// runUpgradeE updates the coupled faber/faber-box pair. The default is
+// forward-only: resolve the latest signed release and move toward it; the
+// script hard-refuses a latest that is older than installed (a rollback
+// anomaly), non-overridable. --version names an exact release the script
+// installs in any direction with no guard. --check reports availability and
+// changes nothing.
+//
+// The active-runs guard runs first (`auditGate`, the body the retired
+// `upgrade-check` command used). On the plain upgrade path a blocking run
+// refuses (faber is never swapped out from under a live or unfinished run);
+// --force overrides that guard and only that guard — it carries no version or
+// direction meaning and cannot bypass the forward-only anomaly refusal. On the
+// --check path the same guard only WARNS: --check's job is to report, so it
+// never blocks and exits 0 whenever it could resolve the latest release. Only
+// after the guard is settled does it resolve the two installed paths and run
+// the embedded, already-verified install.sh — the whole update lives in that
 // one signed script, reused rather than reimplemented.
 func runUpgradeE(cmd *cobra.Command, deps Deps) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -165,27 +214,36 @@ func runUpgradeE(cmd *cobra.Command, deps Deps) error {
 	targetVersion, _ := cmd.Flags().GetString("version")
 	rollback, _ := cmd.Flags().GetBool("rollback")
 	force, _ := cmd.Flags().GetBool("force")
-	dryRun = dryRun || check
+	report := dryRun || check
 
 	if deps.Installer == nil {
 		return errors.New("faber upgrade: the installer is not wired into this binary yet")
 	}
 	stdout := cmd.OutOrStdout()
 
-	// A. The read-only pre-upgrade guard, first — before any download or
-	// replace. Applies to rollback too: a rollback still swaps both binaries,
-	// so it is subject to the same "not mid-run" rule.
+	// A. The active-runs guard, first — before any download or replace.
+	// Applies to rollback too: a rollback still swaps both binaries, so it is
+	// subject to the same "not mid-run" rule. --check only warns (its purpose
+	// is to report, not to gate); the plain path refuses unless --force
+	// overrides. --force overrides this guard and nothing else.
 	total, blocking, err := auditGate(deps)
 	if err != nil {
 		return err
 	}
 	if len(blocking) > 0 {
-		fmt.Fprintf(stdout, "faber upgrade: %d of %d journaled run(s) block an upgrade:\n%s\n",
-			len(blocking), total, strings.Join(blocking, "\n"))
-		if !force {
-			return errors.New("faber upgrade: refusing — faber is not upgraded mid-run; finish or resume the listed runs first, or pass --force to acknowledge")
+		switch {
+		case report:
+			fmt.Fprintf(stdout, "faber upgrade --check: NOTE — %d of %d journaled run(s) are live or unfinished; an upgrade would refuse until they finish (this check does not block):\n%s\n",
+				len(blocking), total, strings.Join(blocking, "\n"))
+		case force:
+			fmt.Fprintf(stdout, "faber upgrade: %d of %d journaled run(s) are live or unfinished:\n%s\n",
+				len(blocking), total, strings.Join(blocking, "\n"))
+			fmt.Fprintln(stdout, "--force: proceeding despite the listed run(s); they must be finished on the old binary or restarted with --fresh after the swap")
+		default:
+			fmt.Fprintf(stdout, "faber upgrade: %d of %d journaled run(s) block an upgrade:\n%s\n",
+				len(blocking), total, strings.Join(blocking, "\n"))
+			return errors.New("faber upgrade: refusing — faber is not upgraded mid-run; finish or resume the listed runs first, or pass --force to proceed anyway")
 		}
-		fmt.Fprintln(stdout, "--force: proceeding despite the listed runs; they must be finished on the old binary or restarted with --fresh after the swap")
 	}
 
 	// B. Resolve the exact paths of the coupled pair to replace.
@@ -203,19 +261,52 @@ func runUpgradeE(cmd *cobra.Command, deps Deps) error {
 		BoxPath:        boxPath,
 		TargetVersion:  targetVersion,
 		CurrentVersion: orDefault(deps.BuildInfo.Version, "dev"),
-		DryRun:         dryRun,
+		DryRun:         report,
 		Rollback:       rollback,
-		Force:          force,
 	}
 	switch {
 	case rollback:
 		fmt.Fprintln(stdout, "faber upgrade: rolling back faber and faber-box from their .bak backups")
-	case dryRun:
-		fmt.Fprintln(stdout, "faber upgrade: checking for a newer signed release (no changes will be made)")
+	case report:
+		fmt.Fprintln(stdout, "faber upgrade --check: resolving the target signed release (no changes will be made)")
+	case targetVersion != "":
+		// Display the requested release v-prefixed to match the release-tag form,
+		// normalizing to exactly one leading v (the flag value may or may not carry
+		// it). Display only — plan.TargetVersion below still carries the raw flag.
+		fmt.Fprintf(stdout, "faber upgrade: installing the requested release v%s (any direction; the forward-only guard does not apply to an explicitly named version)\n", strings.TrimPrefix(targetVersion, "v"))
 	default:
-		fmt.Fprintln(stdout, "faber upgrade: running the embedded signed installer in upgrade mode")
+		fmt.Fprintln(stdout, "faber upgrade: resolving the latest signed release and upgrading forward")
 	}
 	return deps.Installer.Upgrade(cmd.Context(), plan, stdout, cmd.ErrOrStderr())
+}
+
+// auditGate is the read-only active-runs guard reused by the plain upgrade
+// path (where a blocking run refuses) and by `faber upgrade --check` (where it
+// only warns): it enumerates journaled runs and returns the human-readable
+// lines for those that block an upgrade (live, or unfinished with no run-end
+// marker). total is the count of all journaled runs. It encodes the rule
+// "faber is not upgraded mid-run" and never mutates a journal. This is the
+// body the standalone `faber upgrade-check` command used before it was folded
+// into `faber upgrade --check`.
+func auditGate(deps Deps) (total int, blocking []string, err error) {
+	if deps.Audit == nil {
+		return 0, nil, errors.New("faber upgrade: run auditing requires the failure module, which is not wired into this binary yet")
+	}
+	runs, err := deps.Audit.AuditRuns()
+	if err != nil {
+		return 0, nil, err
+	}
+	for _, r := range runs {
+		switch {
+		case r.Live:
+			blocking = append(blocking, fmt.Sprintf("  %s  live (another faber process holds its lock)", r.RunID))
+		case !r.Complete && r.Format == 0:
+			blocking = append(blocking, fmt.Sprintf("  %s  unfinished (pre-versioning journal; completeness unknown)", r.RunID))
+		case !r.Complete:
+			blocking = append(blocking, fmt.Sprintf("  %s  unfinished (no run-end marker; interrupted or crashed)", r.RunID))
+		}
+	}
+	return len(runs), blocking, nil
 }
 
 // resolveSelfPath is the exact on-disk path of the running faber: os.Executable

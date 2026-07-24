@@ -39,7 +39,7 @@ for faber specifically:
 ## Subcommand registration pattern
 
 One file per subcommand under `config/` (`cmd_validate.go`, `cmd_build.go`,
-`cmd_run.go`, `cmd_resume.go`, `cmd_upgradecheck.go`, `cmd_upgrade.go`,
+`cmd_run.go`, `cmd_resume.go`, `cmd_upgrade.go`,
 `cmd_addkey.go`, `cmd_listkeys.go`, plus `version.go`), each exporting a
 `newXxxCmd(deps Deps) *cobra.Command` that registers its own flags and a
 `runXxxE(cmd *cobra.Command, ..., deps Deps) error` body — mirroring
@@ -75,8 +75,7 @@ subcommand.
 | `faber build [--config path] [--template name]` | Load -> Validate -> ImageBuilder per template | images built and tagged |
 | `faber run <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
 | `faber resume <run-id> [--fresh] [--interactive <step-id>] [--report-json path\|-]` | journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
-| `faber upgrade-check [--force]` | run audit (failure module) -> refuse while live/unfinished runs exist | safe to swap the faber binary |
-| `faber upgrade [--check\|--dry-run] [--version vX.Y.Z] [--rollback] [--force]` | upgrade-check gate -> resolve faber/faber-box paths -> run the embedded install.sh in upgrade mode (`Installer` seam) | both binaries updated to (or rolled back to) the target release, or reported for `--check` |
+| `faber upgrade [--check\|--dry-run] [--version vX.Y.Z] [--rollback] [--force]` | active-runs guard (refuse while live/unfinished unless `--force`) -> resolve faber/faber-box paths -> run the embedded install.sh in upgrade mode (`Installer` seam; forward-only latest, or the exact `--version` in any direction) | both binaries moved forward to the latest signed release (or installed at `--version`, or rolled back), or reported for `--check` |
 | `faber add-key --role <name> --fingerprint SHA256:… [--comment <c>] [--force]` | security.RoleRegistry load -> AddKey -> atomic save | the role points at the fingerprint (upsert or verified no-op) |
 | `faber list-keys` | security.RoleRegistry load -> print | the registry was read and printed |
 | `faber version` (also `--version` / `-v` on the root) | print version, commit, build date | — |
@@ -93,23 +92,55 @@ missing required flag, is a usage error (exit 2); a refusal to re-point an
 existing role without `--force`, or an IO error, is exit 1.
 
 `upgrade` updates an installed faber — and its contract-version-coupled
-`faber-box` — to a newer signed release. It stays mechanism, not policy: the
-whole resolve/download/SSHSIG-verify/replace path is the delivery module's
-signed `install.sh` (`spec/delivery/arch_release.md`), embedded byte-for-byte
-into the already-trusted binary via `//go:embed` and run in an upgrade mode —
-one implementation, one copy of the signing key, and (because the script rides
-inside the signed binary rather than being fetched) nothing to
-fetch-and-verify-the-script. The subcommand itself only runs the read-only
-pre-upgrade guard first (the same `auditGate` body as `upgrade-check`: faber is
-not swapped mid-run; `--force` acknowledges), resolves the two installed paths
-(`os.Executable` + `EvalSymlinks` for faber; the `FABER_BOX_BIN`-or-next-to-faber
-convention, injected as `Deps.BoxBinary`, for faber-box), and hands a
-`UpgradePlan` to the `Installer` seam, which stages the embedded script and
-runs it synchronously. The two binaries are updated as a unit because a
-mismatched pair is a broken state (`agent/extract.go` `ReasonContractVersion`).
-The `Installer` seam keeps the config package free of `os/exec`-of-a-real-script
-at test time: the in-process CLI tests inject a recorder to prove the gate runs
-before any replace, without touching the network or disk.
+`faber-box` — forward to the latest signed release. It stays mechanism, not
+policy: the whole resolve/download/SSHSIG-verify/replace path is the delivery
+module's signed `install.sh` (`spec/delivery/arch_release.md`), embedded
+byte-for-byte into the already-trusted binary via `//go:embed` and run in an
+upgrade mode — one implementation, one copy of the signing key, and (because
+the script rides inside the signed binary rather than being fetched) nothing to
+fetch-and-verify-the-script. The subcommand itself only runs the active-runs
+guard first (the `auditGate` body: faber is not swapped mid-run), resolves the
+two installed paths (`os.Executable` + `EvalSymlinks` for faber; the
+`FABER_BOX_BIN`-or-next-to-faber convention, injected as `Deps.BoxBinary`, for
+faber-box), and hands a `UpgradePlan` to the `Installer` seam, which stages the
+embedded script and runs it synchronously. The two binaries are updated as a
+unit because a mismatched pair is a broken state (`agent/extract.go`
+`ReasonContractVersion`). The `Installer` seam keeps the config package free of
+`os/exec`-of-a-real-script at test time: the in-process CLI tests inject a
+recorder to prove the guard runs before any replace, without touching the
+network or disk.
+
+The upgrade contract is **forward-only**, and each flag has exactly one meaning:
+
+- **plain `faber upgrade`** resolves GitHub's latest release and moves toward
+  it. If that latest is OLDER than the installed version, the embedded script
+  HARD-REFUSES and exits non-zero — a latest that moved backward is a rollback
+  anomaly (a compromised origin serving an old but validly-signed release as
+  "latest"). No flag overrides it. Equal is already-up-to-date (exit 0); newer
+  upgrades. If the installed version is unknown (a `dev` build), the latest path
+  cannot order and proceeds with a warning rather than blocking.
+- **`--force`** means exactly one thing: proceed despite live or unfinished runs
+  (override the active-runs guard). It carries no version or direction meaning
+  and cannot bypass the forward-only anomaly refusal.
+- **`--check` / `--dry-run`** report availability and change nothing. Their
+  purpose is to report, so they exit 0 whenever the release could be resolved —
+  including when runs are active, in which case they print a warning about them
+  and do not block. They exit non-zero only if the check itself fails (the
+  latest release cannot be resolved). This subsumes the retired standalone
+  `upgrade-check` command.
+- **`--version vX.Y.Z`** installs that exact release in any direction, including
+  older than installed. The forward-only anomaly guard does not apply on this
+  path — the operator named the release, so there is no untrusted "latest" to
+  attack; the script prints a clear notice when the pinned version is older than
+  installed.
+- **`--rollback`** restores both binaries from their `.bak` backups.
+
+Exit codes follow the general rule: non-zero if and only if the command failed
+its purpose. `--version` carries the release pin as `VERSION` in the script's
+environment (`UpgradePlan.scriptEnv()`); `VERSION` set versus unset is exactly
+what puts the script on the explicit-version path versus the forward-only latest
+path. `--current` is passed on both paths (a `dev`/unstamped build omits it),
+but the anomaly refusal fires only on the latest path.
 
 `faber --help`, `faber -h`, `faber help`, and every subcommand's `-h`/`--help`
 (e.g. `faber run --help`, `faber help run`) print usage and flag defaults to
