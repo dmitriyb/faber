@@ -416,52 +416,50 @@ type fakeAudit struct {
 
 func (f fakeAudit) AuditRuns() ([]RunAudit, error) { return f.runs, f.err }
 
-// Verifies 67c77533453d (§1 upgrade guard): faber upgrade-check is a
-// read-only pre-flight — it refuses (exit 1) while live or unfinished runs
-// exist, listing them; --force acknowledges and exits 0; a clean store (or
-// only complete runs) exits 0. It never updates faber.
-func TestCLIUpgradeCheck(t *testing.T) {
+// Verifies 67c77533453d (§1 upgrade guard): the active-runs audit — once the
+// standalone `faber upgrade-check` command, now `auditGate` behind `faber
+// upgrade` (which refuses, listing the blocking runs) and `faber upgrade
+// --check` (which only warns) — distinguishes live/unfinished runs from
+// complete ones and never updates faber. The command-surface behavior is
+// exercised in TestCLIUpgradeGate; this pins the underlying classification.
+func TestCLIUpgradeAuditGate(t *testing.T) {
 	t.Run("audit seam not wired yields a structured error", func(t *testing.T) {
-		code, _, stderr := runCLI(t, Deps{}, "upgrade-check")
-		if code != 1 || !strings.Contains(stderr, "requires the failure module") {
-			t.Fatalf("got %d: %s", code, stderr)
+		_, _, err := auditGate(Deps{})
+		if err == nil || !strings.Contains(err.Error(), "requires the failure module") {
+			t.Fatalf("got %v", err)
 		}
 	})
 
-	t.Run("all complete passes", func(t *testing.T) {
+	t.Run("all complete passes with no blockers", func(t *testing.T) {
 		audit := fakeAudit{runs: []RunAudit{{RunID: "r1", Complete: true, Format: 1}}}
-		code, stdout, _ := runCLI(t, Deps{Audit: audit}, "upgrade-check")
-		if code != 0 || !strings.Contains(stdout, "safe to swap") {
-			t.Fatalf("got %d: %s", code, stdout)
+		total, blocking, err := auditGate(Deps{Audit: audit})
+		if err != nil || total != 1 || len(blocking) != 0 {
+			t.Fatalf("total=%d blocking=%v err=%v", total, blocking, err)
 		}
 	})
 
-	t.Run("live and unfinished runs refuse, listed", func(t *testing.T) {
+	t.Run("live and unfinished runs are listed as blockers, complete ones are not", func(t *testing.T) {
 		audit := fakeAudit{runs: []RunAudit{
 			{RunID: "r-live", Live: true, Format: 1},
 			{RunID: "r-cut", Format: 1},
 			{RunID: "r-done", Complete: true, Format: 1},
 			{RunID: "r-old"},
 		}}
-		code, stdout, stderr := runCLI(t, Deps{Audit: audit}, "upgrade-check")
-		if code != 1 {
-			t.Fatalf("got %d: %s", code, stderr)
+		total, blocking, err := auditGate(Deps{Audit: audit})
+		if err != nil {
+			t.Fatal(err)
 		}
-		for _, want := range []string{"r-live", "r-cut", "r-old", "not upgraded mid-run"} {
-			if !strings.Contains(stdout+stderr, want) {
-				t.Errorf("output missing %q:\n%s%s", want, stdout, stderr)
+		if total != 4 {
+			t.Errorf("total = %d, want 4", total)
+		}
+		joined := strings.Join(blocking, "\n")
+		for _, want := range []string{"r-live", "r-cut", "r-old"} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("blockers missing %q:\n%s", want, joined)
 			}
 		}
-		if strings.Contains(stdout, "r-done") {
-			t.Errorf("a complete run must not be listed as blocking:\n%s", stdout)
-		}
-	})
-
-	t.Run("force acknowledges and passes", func(t *testing.T) {
-		audit := fakeAudit{runs: []RunAudit{{RunID: "r-cut", Format: 1}}}
-		code, stdout, _ := runCLI(t, Deps{Audit: audit}, "upgrade-check", "--force")
-		if code != 0 || !strings.Contains(stdout, "--force") {
-			t.Fatalf("got %d: %s", code, stdout)
+		if strings.Contains(joined, "r-done") {
+			t.Errorf("a complete run must not be listed as blocking:\n%s", joined)
 		}
 	})
 }

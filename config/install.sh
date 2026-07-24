@@ -38,6 +38,16 @@ set -eu
 OWNER="dmitriyb"
 REPO="faber"
 
+# The two coupled binaries this script installs and upgrades as a unit, named
+# once here so the archive basenames, tar members, install targets, and every
+# diagnostic below reference them instead of re-hardcoding the strings. The
+# release publishes its archives and the binaries inside them under exactly
+# these names. TOOL happens to equal REPO today, but the two are conceptually
+# distinct — REPO is the GitHub repository, TOOL is the primary binary — and
+# BOX_TOOL is the contract-version-coupled second binary.
+TOOL="faber"
+BOX_TOOL="faber-box"
+
 # The principal string used both here and in the README's allowed_signers
 # line — it must match exactly, or verification fails even with the right
 # key (ssh-keygen -Y verify checks -I against the allowed_signers entry).
@@ -77,14 +87,17 @@ need uname
 # semantics instead of install(1)-ing into INSTALL_DIR; --target / --box-target
 # are the exact installed faber and faber-box paths to replace (`faber upgrade`
 # resolves them via os.Executable and the FABER_BOX_BIN convention); --current
-# drives the downgrade guard; --force allows a downgrade / skips confirmation;
-# --rollback restores the previous pair from their .bak backups; --check /
-# --dry-run resolve and verify the target release without touching disk.
+# is the installed version the script orders against (the forward-only anomaly
+# refusal on the latest path, and the "older than installed, as requested"
+# notice on the explicit-VERSION path); --rollback restores the previous pair
+# from their .bak backups; --check / --dry-run resolve and verify the target
+# release without touching disk. There is no --force: the active-runs guard is
+# handled by `faber upgrade` itself, and the forward-only anomaly refusal is not
+# overridable.
 UPGRADE=""
 FABER_TARGET=""
 FABER_BOX_TARGET=""
 CURRENT_VERSION=""
-UPGRADE_FORCE=""
 ROLLBACK=""
 DRY_RUN=""
 while [ "$#" -gt 0 ]; do
@@ -92,7 +105,6 @@ while [ "$#" -gt 0 ]; do
     --upgrade) UPGRADE=1; shift ;;
     --rollback) ROLLBACK=1; shift ;;
     --check | --dry-run) DRY_RUN=1; shift ;;
-    --force) UPGRADE_FORCE=1; shift ;;
     --target) FABER_TARGET="${2:?--target requires a value}"; shift 2 ;;
     --box-target) FABER_BOX_TARGET="${2:?--box-target requires a value}"; shift 2 ;;
     --current) CURRENT_VERSION="${2:?--current requires a value}"; shift 2 ;;
@@ -104,9 +116,9 @@ done
 # ver_cmp A B: prints -1 if release A is older than B, 0 if equal, 1 if newer,
 # comparing the numeric major.minor.patch components (a leading v and any
 # -prerelease/+build suffix are stripped; pre-release ordering is not
-# interpreted). Three-way rather than a boolean so the downgrade guard can tell
-# equal (already up to date) from older (refuse) from newer (proceed) in one
-# call.
+# interpreted). Three-way rather than a boolean so the version guard can tell
+# equal (already up to date) from older (refuse on the latest path / notice on
+# the explicit-version path) from newer (proceed) in one call.
 ver_cmp() {
   a="${1#v}"; a="${a%%-*}"; a="${a%%+*}"
   b="${2#v}"; b="${b%%-*}"; b="${b%%+*}"
@@ -132,7 +144,7 @@ require_writable() {
     if [ "$(id -u)" = 0 ]; then
       fail "upgrade: $d is not writable even as root"
     fi
-    fail "upgrade: $d is not writable — re-run elevated (e.g. sudo -E faber upgrade); no privileges are escalated automatically"
+    fail "upgrade: $d is not writable — re-run elevated (e.g. sudo -E ${TOOL} upgrade); no privileges are escalated automatically"
   fi
 }
 
@@ -148,17 +160,24 @@ if [ -n "$ROLLBACK" ]; then
     || fail "rollback: no backup found (${FABER_TARGET}.bak / ${FABER_BOX_TARGET}.bak) — nothing to roll back to"
   require_writable "$FABER_TARGET"
   require_writable "$FABER_BOX_TARGET"
-  mv -f "${FABER_TARGET}.bak" "$FABER_TARGET" || fail "rollback: restoring faber failed"
-  mv -f "${FABER_BOX_TARGET}.bak" "$FABER_BOX_TARGET" || fail "rollback: restoring faber-box failed"
-  echo "faber rollback: restored faber and faber-box from their .bak backups" >&2
+  mv -f "${FABER_TARGET}.bak" "$FABER_TARGET" || fail "rollback: restoring ${TOOL} failed"
+  mv -f "${FABER_BOX_TARGET}.bak" "$FABER_BOX_TARGET" || fail "rollback: restoring ${BOX_TOOL} failed"
+  echo "${TOOL} rollback: restored ${TOOL} and ${BOX_TOOL} from their .bak backups" >&2
   "$FABER_TARGET" version || true
   exit 0
 fi
 
 # --- resolve the release tag ---
+# EXPLICIT_VERSION records whether VERSION named an exact release: it is the
+# whole latest-vs-explicit distinction the version guard below turns on. VERSION
+# unset ⇒ the forward-only latest path (resolve GitHub's "latest release" and
+# only ever move toward it); VERSION set ⇒ an operator-named release installed
+# in any direction, with no anomaly refusal.
 if [ -n "${VERSION:-}" ]; then
   tag="$VERSION"
+  EXPLICIT_VERSION=1
 else
+  EXPLICIT_VERSION=""
   api_url="${API_BASE}/releases/latest"
   # grep (no -m1) + head: read the body to EOF so curl can't abort with (56).
   tag=$(curl -fsSL "$api_url" | grep '"tag_name"' | head -n1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
@@ -166,19 +185,37 @@ else
 fi
 version="${tag#v}"
 
-# --- downgrade guard (upgrade mode only) ---
-# Equal → already up to date, exit 0 before any download. Older than the
-# installed version → refuse unless forced. A dev/unstamped current version
-# cannot be ordered against a release tag, so the guard is skipped for it.
-if [ -n "$UPGRADE" ] && [ -n "$CURRENT_VERSION" ] && [ "$CURRENT_VERSION" != "dev" ]; then
-  cmp=$(ver_cmp "$version" "$CURRENT_VERSION")
-  if [ "$cmp" = 0 ]; then
-    echo "faber upgrade: already at ${tag}; nothing to do" >&2
-    exit 0
-  elif [ "$cmp" = "-1" ]; then
-    [ -n "$UPGRADE_FORCE" ] \
-      || fail "upgrade: target ${tag} is older than the installed v${CURRENT_VERSION#v} — refusing to downgrade (pass --force to override)"
-    echo "faber upgrade: --force: proceeding with downgrade ${CURRENT_VERSION} -> ${tag}" >&2
+# --- version guard (upgrade mode only) ---
+# Equal → already up to date, exit 0 before any download, on either path.
+# Older than the installed version splits by path:
+#   - latest path (VERSION unset): a resolved latest that moved BACKWARD is a
+#     rollback anomaly (a compromised origin serving an old but validly-signed
+#     release as "latest"). Hard-refuse, non-overridable — there is no flag for
+#     it. A --check/--dry-run only reports the anomaly and continues (its job is
+#     to report, not to gate), so it still exits 0 once it could resolve.
+#   - explicit-version path (VERSION set): the operator named this release, so
+#     there is no untrusted "latest" to attack — proceed in any direction,
+#     printing an "older than installed, as explicitly requested" notice.
+# A dev/unstamped current version cannot be ordered against a release tag; on
+# the latest path that means the forward-only check cannot run — warn and
+# proceed rather than block.
+if [ -n "$UPGRADE" ]; then
+  if [ -n "$CURRENT_VERSION" ] && [ "$CURRENT_VERSION" != "dev" ]; then
+    cmp=$(ver_cmp "$version" "$CURRENT_VERSION")
+    if [ "$cmp" = 0 ]; then
+      echo "${TOOL} upgrade: already at v${version}; nothing changed" >&2
+      exit 0
+    elif [ "$cmp" = "-1" ]; then
+      if [ -n "$EXPLICIT_VERSION" ]; then
+        echo "${TOOL} upgrade: installing ${tag}, older than the installed v${CURRENT_VERSION#v}, as explicitly requested" >&2
+      elif [ -n "$DRY_RUN" ]; then
+        echo "${TOOL} upgrade (check): WARNING: resolved latest ${tag} is OLDER than the installed v${CURRENT_VERSION#v} — anomalous (the origin may be serving an old release as latest); a real upgrade would refuse" >&2
+      else
+        fail "upgrade: resolved latest ${tag} is older than the installed v${CURRENT_VERSION#v} — refusing (a rollback anomaly: the origin may be serving an old release as latest); this is not overridable. To install an older release deliberately, name it: ${TOOL} upgrade --version ${tag}"
+      fi
+    fi
+  elif [ -z "$EXPLICIT_VERSION" ]; then
+    echo "${TOOL} upgrade: installed version is unknown (dev build); cannot order it against the resolved latest ${tag} — proceeding without the forward-only check" >&2
   fi
 fi
 
@@ -187,22 +224,22 @@ os=$(uname -s)
 case "$os" in
   Linux) goos=linux ;;
   Darwin) goos=darwin ;;
-  *) fail "unsupported OS: $os (faber ships linux and darwin binaries only)" ;;
+  *) fail "unsupported OS: $os (${TOOL} ships linux and darwin binaries only)" ;;
 esac
 
 arch=$(uname -m)
 case "$arch" in
   x86_64 | amd64) goarch=amd64 ;;
   arm64 | aarch64) goarch=arm64 ;;
-  *) fail "unsupported architecture: $arch (faber ships amd64 and arm64 binaries only)" ;;
+  *) fail "unsupported architecture: $arch (${TOOL} ships amd64 and arm64 binaries only)" ;;
 esac
 
 if [ "$goos" != "linux" ]; then
-  echo "install.sh: host is $goos; faber-box still ships linux/${goarch} (Docker Desktop runs containers in a Linux VM matching the host's arch by default) — fetching it explicitly, not skipping it" >&2
+  echo "install.sh: host is $goos; ${BOX_TOOL} still ships linux/${goarch} (Docker Desktop runs containers in a Linux VM matching the host's arch by default) — fetching it explicitly, not skipping it" >&2
 fi
 
-faber_archive="faber_${version}_${goos}_${goarch}.tar.gz"
-box_archive="faber-box_${version}_linux_${goarch}.tar.gz"
+faber_archive="${TOOL}_${version}_${goos}_${goarch}.tar.gz"
+box_archive="${BOX_TOOL}_${version}_linux_${goarch}.tar.gz"
 base_url="${DL_BASE}/${tag}"
 
 workdir=$(mktemp -d)
@@ -216,7 +253,7 @@ printf '%s %s\n' "$SIGNER_ID" "$SIGNING_PUBKEY" >"$allowed_signers"
 # installed until every fetch_and_verify call for this run has succeeded).
 fetch_and_verify() {
   archive="$1"
-  echo "faber installer: fetching ${archive} (${tag})" >&2
+  echo "${TOOL} installer: fetching ${archive} (${tag})" >&2
   curl -fsSL "${base_url}/${archive}" -o "${workdir}/${archive}" \
     || fail "download failed: ${base_url}/${archive}"
   curl -fsSL "${base_url}/${archive}.sig" -o "${workdir}/${archive}.sig" \
@@ -230,17 +267,17 @@ fetch_and_verify() {
     <"${workdir}/${archive}" >&2; then
     fail "signature verification FAILED for ${archive} — refusing to install an unverified binary"
   fi
-  echo "faber installer: signature verified for ${archive}" >&2
+  echo "${TOOL} installer: signature verified for ${archive}" >&2
 }
 
 fetch_and_verify "$faber_archive"
 fetch_and_verify "$box_archive"
 
-tar -xzf "${workdir}/${faber_archive}" -C "$workdir" faber \
-  || fail "failed to extract the faber binary from ${faber_archive}"
-tar -xzf "${workdir}/${box_archive}" -C "$workdir" faber-box \
-  || fail "failed to extract the faber-box binary from ${box_archive}"
-chmod 755 "${workdir}/faber" "${workdir}/faber-box"
+tar -xzf "${workdir}/${faber_archive}" -C "$workdir" "$TOOL" \
+  || fail "failed to extract the ${TOOL} binary from ${faber_archive}"
+tar -xzf "${workdir}/${box_archive}" -C "$workdir" "$BOX_TOOL" \
+  || fail "failed to extract the ${BOX_TOOL} binary from ${box_archive}"
+chmod 755 "${workdir}/${TOOL}" "${workdir}/${BOX_TOOL}"
 
 # --- upgrade mode: self-replace both installed binaries ---
 # Both signatures have already been verified above; only after that does any
@@ -254,7 +291,7 @@ if [ -n "$UPGRADE" ]; then
   require_writable "$FABER_BOX_TARGET"
 
   if [ -n "$DRY_RUN" ]; then
-    echo "faber upgrade (dry-run): verified ${tag}; would replace:" >&2
+    echo "${TOOL} upgrade (dry-run): verified ${tag}; would replace:" >&2
     echo "  ${FABER_TARGET}" >&2
     echo "  ${FABER_BOX_TARGET}" >&2
     exit 0
@@ -268,9 +305,9 @@ if [ -n "$UPGRADE" ]; then
   # staged before any rename, so a staging failure leaves every live path
   # untouched.
   sfx=".new.$$"
-  cp "${workdir}/faber" "${FABER_TARGET}${sfx}" || fail "upgrade: staging faber failed"
-  cp "${workdir}/faber-box" "${FABER_BOX_TARGET}${sfx}" \
-    || { rm -f "${FABER_TARGET}${sfx}"; fail "upgrade: staging faber-box failed"; }
+  cp "${workdir}/${TOOL}" "${FABER_TARGET}${sfx}" || fail "upgrade: staging ${TOOL} failed"
+  cp "${workdir}/${BOX_TOOL}" "${FABER_BOX_TARGET}${sfx}" \
+    || { rm -f "${FABER_TARGET}${sfx}"; fail "upgrade: staging ${BOX_TOOL} failed"; }
   chmod 755 "${FABER_TARGET}${sfx}" "${FABER_BOX_TARGET}${sfx}"
 
   # swap moves the running binary aside to <target>.bak, then renames the
@@ -283,19 +320,23 @@ if [ -n "$UPGRADE" ]; then
   if ! swap "$FABER_TARGET"; then
     restore "$FABER_TARGET"
     rm -f "${FABER_TARGET}${sfx}" "${FABER_BOX_TARGET}${sfx}"
-    fail "upgrade: replacing faber failed; nothing changed"
+    fail "upgrade: replacing ${TOOL} failed; nothing changed"
   fi
   if ! swap "$FABER_BOX_TARGET"; then
     restore "$FABER_BOX_TARGET"
     rm -f "${FABER_BOX_TARGET}${sfx}"
     restore "$FABER_TARGET"
-    fail "upgrade: replacing faber-box failed; rolled faber back — both left at the previous version"
+    fail "upgrade: replacing ${BOX_TOOL} failed; rolled ${TOOL} back — both left at the previous version"
   fi
 
-  echo "faber upgrade: ${CURRENT_VERSION:-unknown} -> ${tag}" >&2
+  # Render the from-version v-prefixed to match the release-tag form of the
+  # to-version (${tag}); "unknown" when the current version was never stamped.
+  cur_disp="unknown"
+  [ -n "$CURRENT_VERSION" ] && cur_disp="v${CURRENT_VERSION#v}"
+  echo "${TOOL} upgrade: ${cur_disp} -> ${tag}" >&2
   echo "  ${FABER_TARGET}" >&2
   echo "  ${FABER_BOX_TARGET}" >&2
-  echo "  previous binaries kept at *.bak (faber upgrade --rollback restores them)" >&2
+  echo "  previous binaries kept at *.bak (${TOOL} upgrade --rollback restores them)" >&2
   "$FABER_TARGET" version || true
   exit 0
 fi
@@ -310,15 +351,15 @@ install_binary() {
   if [ -w "$INSTALL_DIR" ]; then
     install -m 0755 "${workdir}/${name}" "${INSTALL_DIR}/${name}"
   else
-    echo "faber installer: ${INSTALL_DIR} is not writable, retrying with sudo" >&2
+    echo "${TOOL} installer: ${INSTALL_DIR} is not writable, retrying with sudo" >&2
     need sudo
     sudo install -m 0755 "${workdir}/${name}" "${INSTALL_DIR}/${name}"
   fi
 }
 
-install_binary faber
-install_binary faber-box
+install_binary "$TOOL"
+install_binary "$BOX_TOOL"
 
-echo "faber installed to ${INSTALL_DIR}/faber" >&2
-echo "faber-box installed to ${INSTALL_DIR}/faber-box" >&2
-"${INSTALL_DIR}/faber" version || true
+echo "${TOOL} installed to ${INSTALL_DIR}/${TOOL}" >&2
+echo "${BOX_TOOL} installed to ${INSTALL_DIR}/${BOX_TOOL}" >&2
+"${INSTALL_DIR}/${TOOL}" version || true

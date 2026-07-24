@@ -133,9 +133,16 @@ func (h *harness) resetTargets() {
 
 // run executes the signed script copy in the operator-facing flag contract:
 // --target/--box-target are always supplied (per harness), the caller passes
-// the mode flags (--upgrade/--rollback/--check/--force/--current …). Only the
+// the mode flags (--upgrade/--rollback/--check/--current …). Only the
 // test-only origin bases stay env, matching the real invocation.
 func (h *harness) run(flags ...string) (string, error) {
+	return h.runEnv(nil, flags...)
+}
+
+// runEnv is run with extra environment entries prepended — used to set VERSION
+// so a scenario can exercise the explicit-version path (VERSION set) as opposed
+// to the forward-only latest path (VERSION unset).
+func (h *harness) runEnv(extraEnv []string, flags ...string) (string, error) {
 	h.t.Helper()
 	args := append([]string{h.scriptPath, "--target", h.faberTarget, "--box-target", h.boxTarget}, flags...)
 	cmd := exec.Command("sh", args...)
@@ -143,6 +150,7 @@ func (h *harness) run(flags ...string) (string, error) {
 		"FABER_API_BASE="+h.apiBase,
 		"FABER_DL_BASE="+h.dlBase,
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -160,45 +168,83 @@ func TestInstallUpgradeFakeServer(t *testing.T) {
 		assertContains(t, h.boxTarget+".bak", "OLD")
 	})
 
-	t.Run("rollback restores both from backup", func(t *testing.T) {
+	t.Run("S3 rollback restores BOTH binaries as a matched pair", func(t *testing.T) {
 		h := newHarness(t)
 		if out, err := h.run("--upgrade", "--current", "v0.1.0"); err != nil {
 			t.Fatalf("seed upgrade failed: %v\n%s", err, out)
 		}
-		assertContains(t, h.faberTarget, "NEW") // precondition: upgraded
+		assertContains(t, h.faberTarget, "NEW") // precondition: both upgraded
+		assertContains(t, h.boxTarget, "NEW")
 
 		out, err := h.run("--rollback")
 		if err != nil {
 			t.Fatalf("rollback failed: %v\n%s", err, out)
 		}
+		// Both restored to the OLD pair, and their .bak backups consumed — the
+		// coupled pair is never left half-restored.
 		assertContains(t, h.faberTarget, "OLD")
 		assertContains(t, h.boxTarget, "OLD")
+		assertAbsent(t, h.faberTarget+".bak")
+		assertAbsent(t, h.boxTarget+".bak")
 	})
 
-	t.Run("fail-closed: a tampered artifact leaves both running binaries untouched", func(t *testing.T) {
+	t.Run("S3 rollback without a backup fails cleanly, touching nothing", func(t *testing.T) {
 		h := newHarness(t)
-		// Flip a byte in the served faber archive; its signature no longer
-		// matches, so verification must fail before anything is replaced.
-		goos, goarch := scriptPlatform(t)
-		faberArchive := "/dl/" + fakeTag + "/" + fmt.Sprintf("faber_%s_%s_%s.tar.gz", fakeVer, goos, goarch)
-		orig, _ := h.getFile(faberArchive)
-		tampered := append([]byte(nil), orig...)
-		tampered[len(tampered)/2] ^= 0xff
-		h.setFile(faberArchive, tampered)
-
-		out, err := h.run("--upgrade", "--current", "v0.1.0")
+		// A fresh install has never upgraded, so neither .bak exists; rollback
+		// must refuse and leave the current pair exactly as it is.
+		out, err := h.run("--rollback")
 		if err == nil {
-			t.Fatalf("upgrade succeeded on a tampered artifact; want non-zero exit\n%s", out)
+			t.Fatalf("rollback succeeded with no backup present; want non-zero exit\n%s", out)
 		}
-		if !strings.Contains(out, "verification FAILED") {
-			t.Errorf("expected a signature-verification failure message:\n%s", out)
+		if !strings.Contains(out, "no backup found") {
+			t.Errorf("expected a no-backup refusal:\n%s", out)
 		}
 		assertContains(t, h.faberTarget, "OLD")
 		assertContains(t, h.boxTarget, "OLD")
 		assertNoStaging(t, h.faberTarget)
 		assertNoStaging(t, h.boxTarget)
-		assertAbsent(t, h.faberTarget+".bak")
-		assertAbsent(t, h.boxTarget+".bak")
+	})
+
+	t.Run("S2 fail-closed: a tampered artifact leaves BOTH running binaries untouched", func(t *testing.T) {
+		goos, goarch := scriptPlatform(t)
+		archives := map[string]string{
+			"faber":     "/dl/" + fakeTag + "/" + fmt.Sprintf("faber_%s_%s_%s.tar.gz", fakeVer, goos, goarch),
+			"faber-box": "/dl/" + fakeTag + "/" + fmt.Sprintf("faber-box_%s_linux_%s.tar.gz", fakeVer, goarch),
+		}
+		// Tampering EITHER archive must fail closed with neither binary replaced.
+		// Tampering faber-box (verified second) is the N=2 witness: faber's own
+		// signature is valid, yet faber is still not swapped — verify-BOTH-before-
+		// replace-EITHER.
+		for _, which := range []string{"faber", "faber-box"} {
+			t.Run("tampered "+which, func(t *testing.T) {
+				h := newHarness(t)
+				target := archives[which]
+				orig, ok := h.getFile(target)
+				if !ok {
+					t.Fatalf("no served archive at %s", target)
+				}
+				// Flip a byte so the artifact no longer matches its signature.
+				tampered := append([]byte(nil), orig...)
+				tampered[len(tampered)/2] ^= 0xff
+				h.setFile(target, tampered)
+
+				out, err := h.run("--upgrade", "--current", "v0.1.0")
+				if err == nil {
+					t.Fatalf("upgrade succeeded on a tampered %s artifact; want non-zero exit\n%s", which, out)
+				}
+				if !strings.Contains(out, "verification FAILED") {
+					t.Errorf("expected a signature-verification failure message:\n%s", out)
+				}
+				// Neither of the two running binaries replaced; no staging
+				// residue and no backups for either half.
+				assertContains(t, h.faberTarget, "OLD")
+				assertContains(t, h.boxTarget, "OLD")
+				assertNoStaging(t, h.faberTarget)
+				assertNoStaging(t, h.boxTarget)
+				assertAbsent(t, h.faberTarget+".bak")
+				assertAbsent(t, h.boxTarget+".bak")
+			})
+		}
 	})
 
 	t.Run("dry-run verifies but changes nothing", func(t *testing.T) {
@@ -217,36 +263,174 @@ func TestInstallUpgradeFakeServer(t *testing.T) {
 		assertAbsent(t, h.faberTarget+".bak")
 	})
 
-	t.Run("already up to date exits 0 without touching the pair", func(t *testing.T) {
-		h := newHarness(t)
-		out, err := h.run("--upgrade", "--current", fakeTag)
-		if err != nil {
-			t.Fatalf("expected exit 0 when already current: %v\n%s", err, out)
+	t.Run("equal version: exit 0, an explicit nothing-changed notice, nothing touched", func(t *testing.T) {
+		// The notice must be identical on BOTH the latest-equal path (VERSION
+		// unset, current == resolved latest) and the explicit-version-equal path
+		// (VERSION names the installed version): exit 0, change nothing (no
+		// staging, no .bak, no reinstall), print the same explicit message.
+		const wantNotice = "faber upgrade: already at v" + fakeVer + "; nothing changed"
+
+		cases := []struct {
+			name     string
+			extraEnv []string
+		}{
+			{"latest == installed (forward-only path)", nil},
+			{"--version == installed (explicit path)", []string{"VERSION=" + fakeTag}},
 		}
-		if !strings.Contains(out, "already at") {
-			t.Errorf("expected an already-up-to-date notice:\n%s", out)
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				h := newHarness(t)
+				out, err := h.runEnv(tc.extraEnv, "--upgrade", "--current", fakeTag)
+				if err != nil {
+					t.Fatalf("expected exit 0 when already current: %v\n%s", err, out)
+				}
+				if !strings.Contains(out, wantNotice) {
+					t.Errorf("expected the explicit notice %q:\n%s", wantNotice, out)
+				}
+				// Nothing changed: the pair is untouched and no residue was staged.
+				assertContains(t, h.faberTarget, "OLD")
+				assertContains(t, h.boxTarget, "OLD")
+				assertNoStaging(t, h.faberTarget)
+				assertNoStaging(t, h.boxTarget)
+				assertAbsent(t, h.faberTarget+".bak")
+				assertAbsent(t, h.boxTarget+".bak")
+			})
 		}
-		assertContains(t, h.faberTarget, "OLD")
 	})
 
-	t.Run("downgrade is refused without force and allowed with it", func(t *testing.T) {
+	t.Run("forward-only: a latest older than installed is hard-refused, non-overridable", func(t *testing.T) {
 		h := newHarness(t)
+		// The served "latest" is fakeTag (v0.1.3); the installed version is
+		// newer (v0.9.0). On the latest path (VERSION unset) this is a rollback
+		// anomaly: refuse before any download, touching nothing.
 		out, err := h.run("--upgrade", "--current", "v0.9.0")
 		if err == nil {
-			t.Fatalf("downgrade succeeded without --force:\n%s", out)
+			t.Fatalf("upgrade proceeded when the resolved latest was older than installed:\n%s", out)
 		}
-		if !strings.Contains(out, "refusing to downgrade") {
-			t.Errorf("expected a downgrade refusal:\n%s", out)
+		if !strings.Contains(out, "not overridable") || !strings.Contains(out, "refusing") {
+			t.Errorf("expected a non-overridable anomaly refusal:\n%s", out)
 		}
 		assertContains(t, h.faberTarget, "OLD")
+		assertContains(t, h.boxTarget, "OLD")
+		assertNoStaging(t, h.faberTarget)
+		assertNoStaging(t, h.boxTarget)
+		assertAbsent(t, h.faberTarget+".bak")
 
-		h.resetTargets()
+		// Not overridable: the script exposes no override flag at all. --force
+		// no longer exists, so passing it is rejected outright and the pair is
+		// still untouched — there is no path that turns this refusal into a
+		// proceed.
 		out, err = h.run("--upgrade", "--current", "v0.9.0", "--force")
+		if err == nil {
+			t.Fatalf("a stray --force made the anomaly refusal proceed:\n%s", out)
+		}
+		if !strings.Contains(out, "unknown option: --force") {
+			t.Errorf("expected --force to be an unknown option (no override exists):\n%s", out)
+		}
+		assertContains(t, h.faberTarget, "OLD")
+		assertContains(t, h.boxTarget, "OLD")
+	})
+
+	t.Run("explicit --version older than installed is allowed with a notice", func(t *testing.T) {
+		h := newHarness(t)
+		// VERSION names the exact release (fakeTag), so the script is on the
+		// explicit-version path: no anomaly refusal even though it is older
+		// than the installed v0.9.0 — the operator named it.
+		out, err := h.runEnv([]string{"VERSION=" + fakeTag}, "--upgrade", "--current", "v0.9.0")
 		if err != nil {
-			t.Fatalf("forced downgrade failed: %v\n%s", err, out)
+			t.Fatalf("explicit older-version install failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "as explicitly requested") {
+			t.Errorf("expected an older-than-installed-as-requested notice:\n%s", out)
 		}
 		assertContains(t, h.faberTarget, "NEW")
 		assertContains(t, h.boxTarget, "NEW")
+	})
+
+	t.Run("--check on an older latest reports the anomaly but exits 0 without touching anything", func(t *testing.T) {
+		h := newHarness(t)
+		// --check's job is to report, not to gate: on the latest path it warns
+		// that the resolved latest moved backward yet still exits 0 (it could
+		// resolve the release) and changes nothing.
+		out, err := h.run("--upgrade", "--check", "--current", "v0.9.0")
+		if err != nil {
+			t.Fatalf("--check exited non-zero on a resolvable (if anomalous) latest: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "anomalous") {
+			t.Errorf("expected an anomaly warning from --check:\n%s", out)
+		}
+		assertContains(t, h.faberTarget, "OLD")
+		assertContains(t, h.boxTarget, "OLD")
+		assertNoStaging(t, h.faberTarget)
+		assertAbsent(t, h.faberTarget+".bak")
+	})
+
+	t.Run("dev/unknown current version warns and proceeds on the latest path", func(t *testing.T) {
+		h := newHarness(t)
+		// No --current (a dev/unstamped build): the latest path cannot order
+		// against the tag, so the forward-only check is skipped with a warning
+		// and the upgrade proceeds.
+		out, err := h.run("--upgrade")
+		if err != nil {
+			t.Fatalf("upgrade failed for an unknown current version: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "cannot order") {
+			t.Errorf("expected a cannot-order warning for a dev build:\n%s", out)
+		}
+		assertContains(t, h.faberTarget, "NEW")
+		assertContains(t, h.boxTarget, "NEW")
+	})
+
+	t.Run("S9 an unwritable target dir for EITHER binary refuses before touching ANY", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("require_writable is bypassed for root (access(2) honours root); S9 needs a non-root euid")
+		}
+		// relocateReadOnly moves one target into its own read-only directory so
+		// its dirname fails the writability probe; the other stays writable.
+		relocateReadOnly := func(t *testing.T, target *string, content string) {
+			t.Helper()
+			roDir := filepath.Join(t.TempDir(), "ro-bin")
+			if err := os.MkdirAll(roDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(roDir, filepath.Base(*target))
+			writeExec(t, p, content)
+			if err := os.Chmod(roDir, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(roDir, 0o755) }) // let TempDir cleanup remove it
+			*target = p
+		}
+
+		// The upgrade probes BOTH target dirs up front (the RequireRoot analogue
+		// of verify-both-before-replacing-either), so an unwritable dir for the
+		// FIRST or the SECOND binary must refuse before either is staged.
+		for _, which := range []string{"faber", "faber-box"} {
+			t.Run(which+" dir unwritable", func(t *testing.T) {
+				h := newHarness(t)
+				if which == "faber" {
+					relocateReadOnly(t, &h.faberTarget, faberOld)
+				} else {
+					relocateReadOnly(t, &h.boxTarget, boxOld)
+				}
+
+				out, err := h.run("--upgrade", "--current", "v0.1.0")
+				if err == nil {
+					t.Fatalf("upgrade succeeded despite an unwritable %s target dir; want non-zero exit\n%s", which, out)
+				}
+				if !strings.Contains(out, "not writable") {
+					t.Errorf("expected a writability refusal:\n%s", out)
+				}
+				// Nothing was moved: both binaries left at OLD, no staging
+				// residue, no backups for either half.
+				assertContains(t, h.faberTarget, "OLD")
+				assertContains(t, h.boxTarget, "OLD")
+				assertNoStaging(t, h.faberTarget)
+				assertNoStaging(t, h.boxTarget)
+				assertAbsent(t, h.faberTarget+".bak")
+				assertAbsent(t, h.boxTarget+".bak")
+			})
+		}
 	})
 }
 

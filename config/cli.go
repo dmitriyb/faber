@@ -91,9 +91,10 @@ type RunAudit struct {
 	Format   int  // journal schema stamp (0 = pre-versioning journal)
 }
 
-// RunAuditor enumerates journaled runs for `faber upgrade-check` (failure
-// module). The scan is read-only and tolerant: it must read journals of any
-// format, because the guard's whole job is to look before an upgrade leaps.
+// RunAuditor enumerates journaled runs for the active-runs guard `faber
+// upgrade` runs (and reports via `faber upgrade --check`; failure module). The
+// scan is read-only and tolerant: it must read journals of any format, because
+// the guard's whole job is to look before an upgrade leaps.
 type RunAuditor interface {
 	AuditRuns() ([]RunAudit, error)
 }
@@ -165,12 +166,12 @@ commands:
   build      build template images
   run        execute a workflow: faber run <workflow> --param k=v ...
   resume     re-enter a journaled run: faber resume <run-id>
-  upgrade-check  read-only pre-upgrade guard: refuses while live or
-             unfinished runs exist (faber is not upgraded mid-run);
-             --force acknowledges and proceeds
-  upgrade    update faber and faber-box to a newer signed release via the
-             embedded install.sh; runs upgrade-check first, then self-replaces
-             both binaries: --check/--dry-run, --version vX.Y.Z, --rollback, --force
+  upgrade    forward-only update of faber and faber-box to the latest signed
+             release via the embedded install.sh; refuses a latest older than
+             installed (non-overridable), and refuses while live/unfinished runs
+             exist: --check (report only, warns on active runs), --version vX.Y.Z
+             (exact release, any direction), --rollback, --force (proceed despite
+             active runs)
   add-key    register a role→fingerprint in the global registry:
              faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--force]
   list-keys  print the global role→fingerprint registry
@@ -216,7 +217,6 @@ func NewRootCmd(deps Deps) *cobra.Command {
 		newBuildCmd(deps),
 		newRunCmd(deps),
 		newResumeCmd(deps),
-		newUpgradeCheckCmd(deps),
 		newUpgradeCmd(deps),
 		newAddKeyCmd(deps),
 		newListKeysCmd(deps),
