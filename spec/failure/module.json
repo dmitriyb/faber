@@ -81,7 +81,7 @@
     {
       "id": "351e41becee4",
       "name": "RecoveryModes",
-      "description": "The resume/fresh/interactive entry points: journal replay into scheduler state, fail-closed version and drift guards (journal format, IR version, IR hash, params, recorded image tags), cache-bypass, the interactive re-entry that reconstructs the failed step's box (journaled image tag, bindings, slot-keyed handoff inputs) for an operator shell, and the read-only faber upgrade-check run audit.",
+      "description": "The resume/fresh/interactive entry points: journal replay into scheduler state, fail-closed version and drift guards (journal format, IR version, IR hash, params, recorded image tags), cache-bypass, the interactive re-entry that reconstructs the failed step's box (journaled image tag, bindings, slot-keyed handoff inputs) for an operator shell, and the read-only active-runs audit behind faber upgrade (which refuses mid-run) and faber upgrade --check (which only warns).",
       "content": "arch_recovery_modes.md",
       "implements": ["87f006277d2c"],
       "uses": ["ec44f9c7b403"]

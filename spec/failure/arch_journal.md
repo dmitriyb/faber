@@ -68,8 +68,8 @@ format-tolerant; only interpretive replay refuses.
    instead of losing it with the never-settled node.
 6. **Run-end** — appended once per execution when the scheduler returns:
    `{status: settled|aborted, failed count, finished}`. Its absence is the
-   durable signature of an interrupted run — exactly what `faber
-   upgrade-check` looks for. A resumed run appends a fresh marker when it
+   durable signature of an interrupted run — exactly what the active-runs
+   guard behind `faber upgrade` looks for. A resumed run appends a fresh marker when it
    finishes; replay is last-wins. Unknown kinds are still skipped on replay
    (additive evolution within one format), but never silently — replay logs
    what it ignored.

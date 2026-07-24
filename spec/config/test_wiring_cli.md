@@ -80,20 +80,33 @@ param checking.
     discipline (belt-and-suspenders) so a bypassed validation still cannot write
     outside the per-attempt tree.
 
-14. **Upgrade gate and embed identity.** `faber upgrade` runs the same read-only
-    pre-upgrade guard as `upgrade-check` BEFORE any download or replace: with a
-    live run in the injected `RunAuditor`, it exits 1 and the injected `Installer`
-    recorder is **never** invoked; with `--force` it prints the acknowledgement,
-    exits 0, and the recorder runs with the resolved `UpgradePlan` (`--version`,
-    `BuildInfo.Version`, and `Deps.BoxBinary` propagated); an unwired
-    `Deps.BoxBinary` is a hard error (exit 1, recorder untouched) — a coupled pair
-    is never half-upgraded. A pure-Go identity test asserts the `//go:embed`-ed
-    `config/install.sh` is byte-identical to the released repo-root `install.sh`
-    (fails the build on drift — the whole trust argument), and a table test pins
-    `UpgradePlan.args()`'s mode-exclusive flag mapping (and that the release pin
-    travels as `VERSION` in the env, never as a flag). The install.sh
-    resolve/download/verify/self-replace logic itself is proven by the delivery
-    module's committed fake-server harness (`spec/delivery/test_delivery.md`).
+14. **Forward-only upgrade gate and embed identity.** `faber upgrade` runs the
+    active-runs guard (`auditGate`) BEFORE any download or replace, and each
+    flag has exactly one meaning. With a live run in the injected `RunAuditor`,
+    the plain path exits 1 (the refusal naming `--force`) and the injected
+    `Installer` recorder is **never** invoked; `--force` prints the
+    acknowledgement, exits 0, and the recorder runs with the resolved
+    `UpgradePlan` (`BuildInfo.Version` and `Deps.BoxBinary` propagated). `--force`
+    overrides the active-runs guard and only that guard: it sets no version or
+    direction signal on the plan. `--check` against the same live run does NOT
+    block — it prints a NOTE naming the run, exits 0, and the recorder runs in
+    dry-run (its job is to report). The plain path carries no version pin
+    (`UpgradePlan.TargetVersion` empty — the forward-only latest path); `--version`
+    propagates the exact release and the CLI accepts it even when older than
+    `BuildInfo.Version` (the forward-only guard applies only to the latest path).
+    An unwired `Deps.BoxBinary` is a hard error (exit 1, recorder untouched) — a
+    coupled pair is never half-upgraded. A pure-Go identity test asserts the
+    `//go:embed`-ed `config/install.sh` is byte-identical to the released
+    repo-root `install.sh` (fails the build on drift — the whole trust argument),
+    and a table test pins `UpgradePlan.args()`'s mode-exclusive flag mapping,
+    that no `--force` is ever emitted into the argv, and that the release pin
+    travels as `VERSION` in the env (set on the explicit-version path, unset on
+    the forward-only latest path) rather than as a flag. The install.sh
+    resolve/download/verify/self-replace logic — including the non-overridable
+    forward-only anomaly refusal (a latest older than installed), the
+    explicit-`--version`-older-allowed notice, and the `--check`-reports-exit-0
+    behavior — is proven by the committed fake-server harness
+    (`config/install_upgrade_test.go`; see also `spec/delivery/test_delivery.md`).
 
 ## Edge cases
 

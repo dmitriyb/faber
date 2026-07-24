@@ -105,17 +105,19 @@ It can also be pinned and cross-checked against GitHub's own copy at `https://ap
 Once faber is installed, `faber upgrade` updates it — and its coupled `faber-box` — to the latest signed release in place, without re-downloading `install.sh`:
 
 ```sh
-faber upgrade                 # to the latest release
-faber upgrade --version v0.1.4   # to a specific release
+faber upgrade                 # forward to the latest release
+faber upgrade --version v0.1.4   # a specific release, any direction
 faber upgrade --check         # resolve and verify the target, change nothing (also: --dry-run)
 faber upgrade --rollback      # restore the previous pair from their .bak backups
+faber upgrade --force         # proceed despite live/unfinished runs
 ```
 
 `faber upgrade` reuses the exact `install.sh` above, embedded byte-for-byte into the (already-verified, signed) faber binary — so the same resolve → download → SSHSIG-verify path runs, with nothing separate to fetch or trust.
-It first runs the `faber upgrade-check` guard (it refuses while a run is live or unfinished — faber is not swapped mid-run) and then replaces **both** binaries as a unit, since a mismatched `faber`/`faber-box` pair is a broken state (the two share a contract version).
+It first runs the active-runs guard (it refuses while a run is live or unfinished — faber is not swapped mid-run; `--force` overrides that guard) and then replaces **both** binaries as a unit, since a mismatched `faber`/`faber-box` pair is a broken state (the two share a contract version).
 Both signatures are verified before either binary is touched (fail closed), and the previous pair is kept alongside the new one for `--rollback`.
-The freshness/downgrade gap noted above is narrowed here: `faber upgrade` refuses a target older than the installed version unless `--force` is given.
-`--force` also acknowledges the run guard and skips confirmation.
+Upgrade is **forward-only**: it moves toward the latest release and hard-refuses a latest that is OLDER than the installed version — a latest that moved backward is a rollback anomaly (a compromised origin serving an old but validly-signed release as "latest"), and no flag overrides it.
+To install an older release deliberately, name it with `--version`, which installs that exact release in any direction with no guard.
+`faber upgrade --check` reports availability and changes nothing; it warns about (but does not block on) active runs and exits 0 whenever it could resolve the latest release.
 
 ## Usage sketch
 

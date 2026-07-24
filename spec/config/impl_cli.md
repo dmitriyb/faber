@@ -29,7 +29,7 @@ func NewRootCmd(deps Deps) *cobra.Command {
     cmd.CompletionOptions.DisableDefaultCmd = true
     cmd.AddCommand(
         newVersionCmd(deps), newValidateCmd(deps), newBuildCmd(deps),
-        newRunCmd(deps), newResumeCmd(deps), newUpgradeCheckCmd(deps),
+        newRunCmd(deps), newResumeCmd(deps), newUpgradeCmd(deps),
         newAddKeyCmd(deps), newListKeysCmd(deps),
     )
     return cmd
@@ -111,7 +111,7 @@ race-free across parallel tests) on every `RunWithDeps` call, the same way a
 fresh `flag.FlagSet` used to be built per call.
 
 `addCommonFlags(cmd)` registers `--config`/`--log-level`/`--log-format`;
-`addLogFlags(cmd)` registers only the latter two, for `upgrade-check`,
+`addLogFlags(cmd)` registers only the latter two, for
 `upgrade`, `add-key`, `list-keys` (no `--config` — see `arch_cli.md`). `readCommonFlags(cmd)`
 reads all three back into a `commonFlags` struct with a `.logger(stderr)`
 convenience method (`InitLogging(logLevel, logFormat, stderr)`).
@@ -184,50 +184,51 @@ re-checks the failure-module versions of the same guards plus the recorded
 image tags; the CLI guards exist to refuse before the full config pipeline
 re-runs.
 
-### runUpgradeCheckE (config/cmd_upgradecheck.go)
-
-```
-total, blocking := auditGate(deps)   // read-only, format-tolerant kind probe
-   blocking := live (lock held) ∪ unfinished (no run-end marker)
-print the report to cmd.OutOrStdout() either way;
-return an error (exit 1) listing blocking runs, unless --force (prints and returns nil, exit 0)
-```
-
-The read-only pre-upgrade guard ("faber is not upgraded mid-run"): it never
-mutates a journal and never updates faber — the binary swap is external. A
-pre-versioning journal (no format stamp) reports as unfinished-unknown and
-blocks; across a schema bump the in-flight runs are finished on the old
-binary or restarted `--fresh`. The blocking-runs report itself always prints
-to stdout (both the "safe to swap" and the "blocks an upgrade" cases) — only
-the final refusal (no `--force`) becomes the returned `error`, so `RunWithDeps`
-prints it to stderr exactly once rather than the command printing it directly.
-The kind-probe body is factored into `auditGate(deps) (total, blocking, err)`
-so `runUpgradeE` reuses the identical guard rather than re-deriving it.
-
 ### runUpgradeE (config/cmd_upgrade.go)
 
 ```
 flags: --check/--dry-run (aliases), --version vX.Y.Z, --rollback, --force  (no --config)
+report := --check || --dry-run
 if deps.Installer == nil ⇒ error (exit 1): the installer is not wired
-total, blocking := auditGate(deps)                 // the SAME guard as upgrade-check
-  if blocking and not --force ⇒ error (exit 1), installer never invoked
-  if blocking and --force ⇒ print acknowledgement, proceed
+total, blocking := auditGate(deps)   // read-only, format-tolerant kind probe: live (lock held) ∪ unfinished (no run-end marker)
+  if blocking:
+    if report      ⇒ print a NOTE naming the runs, do not block (exit stays 0)
+    elif --force   ⇒ print acknowledgement, proceed
+    else           ⇒ error (exit 1) naming --force, installer never invoked
 faberPath := os.Executable() then EvalSymlinks     // replace the real binary, not an alias
 boxPath   := EvalSymlinks(deps.BoxBinary)           // "" ⇒ hard error, not a partial upgrade
-plan := UpgradePlan{faberPath, boxPath, --version, BuildInfo.Version (or "dev"), dryRun, rollback, force}
+plan := UpgradePlan{faberPath, boxPath, --version, BuildInfo.Version (or "dev"), report, rollback}
 return deps.Installer.Upgrade(ctx, plan, stdout, stderr)   // runs the embedded install.sh, synchronously
 ```
 
 `upgrade` is thin dispatch, like `add-key`: it owns the guard (in Go, because
 it reads faber's run state) and the two path resolutions, then hands off to the
-`Installer` seam. `UpgradePlan.args()` renders the plan as the flags the
-embedded script parses (`--upgrade`/`--rollback`/`--check`, `--target`/
-`--box-target`, `--current`, `--force`) — the operator-facing contract is
-self-documenting flags, not env; the mode flags are mutually exclusive (upgrade
-vs rollback) and `--force` is orthogonal. Only the release pin (`VERSION`, via
-`UpgradePlan.scriptEnv()`) and the test-only origin bases stay env;
-`--current` is omitted for a `dev`/unstamped build (it cannot be ordered
-against a release tag). The real `Installer`
+`Installer` seam. The active-runs guard is the `auditGate(deps) (total,
+blocking, err)` body — the read-only kind probe the standalone `upgrade-check`
+command used before it was folded into `upgrade --check`. It never mutates a
+journal and never updates faber (the binary swap is external); a pre-versioning
+journal reports as unfinished-unknown and blocks. On the plain path a blocking
+run becomes the returned `error` (exit 1), so `RunWithDeps` prints it to stderr
+once; `--check` prints the same set as a NOTE and returns nil (exit 0 — its job
+is to report, not to gate); `--force` acknowledges and proceeds. `--force`
+means exactly one thing — override the active-runs guard — and is handled
+entirely Go-side (it never reaches the script); it carries no version or
+direction meaning and cannot bypass the forward-only anomaly refusal the script
+enforces.
+
+`UpgradePlan.args()` renders the plan as the flags the embedded script parses
+(`--upgrade`/`--rollback`/`--check`, `--target`/`--box-target`, `--current`) —
+the operator-facing contract is self-documenting flags, not env; the mode flags
+are mutually exclusive (upgrade vs rollback), and there is no `--force` in the
+argv because the guard is Go-side and the anomaly refusal is not overridable.
+The release pin travels as `VERSION` in `UpgradePlan.scriptEnv()`, and `VERSION`
+set versus unset is exactly what puts the script on the explicit-version path
+(install the named release in any direction, forward-only guard off) versus the
+forward-only latest path (resolve latest; a latest older than installed
+hard-refuses, non-overridable — equal is exit 0, newer upgrades). `--current`
+is passed on both paths (the script orders against it) but is omitted for a
+`dev`/unstamped build, which the latest path then treats as "cannot order —
+warn and proceed"; only the test-only origin bases otherwise stay env. The real `Installer`
 (`EmbeddedInstaller`, wired in `cmd/faber/wire.go`) writes the `//go:embed`-ed
 `install.sh` to a private temp file and execs `sh` synchronously; the embedded
 copy (`config/install.sh`) is kept byte-identical to the released repo-root

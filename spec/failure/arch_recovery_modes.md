@@ -74,19 +74,25 @@ interactive session writes nothing to the journal — it is observation, not
 execution — and the run's state is unchanged afterward; the operator then
 chooses resume or fresh.
 
-## upgrade-check: the pre-upgrade guard
+## the active-runs guard behind faber upgrade
 
-`faber upgrade-check` is the read-only pre-flight encoding the rule "faber is
-not upgraded mid-run": it enumerates journaled runs and refuses (non-zero)
-while any is live (its run lock is held) or unfinished (no run-end marker in
-its journal), listing them; `--force` acknowledges the list and exits 0 so a
-deliberate upgrade can proceed. It never modifies a journal and never updates
-faber — the binary swap is external (rebuild/release); this is the check an
-operator or deploy step runs first. The audit scan is format-tolerant (it
-probes record kinds only), because its whole job is to look at journals the
-new binary may refuse to replay. Across a schema bump the consequence is
-explicit: in-flight runs are finished on the old binary or restarted
-`--fresh`; there is no auto-migration.
+The read-only run audit encoding the rule "faber is not upgraded mid-run"
+enumerates journaled runs and classifies any that is live (its run lock is
+held) or unfinished (no run-end marker in its journal) as blocking. It never
+modifies a journal and never updates faber — the binary swap is external
+(rebuild/release). The audit scan is format-tolerant (it probes record kinds
+only), because its whole job is to look at journals the new binary may refuse
+to replay.
+
+It surfaces two ways, both in the config module (there is no longer a
+standalone `upgrade-check` command). `faber upgrade` runs it first and REFUSES
+(non-zero, listing the blocking runs) rather than swap faber out from under a
+live or unfinished run; `--force` overrides that guard and proceeds. `faber
+upgrade --check` runs the identical audit but only WARNS about active runs — its
+job is to report availability, so it lists them and still exits 0, never
+blocking. Across a schema bump the consequence is explicit either way: in-flight
+runs are finished on the old binary or restarted `--fresh`; there is no
+auto-migration.
 
 ## Generate items are not special
 
