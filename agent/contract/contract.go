@@ -16,9 +16,11 @@ import "github.com/dmitriyb/faber/config"
 // ContractVersion is the faber↔faber-box result-contract schema version:
 // the shape of the env contract in and the result/handoff records out.
 // Independent of the application version — bumped only when that shape
-// changes. faber-box ships from the host as the same build, so a version
-// mismatch at either end is a FABER_BOX_BIN-misconfiguration detector
-// (a stale or foreign sequencer binary), not a migration path.
+// changes incompatibly; a purely additive env variable whose absence the
+// box tolerates (e.g. FABER_MODEL) does not bump it. faber-box ships from
+// the host as the same build, so a version mismatch at either end is a
+// FABER_BOX_BIN-misconfiguration detector (a stale or foreign sequencer
+// binary), not a migration path.
 const ContractVersion = 1
 
 // Environment variable names of the box env contract. The host side

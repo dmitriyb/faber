@@ -99,5 +99,5 @@ mounts, and the env contract is set directly.)
 - A malformed `bundle.env` line fails the prelude phase, not the agent phase.
 - No `repo` input: clone and signing phases are skipped, hooks run in a
   scratch cwd, and a `BRANCH` declaration without a repo is a contract error.
-- `FABER_EFFORT`/`FABER_MAX_BUDGET` unset: the stub's recorded argv contains
-  neither flag; set: both appear with the exact values.
+- `FABER_MODEL`/`FABER_EFFORT`/`FABER_MAX_BUDGET` unset: the stub's recorded
+  argv contains none of the flags; set: all appear with the exact values.

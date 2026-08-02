@@ -3,7 +3,7 @@
     "run_id": "run-test",
     "workflow": "task",
     "config_hash": "cfg-hash",
-    "ir_hash": "e7a55fce3e72931e1646c29c3b5c863aa9285c50d3fafa1be0817e67c8d79f9f",
+    "ir_hash": "ef09bc2e626defec5ff4c86725c9f0c2f5beacc567133955c6a76987f7b6a844",
     "totals": {
       "ok": 6,
       "failed": 0,

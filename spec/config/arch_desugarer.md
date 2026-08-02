@@ -150,6 +150,8 @@ the IR changes.
 - The only inputs are the `*Config` value and the workflow name; the output IR
   embeds everything downstream needs, so desugaring never happens twice per run.
 - Byte-stable across faber versions within a major IR version; the IR carries
-  `ir_version: 1`.
+  `ir_version: 2` (bumped from 1 when ResolvedTemplate gained the mandatory
+  model/effort fields — an IR-shape change, so pre-upgrade journals resume
+  against the engine-upgrade guard, not a config-drift error).
 
 Requirements implemented: Desugaring to JSON IR, Deterministic IR emission.

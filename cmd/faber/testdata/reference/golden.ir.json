@@ -1,5 +1,5 @@
 {
-  "ir_version": 1,
+  "ir_version": 2,
   "workflow": "epic",
   "nodes": [
     {
@@ -29,7 +29,7 @@
   "edges": []
 }
 {
-  "ir_version": 1,
+  "ir_version": 2,
   "workflow": "task",
   "nodes": [
     {

@@ -11,7 +11,8 @@ import (
 
 // IRVersion is the major IR version this package emits. Desugaring is
 // byte-stable across faber versions within a major IR version.
-const IRVersion = 1
+// 2: ResolvedTemplate gained the mandatory model/effort fields.
+const IRVersion = 2
 
 // Node kinds. The kind field is an open discriminator by design: deferred
 // non-agent step kinds (human-approval gates, wait/poll steps, pure-command
