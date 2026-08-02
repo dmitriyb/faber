@@ -28,7 +28,7 @@ type BoxEnv struct {
     HostKey              string
     TOFU                 bool
     GitName, GitEmail    string
-    Effort, ExtraInstruction, MaxBudget string
+    Model, Effort, ExtraInstruction, MaxBudget string
     Attempt              int
     OutputSchema         config.OutputSchema // decoded from FABER_OUTPUT_SCHEMA
     RunUID, RunGID       int               // FABER_RUN_UID/GID; the preamble drops to these; 0/0 = no drop
@@ -207,7 +207,7 @@ type Invocation struct {
     CLI    string // agent binary name; must be in the template's package set
     Skill  string
     Body   string // CONTEXT.md bytes, verbatim
-    Extra, Effort, MaxBudget string
+    Extra, Model, Effort, MaxBudget string
 }
 
 func (i Invocation) Prompt() string // "/"+Skill+"\n\n"+Body [+ trailer]
@@ -215,6 +215,7 @@ func (i Invocation) Prompt() string // "/"+Skill+"\n\n"+Body [+ trailer]
 func (i Invocation) Argv() []string {
     argv := []string{i.CLI, "-p", i.Prompt(),
         "--permission-mode", "bypassPermissions"}
+    if i.Model != ""     { argv = append(argv, "--model", i.Model) }
     if i.Effort != ""    { argv = append(argv, "--effort", i.Effort) }
     if i.MaxBudget != "" { argv = append(argv, "--max-budget-usd", i.MaxBudget) }
     return argv

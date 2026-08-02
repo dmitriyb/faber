@@ -85,10 +85,12 @@ assemble(path, stack, seen, viols) -> partial *Config:
 Structural, cross-reference, and vocabulary rules — all collected, none fatal-first:
 
 - `version` supported; exactly one of the StepDef union forms per step.
-- Required fields present: template `skill`, a toolset present (exactly one of
-  `image` or `build`; when `build`, `build.packages` non-empty; when `image`, the
-  referenced image's packages non-empty), workflow `steps` non-empty, param/field
-  `type` in vocabulary.
+- Required fields present: template `skill`, template `model` and `effort`
+  (opaque agent pass-throughs, mandatory so the cost/quality knobs are pinned in
+  config rather than floating on the agent CLI's vendor default), a toolset
+  present (exactly one of `image` or `build`; when `build`, `build.packages`
+  non-empty; when `image`, the referenced image's packages non-empty), workflow
+  `steps` non-empty, param/field `type` in vocabulary.
 - **Dual-mode exclusivity** (per template, per aspect): not both `image` and
   `build`; not both top-level `identity` and `run.identity`; `skills` not both a
   named list and an inline mapping; `skills_link` present iff `skills` is the

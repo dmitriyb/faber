@@ -56,8 +56,8 @@ resolve; desugar performs the resolution, not the checking.
    See `arch_schema_types.md` "Skills assembly" for the two shapes and the
    direct-mount special case.
 
-   Everything else on the template (resources, runtime, env, volumes, inputs,
-   output) passes through unchanged. Desugar reads no files — the paths are already
+   Everything else on the template (model, effort, resources, runtime, env,
+   volumes, inputs, output) passes through unchanged. Desugar reads no files — the paths are already
    absolute from assembly; it only rearranges resolved values into the IR struct.
 
 1. **Reuse resolution.** A use-step naming a workflow becomes a `sub-workflow`

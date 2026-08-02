@@ -85,6 +85,8 @@ type TemplateDef struct {
     Build  *BuildDef           `yaml:"-"`      // inline {packages, overlay}; set by UnmarshalYAML (xor Image)
     Run    RunDef              `yaml:"run"`
     Skill  string              `yaml:"skill"`  // the /<skill> prompt token; a Skills-library ref ONLY in named mode, else free-form
+    Model  string              `yaml:"model"`  // agent model id; REQUIRED, opaque pass-through (box renders --model)
+    Effort string              `yaml:"effort"` // agent effort level; REQUIRED, opaque pass-through (box renders --effort)
     Hooks  HookSet             `yaml:"hooks"`  // each value: a hook NAME (bare) or a PATH (has separator)
     Skills SkillsRef           `yaml:"-"`      // sequence of names OR inline {dir,link}; set by UnmarshalYAML
     Inputs map[string]ParamDef `yaml:"inputs"`
@@ -301,6 +303,12 @@ so tests assert them independently. The dual-mode and library checks:
   values are otherwise opaque, never dereferenced or fetched at load time; the infra
   splice keeps a matching guard as defense-in-depth (see
   `spec/infra/impl_nix_build.md`).
+- **Model and effort are mandatory.** Every template declares non-empty `model`
+  and `effort`, field-pathed (`templates.review.model: required`). Both values
+  are opaque pass-throughs — vendor vocabulary faber never interprets; the box
+  renders them as `--model` / `--effort` on the agent argv. Requiring them at
+  validate time pins the agent's cost/quality knobs in config instead of letting
+  them float on whatever the installed agent CLI defaults to that week.
 - **Substrate placement.** A substrate key on an included (non-root) file is a
   violation (`<file>: included files may only contribute libraries`).
 
