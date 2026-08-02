@@ -21,7 +21,10 @@ user's gate maps fingerprint to role server-side. Faber guarantees the
    deep-but-legal layout overflows the cap and the agent cannot bind).
    No step ever shares an agent — concurrent steps under the same identity
    get separate agents (the temp dir is unique per spawn), so teardown of
-   one cannot orphan another.
+   one cannot orphan another. `MkdirTemp` honors `TMPDIR`, so a deep
+   override would reproduce the overflow; the binding guards the composed
+   path against a ~100-byte budget and fails closed with an error naming
+   `TMPDIR` rather than surfacing ssh-agent's cryptic bind failure.
 2. **Resolve + load.** Exactly one key for the template's identity. The key
    source is resolved first (see "Resolving the key", below): either the
    config's explicit `identities.<name>.key` path, or — when the template

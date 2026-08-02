@@ -21,6 +21,14 @@ import (
 const (
 	agentSocketPattern = "faber-agent-"
 	agentSocketFile    = "agent.sock"
+
+	// maxSocketPath is the longest agent socket path Prepare accepts —
+	// headroom under the smallest platform sun_path cap (~104 on macOS/BSD,
+	// 108 on Linux). MkdirTemp honors TMPDIR, so a deep override would
+	// reproduce the very overflow the temp dir exists to avoid; the guard
+	// fails closed with a diagnosis instead of ssh-agent's cryptic
+	// "unix_listener: path too long".
+	maxSocketPath = 100
 )
 
 // AgentController is the typed seam over the ssh-agent and ssh-add binaries.
@@ -112,6 +120,14 @@ func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribut
 		return Contribution{}, fmt.Errorf("create agent socket dir: %w", err)
 	}
 	sock := filepath.Join(dir, agentSocketFile)
+	if len(sock) > maxSocketPath {
+		if rerr := os.Remove(dir); rerr != nil {
+			b.logger.WarnContext(ctx, "remove socket dir after path-length refusal", "node", step.NodeID, "err", rerr)
+		}
+		return Contribution{}, fmt.Errorf(
+			"agent socket path %q is %d bytes — over the %d-byte Unix socket (sun_path) budget; point TMPDIR at a shorter directory",
+			sock, len(sock), maxSocketPath)
+	}
 
 	handle, err := b.agents.Start(ctx, sock)
 	if err != nil {

@@ -220,6 +220,7 @@ func TestIdentityAbsentContributesNothing(t *testing.T) {
 // must not push it past the ~104–108 byte Unix socket path cap that made
 // ssh-agent fail with "unix_listener: path too long".
 func TestIdentitySocketPathShortEvenWithDeepScratch(t *testing.T) {
+	t.Setenv("TMPDIR", "") // measure the code, not an ambient deep TMPDIR override
 	agent := newFakeAgent()
 	b := identityBinding(agent, nil)
 	deep := filepath.Join(t.TempDir(), strings.Repeat("deep-scratch-segment/", 8), "attempt-1", "scratch")
@@ -239,6 +240,36 @@ func TestIdentitySocketPathShortEvenWithDeepScratch(t *testing.T) {
 	}
 	if err := c.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
+	}
+}
+
+// Verifies e47a00273f03 (sun_path guard): a deep TMPDIR override reproduces
+// the overflow the temp dir exists to avoid — Prepare must fail closed with
+// an error naming TMPDIR before any agent is spawned, leaving no temp dir
+// behind.
+func TestIdentityDeepTMPDIRFailsClosed(t *testing.T) {
+	root := filepath.Join(os.TempDir(), "faber-deep-tmpdir-test")
+	deep := filepath.Join(root, strings.Repeat("deep-tmpdir-segment/", 6))
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	t.Setenv("TMPDIR", deep)
+	agent := newFakeAgent()
+	b := identityBinding(agent, nil)
+	_, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
+	errContains(t, err, "TMPDIR")
+	if len(agent.starts) != 0 {
+		t.Fatalf("no agent must be spawned past the path-length guard, got %v", agent.starts)
+	}
+	entries, rerr := os.ReadDir(deep)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "faber-agent-") {
+			t.Fatalf("path-length refusal left the temp dir behind: %s", e.Name())
+		}
 	}
 }
 
