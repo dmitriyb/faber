@@ -141,5 +141,9 @@ infra streams it on the container's stdin.
 
 No maps are iterated anywhere in assembly: `no_proxy` is a YAML list,
 services are walked via sorted keys (broker side), and each binding's args
-are literal slices. Golden test: assembling the reference `implement` step
-twice yields byte-identical fragments.
+are literal slices. The one attempt-unique value is the agent socket's HOST
+path (a fresh `MkdirTemp` dir per spawn — the `sun_path` cap forbids a
+deterministic scratch-derived path); its container side (`/ssh-agent`) and
+everything else in the fragment are byte-stable. Golden test: assembling
+the reference `implement` step twice yields fragments identical except for
+that one host path.

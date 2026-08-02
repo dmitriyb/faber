@@ -126,7 +126,7 @@ func TestIdentityBindingResolvesViaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	sock := filepath.Join(scratch, "ssh-agent", "agent.sock")
+	sock := contributedSocket(t, c.Args)
 	fps := agent.keys[sock]
 	// fakeAgent labels the key by the keySource basename it was handed.
 	if len(fps) != 1 || !strings.Contains(fps[0], "located-impl") {
@@ -159,7 +159,10 @@ func TestIdentityBindingRejectsFingerprintMismatch(t *testing.T) {
 	if live := agent.liveAgents(); len(live) != 0 {
 		t.Fatalf("fingerprint mismatch must tear the agent down, leaked: %q", live)
 	}
-	if _, serr := os.Stat(filepath.Join(scratch, "ssh-agent")); !os.IsNotExist(serr) {
+	if len(agent.starts) != 1 {
+		t.Fatalf("want exactly one spawn, got %d", len(agent.starts))
+	}
+	if _, serr := os.Stat(filepath.Dir(agent.starts[0])); !os.IsNotExist(serr) {
 		t.Fatal("fingerprint mismatch must remove the socket directory")
 	}
 }
@@ -178,9 +181,6 @@ func TestIdentityBindingUnknownRoleFailsBeforeSpawn(t *testing.T) {
 	errContains(t, err, "not in registry")
 	if len(agent.starts) != 0 {
 		t.Fatalf("no agent must be spawned on a resolution failure, got %v", agent.starts)
-	}
-	if _, serr := os.Stat(filepath.Join(scratch, "ssh-agent")); !os.IsNotExist(serr) {
-		t.Fatal("resolution failure must not create the socket directory")
 	}
 }
 

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/dmitriyb/faber/config"
 )
 
 func identityBinding(agent *fakeAgent, logBuf *bytes.Buffer) *IdentityBinding {
@@ -22,6 +20,19 @@ func identityBinding(agent *fakeAgent, logBuf *bytes.Buffer) *IdentityBinding {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return NewIdentityBinding(agent, logger)
+}
+
+// contributedSocket extracts the agent socket's host path from a fragment's
+// mount arg (the "-v <sock>:/ssh-agent" pair).
+func contributedSocket(t *testing.T, args []string) string {
+	t.Helper()
+	for i, a := range args {
+		if a == "-v" && i+1 < len(args) && strings.HasSuffix(args[i+1], ":"+ContainerAgentSocket) {
+			return strings.TrimSuffix(args[i+1], ":"+ContainerAgentSocket)
+		}
+	}
+	t.Fatalf("no socket mount in args %q", args)
+	return ""
 }
 
 // Verifies e47a00273f03: after Prepare the step's agent holds exactly one
@@ -36,10 +47,13 @@ func TestIdentityOneKeyPerBox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	sock := filepath.Join(scratch, "ssh-agent", "agent.sock")
+	sock := contributedSocket(t, c.Args)
 	want := []string{"-v", sock + ":/ssh-agent", "-e", "SSH_AUTH_SOCK=/ssh-agent"}
 	if !slices.Equal(c.Args, want) {
 		t.Fatalf("args:\nwant %q\ngot  %q", want, c.Args)
+	}
+	if strings.HasPrefix(sock, scratch) {
+		t.Fatalf("socket %q must not live under the scratch dir (sun_path cap)", sock)
 	}
 	fps := agent.keys[sock]
 	if len(fps) != 1 || !strings.Contains(fps[0], "implementer") {
@@ -47,6 +61,9 @@ func TestIdentityOneKeyPerBox(t *testing.T) {
 	}
 	if err := c.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
+	}
+	if _, serr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(serr) {
+		t.Fatal("teardown must remove the socket directory")
 	}
 }
 
@@ -75,8 +92,8 @@ func TestIdentityConcurrentStepsGetDisjointAgents(t *testing.T) {
 	if t.Failed() {
 		t.FailNow()
 	}
-	sockA := filepath.Join(steps[0].ScratchDir, "ssh-agent", "agent.sock")
-	sockB := filepath.Join(steps[1].ScratchDir, "ssh-agent", "agent.sock")
+	sockA := contributedSocket(t, contribs[0].Args)
+	sockB := contributedSocket(t, contribs[1].Args)
 	if sockA == sockB {
 		t.Fatal("concurrent steps must get distinct sockets")
 	}
@@ -108,7 +125,10 @@ func TestIdentityZeroKeysFailsAndCleansUp(t *testing.T) {
 	if live := agent.liveAgents(); len(live) != 0 {
 		t.Fatalf("failed Prepare leaked an agent: %q", live)
 	}
-	if _, serr := os.Stat(filepath.Join(scratch, "ssh-agent")); !os.IsNotExist(serr) {
+	if len(agent.starts) != 1 {
+		t.Fatalf("want exactly one spawn, got %d", len(agent.starts))
+	}
+	if _, serr := os.Stat(filepath.Dir(agent.starts[0])); !os.IsNotExist(serr) {
 		t.Fatal("failed Prepare must remove the socket directory")
 	}
 }
@@ -169,13 +189,14 @@ func TestIdentityTeardownAndSocketGroup(t *testing.T) {
 	if i := slices.Index(c.Args, "--group-add"); i < 0 || c.Args[i+1] != "101" {
 		t.Fatalf("want --group-add 101 in args, got %q", c.Args)
 	}
+	sock := contributedSocket(t, c.Args)
 	if err := c.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
 	}
 	if live := agent.liveAgents(); len(live) != 0 {
 		t.Fatalf("agent still live after teardown: %q", live)
 	}
-	if _, serr := os.Stat(filepath.Join(scratch, "ssh-agent")); !os.IsNotExist(serr) {
+	if _, serr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(serr) {
 		t.Fatal("teardown must remove the socket directory")
 	}
 }
@@ -194,12 +215,62 @@ func TestIdentityAbsentContributesNothing(t *testing.T) {
 	}
 }
 
-// Verifies e47a00273f03: the identity binding refuses to run without a
-// per-step scratch dir — the private socket directory has nowhere to live.
-func TestIdentityRequiresScratchDir(t *testing.T) {
-	b := identityBinding(newFakeAgent(), nil)
-	_, err := b.Prepare(context.Background(), StepSpec{Identity: &config.IdentityDef{Key: "./keys/implementer"}})
-	errContains(t, err, "scratch dir")
+// Verifies e47a00273f03 (sun_path regression): the socket path is short and
+// independent of the scratch dir's depth — a deep-but-legal project layout
+// must not push it past the ~104–108 byte Unix socket path cap that made
+// ssh-agent fail with "unix_listener: path too long".
+func TestIdentitySocketPathShortEvenWithDeepScratch(t *testing.T) {
+	t.Setenv("TMPDIR", "") // measure the code, not an ambient deep TMPDIR override
+	agent := newFakeAgent()
+	b := identityBinding(agent, nil)
+	deep := filepath.Join(t.TempDir(), strings.Repeat("deep-scratch-segment/", 8), "attempt-1", "scratch")
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c, err := b.Prepare(context.Background(), implementStep(deep))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	sock := contributedSocket(t, c.Args)
+	if len(sock) > 100 {
+		t.Fatalf("socket path %q is %d bytes — over the sun_path headroom", sock, len(sock))
+	}
+	if strings.HasPrefix(sock, deep) {
+		t.Fatalf("socket %q must not derive from the scratch dir", sock)
+	}
+	if err := c.Teardown(context.Background()); err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+}
+
+// Verifies e47a00273f03 (sun_path guard): a deep TMPDIR override reproduces
+// the overflow the temp dir exists to avoid — Prepare must fail closed with
+// an error naming TMPDIR before any agent is spawned, leaving no temp dir
+// behind.
+func TestIdentityDeepTMPDIRFailsClosed(t *testing.T) {
+	root := filepath.Join(os.TempDir(), "faber-deep-tmpdir-test")
+	deep := filepath.Join(root, strings.Repeat("deep-tmpdir-segment/", 6))
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	t.Setenv("TMPDIR", deep)
+	agent := newFakeAgent()
+	b := identityBinding(agent, nil)
+	_, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
+	errContains(t, err, "TMPDIR")
+	if len(agent.starts) != 0 {
+		t.Fatalf("no agent must be spawned past the path-length guard, got %v", agent.starts)
+	}
+	entries, rerr := os.ReadDir(deep)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "faber-agent-") {
+			t.Fatalf("path-length refusal left the temp dir behind: %s", e.Name())
+		}
+	}
 }
 
 // Verifies e47a00273f03 (finding 5 regression): the internal failure teardown

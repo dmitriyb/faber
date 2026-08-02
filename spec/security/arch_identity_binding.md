@@ -14,9 +14,17 @@ user's gate maps fingerprint to role server-side. Faber guarantees the
 ## Lifecycle (per step attempt)
 
 1. **Spawn.** `ssh-agent -a <sock>` with the socket in a fresh private
-   directory (0700, owned by faber's user, under the run's scratch area).
+   temp directory (0700, owned by faber's user, `MkdirTemp` under the
+   system temp dir — deliberately NOT under the run's scratch area: a Unix
+   socket path is capped at ~104–108 bytes (`sun_path`), and the scratch
+   path scales with the project directory, run id, and node id, so a
+   deep-but-legal layout overflows the cap and the agent cannot bind).
    No step ever shares an agent — concurrent steps under the same identity
-   get separate agents, so teardown of one cannot orphan another.
+   get separate agents (the temp dir is unique per spawn), so teardown of
+   one cannot orphan another. `MkdirTemp` honors `TMPDIR`, so a deep
+   override would reproduce the overflow; the binding guards the composed
+   path against a ~100-byte budget and fails closed with an error naming
+   `TMPDIR` rather than surfacing ssh-agent's cryptic bind failure.
 2. **Resolve + load.** Exactly one key for the template's identity. The key
    source is resolved first (see "Resolving the key", below): either the
    config's explicit `identities.<name>.key` path, or — when the template
