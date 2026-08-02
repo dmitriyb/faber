@@ -42,8 +42,9 @@ type Contribution struct {
 // the agent module) resolves everything first. ScratchDir must be a private
 // per-attempt directory (0700, tmpfs-backed when file-mode credentials are
 // declared): fresh assembly per attempt is what makes between-attempt cleanup
-// sound, and it is also what gives retries a new socket path and a fresh
-// resolver invocation.
+// sound. (The agent socket deliberately does NOT live under it — sun_path
+// caps a socket path at ~104–108 bytes, so the identity binding uses a short
+// per-spawn MkdirTemp dir instead.)
 type StepSpec struct {
 	NodeID       string
 	Network      *config.NetworkDef

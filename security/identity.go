@@ -9,14 +9,18 @@ import (
 	"path/filepath"
 )
 
-// agentSocketDir is the name of the private socket directory the binding
-// creates under the step's scratch dir; agentSocketFile is the socket inside
-// it. Deterministic given the scratch dir, so repeated assembly of the same
-// resolved step yields a byte-identical fragment — and per-attempt scratch
-// dirs give retries a fresh socket path.
+// agentSocketPattern names the private per-spawn MkdirTemp directory the
+// binding creates for the agent socket; agentSocketFile is the socket inside
+// it. The dir lives under the SYSTEM temp dir, never the step's scratch
+// tree: a Unix socket path is capped at ~104–108 bytes (sun_path), and the
+// scratch path scales with the project directory, run id, and node id — a
+// deep-but-legal layout overflows the cap and ssh-agent cannot bind
+// (unix_listener: path too long). MkdirTemp keeps the per-attempt freshness
+// retries rely on (unique dir per spawn) at the cost of one attempt-unique
+// host path in the assembled fragment.
 const (
-	agentSocketDir  = "ssh-agent"
-	agentSocketFile = "agent.sock"
+	agentSocketPattern = "faber-agent-"
+	agentSocketFile    = "agent.sock"
 )
 
 // AgentController is the typed seam over the ssh-agent and ssh-add binaries.
@@ -103,11 +107,8 @@ func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribut
 	if err != nil {
 		return Contribution{}, err
 	}
-	if step.ScratchDir == "" {
-		return Contribution{}, errors.New("identity binding requires a per-step scratch dir")
-	}
-	dir := filepath.Join(step.ScratchDir, agentSocketDir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir, err := os.MkdirTemp("", agentSocketPattern)
+	if err != nil {
 		return Contribution{}, fmt.Errorf("create agent socket dir: %w", err)
 	}
 	sock := filepath.Join(dir, agentSocketFile)

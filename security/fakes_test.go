@@ -268,9 +268,11 @@ func mergeStep(scratch string) StepSpec {
 }
 
 // implementFragment is the exact ordered argv fragment the implement step
-// must assemble to. File mode contributes exactly one --tmpfs /run/secrets and
-// no token flag — the token rides Assembled.SecretsStdin, not the argv.
-func implementFragment(scratch string) []string {
+// must assemble to, given the attempt's agent socket host path (the one
+// attempt-unique value — a per-spawn MkdirTemp dir, see the identity
+// binding). File mode contributes exactly one --tmpfs /run/secrets and no
+// token flag — the token rides Assembled.SecretsStdin, not the argv.
+func implementFragment(sock string) []string {
 	return []string{
 		"--network", "agents-internal",
 		"-e", "HTTPS_PROXY=http://egress:8888",
@@ -278,7 +280,7 @@ func implementFragment(scratch string) []string {
 		"-e", "NO_PROXY=gateway,localhost,127.0.0.1",
 		"-e", "FABER_REMOTE_URL=ssh://git@gateway/srv/git/sandbox.git",
 		"-e", "FABER_HOST_KEY=" + hostKeyLine,
-		"-v", filepath.Join(scratch, "ssh-agent", "agent.sock") + ":/ssh-agent",
+		"-v", sock + ":/ssh-agent",
 		"-e", "SSH_AUTH_SOCK=/ssh-agent",
 		"--tmpfs", "/run/secrets",
 	}

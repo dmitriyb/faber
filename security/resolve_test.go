@@ -126,7 +126,7 @@ func TestIdentityBindingResolvesViaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	sock := filepath.Join(scratch, "ssh-agent", "agent.sock")
+	sock := contributedSocket(t, c.Args)
 	fps := agent.keys[sock]
 	// fakeAgent labels the key by the keySource basename it was handed.
 	if len(fps) != 1 || !strings.Contains(fps[0], "located-impl") {

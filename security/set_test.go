@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -17,20 +16,22 @@ import (
 // the exact ordered fragment — network flags, proxy env, NO_PROXY list,
 // remote URL env with the repo param spliced, pinned host-key env, socket
 // mount + SSH_AUTH_SOCK, service handle mount, no runtime flag — byte
-// identical across repeated assembly; adding runtime: runsc appends exactly
-// --runtime=runsc and changes nothing else — test scenario 1.
+// identical across repeated assembly except the socket mount's host path,
+// which is attempt-unique by design (per-spawn MkdirTemp, the sun_path cap);
+// adding runtime: runsc appends exactly --runtime=runsc and changes nothing
+// else — test scenario 1.
 func TestGoldenFragment(t *testing.T) {
 	h := newHarness(t)
 	scratch := t.TempDir()
 	step := implementStep(scratch)
-	want := implementFragment(scratch)
 
 	first, err := h.set.Prepare(context.Background(), step)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if !slices.Equal(first.Args, want) {
-		t.Fatalf("fragment:\nwant %q\ngot  %q", want, first.Args)
+	firstSock := contributedSocket(t, first.Args)
+	if !slices.Equal(first.Args, implementFragment(firstSock)) {
+		t.Fatalf("fragment:\nwant %q\ngot  %q", implementFragment(firstSock), first.Args)
 	}
 	// The file-mode token rides SecretsStdin as one JSON object, not the argv.
 	wantPayload := `{"agent-api":"` + base64.StdEncoding.EncodeToString([]byte(testToken)) + `"}`
@@ -45,8 +46,12 @@ func TestGoldenFragment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-Prepare: %v", err)
 	}
-	if strings.Join(second.Args, "\x00") != strings.Join(first.Args, "\x00") {
-		t.Fatalf("fragment not byte-identical across assemblies:\n%q\n%q", first.Args, second.Args)
+	secondSock := contributedSocket(t, second.Args)
+	if secondSock == firstSock {
+		t.Fatal("agent socket host path must be fresh per assembly")
+	}
+	if !slices.Equal(second.Args, implementFragment(secondSock)) {
+		t.Fatalf("fragment not identical modulo the socket path:\n%q\n%q", first.Args, second.Args)
 	}
 	if err := second.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
@@ -57,7 +62,8 @@ func TestGoldenFragment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare with runtime: %v", err)
 	}
-	if !slices.Equal(hardened.Args, append(slices.Clone(want), "--runtime=runsc")) {
+	hardenedWant := append(implementFragment(contributedSocket(t, hardened.Args)), "--runtime=runsc")
+	if !slices.Equal(hardened.Args, hardenedWant) {
 		t.Fatalf("runtime knob must append exactly --runtime=runsc:\ngot %q", hardened.Args)
 	}
 	if err := hardened.Teardown(context.Background()); err != nil {
@@ -162,8 +168,10 @@ func TestTeardownAlwaysRuns(t *testing.T) {
 		if live := h.agent.liveAgents(); len(live) != 0 {
 			t.Fatalf("agent leaked: %q", live)
 		}
-		if _, err := os.Stat(filepath.Join(scratch, "ssh-agent")); !os.IsNotExist(err) {
-			t.Fatal("socket directory must be removed")
+		for _, sock := range h.agent.starts {
+			if _, err := os.Stat(filepath.Dir(sock)); !os.IsNotExist(err) {
+				t.Fatalf("socket directory %s must be removed", filepath.Dir(sock))
+			}
 		}
 		// File mode writes no host file at all: the scratch area never held the
 		// token, so there is nothing to shred.
