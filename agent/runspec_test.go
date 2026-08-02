@@ -107,7 +107,7 @@ func TestBuildRunSpecContract(t *testing.T) {
 		t.Errorf("mounts = %v, want %v", mounts, want)
 	}
 	// Optional pass-throughs stay absent when unset.
-	for _, key := range []string{contract.EnvEffort, contract.EnvMaxBudget, contract.EnvExtraInstruction, contract.EnvSkillsLink} {
+	for _, key := range []string{contract.EnvModel, contract.EnvEffort, contract.EnvMaxBudget, contract.EnvExtraInstruction, contract.EnvSkillsLink} {
 		if _, ok := rs.Env[key]; ok {
 			t.Errorf("env unexpectedly carries %s", key)
 		}
@@ -118,6 +118,25 @@ func TestBuildRunSpecContract(t *testing.T) {
 		if m.Container == contract.ContainerSkillsDir {
 			t.Errorf("mounts unexpectedly carry the skills bind %+v", m)
 		}
+	}
+}
+
+// Verifies ae434449cac9: the model/effort pass-throughs land in the box env
+// under their contract names when set — the engine half of the mandatory
+// per-template model/effort pair.
+func TestBuildRunSpecModelEffortPassThrough(t *testing.T) {
+	spec := validSpec()
+	spec.Model = "agent-model"
+	spec.Effort = "high"
+	rs, err := BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rs.Env[contract.EnvModel]; got != "agent-model" {
+		t.Errorf("env[%s] = %q, want %q", contract.EnvModel, got, "agent-model")
+	}
+	if got := rs.Env[contract.EnvEffort]; got != "high" {
+		t.Errorf("env[%s] = %q, want %q", contract.EnvEffort, got, "high")
 	}
 }
 

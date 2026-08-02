@@ -54,11 +54,15 @@ templates:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: merger
     skill: merge
+    model: agent-model
+    effort: low
     build:
       packages: [git, openssh]
 
   fix:
     skill: fix
+    model: agent-model
+    effort: medium
     run:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: implementer
@@ -82,6 +86,8 @@ templates:
     hooks:
       context: ./hooks/fetch-change
     skill: review
+    model: agent-model
+    effort: high
     run:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: reviewer
@@ -101,6 +107,8 @@ templates:
       prelude: ./hooks/claim-item
       context: ./hooks/gather-context
     skill: implement
+    model: agent-model
+    effort: high
     run:
       env: {FABER_AGENT_CLI: agent-cli}
       resources: {cpus: 4, memory: 8g}

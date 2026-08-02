@@ -35,6 +35,8 @@ templates:
       runtime: runsc                  # optional: switch container runtime (e.g. gVisor)
       env: {FABER_AGENT_CLI: claude}  # which agent binary the box invokes (required; no vendor default)
     skill: implement                  # the /<skill> prompt token
+    model: claude-sonnet-5            # agent model, passed through as --model (required; no vendor default)
+    effort: high                      # agent effort level, passed through as --effort (required)
     hooks: {context: ./hooks/gather-context, on_failure: release}  # a bare name (library ref) or a path
     inputs:  {repo: {type: string, required: true}, item: {type: string, required: true}}
     output:  {branch: {type: string, required: true}, pr: {type: int, required: true}}

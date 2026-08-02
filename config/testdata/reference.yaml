@@ -31,6 +31,8 @@ templates:
       identity: implementer
       resources: {memory: 8g, cpus: 4}
     skill: implement
+    model: agent-model
+    effort: high
     hooks:
       context: ./hooks/gather-context
       prelude: ./hooks/claim-item
@@ -50,6 +52,8 @@ templates:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: reviewer
     skill: review
+    model: agent-model
+    effort: high
     hooks:
       context: ./hooks/fetch-change
     inputs:
@@ -66,6 +70,8 @@ templates:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: implementer
     skill: fix
+    model: agent-model
+    effort: medium
     hooks:
       context: ./hooks/fetch-change
     inputs:
@@ -81,6 +87,8 @@ templates:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: merger
     skill: merge
+    model: agent-model
+    effort: low
     inputs:
       repo: {type: string, required: true}
       pr:   {type: int,    required: true}

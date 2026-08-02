@@ -37,6 +37,8 @@ templates:
       resources: {memory: 8g, cpus: 4}
       env: {FABER_AGENT_CLI: claude}
     skill: implement
+    model: claude-sonnet-5
+    effort: high
     hooks:
       context: ./hooks/gather-context
       prelude: ./hooks/claim-item
@@ -56,6 +58,8 @@ templates:
       identity: reviewer
       env: {FABER_AGENT_CLI: claude}
     skill: review
+    model: claude-opus-5
+    effort: high
     hooks:
       context: ./hooks/fetch-pr
     inputs:
@@ -72,6 +76,8 @@ templates:
       identity: implementer
       env: {FABER_AGENT_CLI: claude}
     skill: fix
+    model: claude-sonnet-5
+    effort: medium
     hooks:
       context: ./hooks/fetch-pr
     inputs:
@@ -87,6 +93,8 @@ templates:
       identity: merger
       env: {FABER_AGENT_CLI: claude}
     skill: merge
+    model: claude-sonnet-5
+    effort: low
     inputs:
       repo: {type: string, required: true}
       pr:   {type: int,    required: true}

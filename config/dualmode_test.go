@@ -32,6 +32,8 @@ templates:
     identity: worker
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
+    model: agent-model
+    effort: high
     hooks: {context: ctx}
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
@@ -53,6 +55,8 @@ templates:
     build: {packages: [git], overlay: ./o.nix}
     run: {identity: worker, env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
+    model: agent-model
+    effort: high
     hooks: {context: ./hooks/ctx}
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
@@ -123,6 +127,8 @@ templates:
     image: base
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: implement
+    model: agent-model
+    effort: high
     skills: [implement, go-expert, implement]
     skills_link: .claude/skills
     inputs: {input: {type: string, required: true}}
@@ -154,6 +160,8 @@ templates:
     image: base
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: summarize
+    model: agent-model
+    effort: high
     skills: {dir: ./skills, link: .claude/skills}
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
@@ -183,6 +191,8 @@ templates:
     image: base
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
+    model: agent-model
+    effort: high
     skills:
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
@@ -206,6 +216,8 @@ templates:
   box:
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
+    model: agent-model
+    effort: high
     skills: nonsense
 `)
 	if _, _, err := Load(path); err == nil {
@@ -230,6 +242,8 @@ templates:
     image: base
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: anything-goes
+    model: agent-model
+    effort: high
     skills: {dir: ./skills, link: .claude/skills}
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
@@ -255,6 +269,8 @@ templates:
     image: base
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: review
+    model: agent-model
+    effort: high
     skills: [implement]
     skills_link: .claude/skills
     inputs: {input: {type: string, required: true}}
@@ -323,6 +339,8 @@ templates:
     identity: ghostid
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: real
+    model: agent-model
+    effort: high
     skills: [real, ghostskill]
     skills_link: .claude/skills
     hooks: {context: ghosthook}

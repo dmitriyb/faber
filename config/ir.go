@@ -11,7 +11,8 @@ import (
 
 // IRVersion is the major IR version this package emits. Desugaring is
 // byte-stable across faber versions within a major IR version.
-const IRVersion = 1
+// 2: ResolvedTemplate gained the mandatory model/effort fields.
+const IRVersion = 2
 
 // Node kinds. The kind field is an open discriminator by design: deferred
 // non-agent step kinds (human-approval gates, wait/poll steps, pure-command
@@ -128,6 +129,8 @@ type ResolvedTemplate struct {
 	Env       map[string]string   `json:"env,omitempty"`
 	Volumes   map[string]string   `json:"volumes,omitempty"`
 	Skill     string              `json:"skill"`
+	Model     string              `json:"model"`  // mandatory opaque agent pass-through (the box renders --model)
+	Effort    string              `json:"effort"` // mandatory opaque agent pass-through (the box renders --effort)
 	Hooks     HookSet             `json:"hooks"`
 	Skills    *ResolvedSkills     `json:"skills,omitempty"` // optional skill-definition delivery; nil = no skills leg
 	Inputs    map[string]ParamDef `json:"inputs"`

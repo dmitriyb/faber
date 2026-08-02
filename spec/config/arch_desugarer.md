@@ -56,8 +56,8 @@ resolve; desugar performs the resolution, not the checking.
    See `arch_schema_types.md` "Skills assembly" for the two shapes and the
    direct-mount special case.
 
-   Everything else on the template (resources, runtime, env, volumes, inputs,
-   output) passes through unchanged. Desugar reads no files — the paths are already
+   Everything else on the template (model, effort, resources, runtime, env,
+   volumes, inputs, output) passes through unchanged. Desugar reads no files — the paths are already
    absolute from assembly; it only rearranges resolved values into the IR struct.
 
 1. **Reuse resolution.** A use-step naming a workflow becomes a `sub-workflow`
@@ -150,6 +150,8 @@ the IR changes.
 - The only inputs are the `*Config` value and the workflow name; the output IR
   embeds everything downstream needs, so desugaring never happens twice per run.
 - Byte-stable across faber versions within a major IR version; the IR carries
-  `ir_version: 1`.
+  `ir_version: 2` (bumped from 1 when ResolvedTemplate gained the mandatory
+  model/effort fields — an IR-shape change, so pre-upgrade journals resume
+  against the engine-upgrade guard, not a config-drift error).
 
 Requirements implemented: Desugaring to JSON IR, Deterministic IR emission.

@@ -788,8 +788,8 @@ func TestLifecycle_HostBoundary(t *testing.T) {
 	}
 }
 
-// Edge case. Verifies ae434449cac9: unset FABER_EFFORT/FABER_MAX_BUDGET emit
-// no flags; set, both appear with the exact values.
+// Edge case. Verifies ae434449cac9: unset FABER_MODEL/FABER_EFFORT/
+// FABER_MAX_BUDGET emit no flags; set, all appear with the exact values.
 func TestLifecycle_EffortAndBudgetPassThrough(t *testing.T) {
 	t.Run("unset omits the flags", func(t *testing.T) {
 		f := newFixture(t)
@@ -797,7 +797,7 @@ func TestLifecycle_EffortAndBudgetPassThrough(t *testing.T) {
 			t.Fatalf("exit = %d\n%s", code, log)
 		}
 		joined := strings.Join(f.stubArgv(), "\x00")
-		for _, flag := range []string{"--effort", "--max-budget-usd"} {
+		for _, flag := range []string{"--model", "--effort", "--max-budget-usd"} {
 			if strings.Contains(joined, flag) {
 				t.Errorf("argv carries %s though unset", flag)
 			}
@@ -805,6 +805,7 @@ func TestLifecycle_EffortAndBudgetPassThrough(t *testing.T) {
 	})
 	t.Run("set passes exact values", func(t *testing.T) {
 		f := newFixture(t)
+		f.env[contract.EnvModel] = "agent-model"
 		f.env[contract.EnvEffort] = "high"
 		f.env[contract.EnvMaxBudget] = "2.50"
 		if code, log := f.run(); code != 0 {
@@ -812,7 +813,7 @@ func TestLifecycle_EffortAndBudgetPassThrough(t *testing.T) {
 		}
 		argv := f.stubArgv()
 		joined := strings.Join(argv, "\x00")
-		for _, want := range []string{"--effort\x00high", "--max-budget-usd\x002.50"} {
+		for _, want := range []string{"--model\x00agent-model", "--effort\x00high", "--max-budget-usd\x002.50"} {
 			if !strings.Contains(joined, want) {
 				t.Errorf("argv = %q, want %q", argv, want)
 			}

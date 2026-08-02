@@ -144,6 +144,8 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		PreludeHook: box.Template.Hooks.Prelude,
 		SkillsDir:   skillsHost,
 		SkillsLink:  skillsLink(box.Template),
+		Model:       box.Template.Model,
+		Effort:      box.Template.Effort,
 		GitName:     b.GitName,
 		GitEmail:    b.GitEmail,
 	})

@@ -1,5 +1,5 @@
 {
-  "ir_version": 1,
+  "ir_version": 2,
   "workflow": "task",
   "nodes": [
     {
@@ -24,6 +24,8 @@
           "FABER_AGENT_CLI": "agent-cli"
         },
         "skill": "implement",
+        "model": "agent-model",
+        "effort": "high",
         "hooks": {
           "context": "./hooks/gather-context",
           "prelude": "./hooks/claim-item",
@@ -76,6 +78,8 @@
           "FABER_AGENT_CLI": "agent-cli"
         },
         "skill": "merge",
+        "model": "agent-model",
+        "effort": "low",
         "hooks": {},
         "inputs": {
           "pr": {
@@ -145,6 +149,8 @@
           "FABER_AGENT_CLI": "agent-cli"
         },
         "skill": "fix",
+        "model": "agent-model",
+        "effort": "medium",
         "hooks": {
           "context": "./hooks/fetch-change"
         },
@@ -196,6 +202,8 @@
           "FABER_AGENT_CLI": "agent-cli"
         },
         "skill": "review",
+        "model": "agent-model",
+        "effort": "high",
         "hooks": {
           "context": "./hooks/fetch-change"
         },
@@ -246,6 +254,8 @@
           "FABER_AGENT_CLI": "agent-cli"
         },
         "skill": "fix",
+        "model": "agent-model",
+        "effort": "medium",
         "hooks": {
           "context": "./hooks/fetch-change"
         },
@@ -298,6 +308,8 @@
           "FABER_AGENT_CLI": "agent-cli"
         },
         "skill": "review",
+        "model": "agent-model",
+        "effort": "high",
         "hooks": {
           "context": "./hooks/fetch-change"
         },
@@ -354,6 +366,8 @@
           "FABER_AGENT_CLI": "agent-cli"
         },
         "skill": "fix",
+        "model": "agent-model",
+        "effort": "medium",
         "hooks": {
           "context": "./hooks/fetch-change"
         },
@@ -406,6 +420,8 @@
           "FABER_AGENT_CLI": "agent-cli"
         },
         "skill": "review",
+        "model": "agent-model",
+        "effort": "high",
         "hooks": {
           "context": "./hooks/fetch-change"
         },

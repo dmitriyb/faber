@@ -33,11 +33,15 @@ package set — validate-time package proof guarantees it resolves) with:
 
 ```
 <agent-cli> -p <prompt> --permission-mode bypassPermissions
-            [--effort <FABER_EFFORT>] [--max-budget-usd <FABER_MAX_BUDGET>]
+            [--model <FABER_MODEL>] [--effort <FABER_EFFORT>]
+            [--max-budget-usd <FABER_MAX_BUDGET>]
 ```
 
-Effort level and budget bound are pass-throughs from config; when unset the
-flags are omitted. The working directory is the workspace; the environment is
+Model, effort level and budget bound are pass-throughs from config; when unset
+the flags are omitted. Config validation makes model and effort mandatory per
+template — the agent's cost/quality knobs are pinned in config, never left to
+float on a vendor default — so in engine-launched boxes both flags are always
+present; the omission path serves direct sequencer invocations. The working directory is the workspace; the environment is
 the box environment plus the bundle's sidecar values, so anything the prelude
 derived (the branch name, a resolved record id) is visible to the skill.
 stdout and stderr stream to the container's log — they are never parsed. The

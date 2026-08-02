@@ -551,6 +551,8 @@ func (d *desugarer) resolveTemplate(name, sp string) *ResolvedTemplate {
 		Env:       t.Run.Env,
 		Volumes:   t.Run.Volumes,
 		Skill:     t.Skill,
+		Model:     t.Model,
+		Effort:    t.Effort,
 		Hooks:     resolveHooks(d.cfg, t.Hooks),
 		Skills:    resolveSkills(d.cfg, t),
 		Inputs:    d.normalizeDefs(t.Inputs, sp),

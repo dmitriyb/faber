@@ -103,6 +103,8 @@ TemplateDef  (named-reference form)
 ├── Skill     string               ref → Skills        the PRIMARY skill the box activates (/<skill>)
 ├── Skills    []string             refs → Skills       every skill delivered into the box (superset incl. Skill)
 ├── SkillsLink string              in-box $HOME-relative discovery path (was skills.link); required when Skills is non-empty
+├── Model     string               REQUIRED opaque agent pass-through (the box renders --model)
+├── Effort    string               REQUIRED opaque agent pass-through (the box renders --effort)
 ├── Hooks     HookSet              {context, prelude, on_failure} — each a ref → Hooks
 ├── Run       RunDef               resources, runtime, env, volumes (+ Identity, back-compat)
 ├── Inputs    map[string]ParamDef  typed slots
@@ -143,6 +145,8 @@ TemplateDef  (inline form — current schema, still accepted)
 ├── Skills    *SkillsDef           inline {dir, link}             (instead of a name list + SkillsLink)
 │                                    dir = a skills-ROOT holding <name>/SKILL.md subtrees (see below)
 ├── Skill     string               the primary skill token (a free-form /<skill>, not a ref, in this mode)
+├── Model     string               REQUIRED opaque agent pass-through (the box renders --model)
+├── Effort    string               REQUIRED opaque agent pass-through (the box renders --effort)
 ├── Run.Identity string            identity (instead of top-level Identity)
 ├── Inputs / Output                unchanged
 ```

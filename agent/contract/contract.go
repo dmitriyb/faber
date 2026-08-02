@@ -16,9 +16,11 @@ import "github.com/dmitriyb/faber/config"
 // ContractVersion is the faber↔faber-box result-contract schema version:
 // the shape of the env contract in and the result/handoff records out.
 // Independent of the application version — bumped only when that shape
-// changes. faber-box ships from the host as the same build, so a version
-// mismatch at either end is a FABER_BOX_BIN-misconfiguration detector
-// (a stale or foreign sequencer binary), not a migration path.
+// changes incompatibly; a purely additive env variable whose absence the
+// box tolerates (e.g. FABER_MODEL) does not bump it. faber-box ships from
+// the host as the same build, so a version mismatch at either end is a
+// FABER_BOX_BIN-misconfiguration detector (a stale or foreign sequencer
+// binary), not a migration path.
 const ContractVersion = 1
 
 // Environment variable names of the box env contract. The host side
@@ -58,8 +60,12 @@ const (
 	// EnvAttempt is the 1-based attempt ordinal echoed into the record.
 	EnvAttempt = "FABER_ATTEMPT"
 
-	// EnvEffort, EnvExtraInstruction and EnvMaxBudget are pass-throughs to
-	// the agent invocation; unset means the flag / trailer is omitted.
+	// EnvModel, EnvEffort, EnvExtraInstruction and EnvMaxBudget are
+	// pass-throughs to the agent invocation; unset means the flag / trailer
+	// is omitted. Model and effort are mandatory template config, so in
+	// engine-launched boxes both are always set — the omission path serves
+	// direct sequencer invocations.
+	EnvModel            = "FABER_MODEL"
 	EnvEffort           = "FABER_EFFORT"
 	EnvExtraInstruction = "FABER_EXTRA_INSTRUCTION"
 	EnvMaxBudget        = "FABER_MAX_BUDGET"

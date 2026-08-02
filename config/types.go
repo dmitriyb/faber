@@ -150,9 +150,11 @@ type TemplateDef struct {
 	// shared / inline forms
 	Build  *BuildDef           `yaml:"build,omitempty"` // inline {packages, overlay} (xor Image)
 	Run    RunDef              `yaml:"run,omitempty"`
-	Skill  string              `yaml:"skill,omitempty"` // the /<skill> prompt token; a Skills-library ref ONLY in named mode, else free-form
-	Hooks  HookSet             `yaml:"hooks,omitempty"` // each value: a hook NAME (bare) or a PATH (has separator / begins ./~//)
-	Skills SkillsRef           `yaml:"-"`               // sequence of names OR inline {dir,link}; set by UnmarshalYAML
+	Skill  string              `yaml:"skill,omitempty"`  // the /<skill> prompt token; a Skills-library ref ONLY in named mode, else free-form
+	Model  string              `yaml:"model,omitempty"`  // agent model id; REQUIRED, opaque pass-through (the box renders --model)
+	Effort string              `yaml:"effort,omitempty"` // agent effort level; REQUIRED, opaque pass-through (the box renders --effort)
+	Hooks  HookSet             `yaml:"hooks,omitempty"`  // each value: a hook NAME (bare) or a PATH (has separator / begins ./~//)
+	Skills SkillsRef           `yaml:"-"`                // sequence of names OR inline {dir,link}; set by UnmarshalYAML
 	Inputs map[string]ParamDef `yaml:"inputs,omitempty"`
 	Output map[string]FieldDef `yaml:"output,omitempty"`
 }
