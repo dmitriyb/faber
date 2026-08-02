@@ -38,6 +38,8 @@ templates:
       identity: implementer
       resources: {memory: 8g, cpus: 4}
     skill: implement               # the agent skill invoked headlessly in the box
+    model: agent-model
+    effort: high
     hooks:
       context: ./hooks/gather-context     # opaque: resolve item -> context bundle
       prelude: ./hooks/claim-item         # opaque: branch + claim, signed
@@ -57,6 +59,8 @@ templates:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: reviewer
     skill: review
+    model: agent-model
+    effort: high
     hooks:
       context: ./hooks/fetch-pr
     inputs:
@@ -73,6 +77,8 @@ templates:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: implementer
     skill: fix
+    model: agent-model
+    effort: medium
     hooks:
       context: ./hooks/fetch-pr
     inputs:
@@ -88,6 +94,8 @@ templates:
       env: {FABER_AGENT_CLI: agent-cli}
       identity: merger
     skill: merge
+    model: agent-model
+    effort: low
     inputs:
       repo: {type: string, required: true}
       pr:   {type: int,    required: true}

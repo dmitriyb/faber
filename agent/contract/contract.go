@@ -58,8 +58,12 @@ const (
 	// EnvAttempt is the 1-based attempt ordinal echoed into the record.
 	EnvAttempt = "FABER_ATTEMPT"
 
-	// EnvEffort, EnvExtraInstruction and EnvMaxBudget are pass-throughs to
-	// the agent invocation; unset means the flag / trailer is omitted.
+	// EnvModel, EnvEffort, EnvExtraInstruction and EnvMaxBudget are
+	// pass-throughs to the agent invocation; unset means the flag / trailer
+	// is omitted. Model and effort are mandatory template config, so in
+	// engine-launched boxes both are always set — the omission path serves
+	// direct sequencer invocations.
+	EnvModel            = "FABER_MODEL"
 	EnvEffort           = "FABER_EFFORT"
 	EnvExtraInstruction = "FABER_EXTRA_INSTRUCTION"
 	EnvMaxBudget        = "FABER_MAX_BUDGET"

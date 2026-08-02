@@ -18,7 +18,8 @@ type Invocation struct {
 	Skill     string
 	Body      string // CONTEXT.md bytes, verbatim — the hooks authored it
 	Extra     string // optional operator note for a single run
-	Effort    string // pass-through; empty omits the flag
+	Model     string // pass-through; empty omits the flag (mandatory template config in engine runs)
+	Effort    string // pass-through; empty omits the flag (mandatory template config in engine runs)
 	MaxBudget string // pass-through; empty omits the flag
 }
 
@@ -37,6 +38,9 @@ func (i Invocation) Prompt() string {
 // would be a control enforced by the untrusted thing it is meant to control.
 func (i Invocation) Argv() []string {
 	argv := []string{i.CLI, "-p", i.Prompt(), "--permission-mode", "bypassPermissions"}
+	if i.Model != "" {
+		argv = append(argv, "--model", i.Model)
+	}
 	if i.Effort != "" {
 		argv = append(argv, "--effort", i.Effort)
 	}
@@ -56,6 +60,7 @@ func (b *Box) runAgent(ctx context.Context) error {
 		Skill:     b.Env.Skill,
 		Body:      b.Bundle.Doc,
 		Extra:     b.Env.ExtraInstruction,
+		Model:     b.Env.Model,
 		Effort:    b.Env.Effort,
 		MaxBudget: b.Env.MaxBudget,
 	}

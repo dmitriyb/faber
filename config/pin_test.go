@@ -18,6 +18,8 @@ templates:
 ` + templateBody + `
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
+    model: agent-model
+    effort: high
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
 workflows:
@@ -53,6 +55,8 @@ templates:
     build: {packages: [git], pin: {rev: "25.11", sha256: "sha256:abc"}}
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
+    model: agent-model
+    effort: high
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
 workflows:
@@ -144,6 +148,8 @@ templates:
     build: {packages: [git], pin: {sha256: "sha256:abc"}}
     run: {env: {FABER_AGENT_CLI: agent-cli}}
     skill: act
+    model: agent-model
+    effort: high
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
 workflows:

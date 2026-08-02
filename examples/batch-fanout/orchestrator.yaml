@@ -26,6 +26,8 @@ templates:
       identity: migrator
       env: {FABER_AGENT_CLI: claude}
     skill: migrate
+    model: claude-sonnet-5
+    effort: medium
     hooks:
       context: ./hooks/module-context
       on_failure: ./hooks/abandon-branch

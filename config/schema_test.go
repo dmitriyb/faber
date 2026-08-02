@@ -97,6 +97,8 @@ func minimalConfig() *Config {
 				Build:  &BuildDef{Packages: []string{"git"}},
 				Run:    RunDef{Identity: "worker", Env: map[string]string{"FABER_AGENT_CLI": "agent-cli"}},
 				Skill:  "act",
+				Model:  "agent-model",
+				Effort: "high",
 				Inputs: map[string]ParamDef{"input": {Type: "string", Required: true}},
 				Output: map[string]FieldDef{"result": {Type: "string", Required: true}},
 			},
@@ -137,6 +139,24 @@ func TestSchemaLoaderCheckCatalog(t *testing.T) {
 				c.Templates["box"] = tp
 			},
 			`templates.box.run.identity: unknown identity "ghost"`,
+		},
+		{
+			"missing template model",
+			func(c *Config) {
+				tp := c.Templates["box"]
+				tp.Model = ""
+				c.Templates["box"] = tp
+			},
+			"templates.box.model: required",
+		},
+		{
+			"missing template effort",
+			func(c *Config) {
+				tp := c.Templates["box"]
+				tp.Effort = ""
+				c.Templates["box"] = tp
+			},
+			"templates.box.effort: required",
 		},
 		{
 			"item ref outside a generate binding",

@@ -29,11 +29,20 @@ func TestInvocationPromptAndArgv(t *testing.T) {
 		},
 		{
 			name:       "all pass-throughs",
-			inv:        Invocation{CLI: "agent-cli", Skill: "skill-a", Body: "body", Extra: "note", Effort: "high", MaxBudget: "2.50"},
+			inv:        Invocation{CLI: "agent-cli", Skill: "skill-a", Body: "body", Extra: "note", Model: "agent-model", Effort: "high", MaxBudget: "2.50"},
 			wantPrompt: "/skill-a\n\nbody\n\nADDITIONAL INSTRUCTION: note",
 			wantArgv: []string{
 				"agent-cli", "-p", "/skill-a\n\nbody\n\nADDITIONAL INSTRUCTION: note",
-				"--permission-mode", "bypassPermissions", "--effort", "high", "--max-budget-usd", "2.50",
+				"--permission-mode", "bypassPermissions", "--model", "agent-model", "--effort", "high", "--max-budget-usd", "2.50",
+			},
+		},
+		{
+			name:       "model and effort only (the mandatory template pair)",
+			inv:        Invocation{CLI: "agent-cli", Skill: "skill-a", Body: "body", Model: "agent-model", Effort: "low"},
+			wantPrompt: "/skill-a\n\nbody",
+			wantArgv: []string{
+				"agent-cli", "-p", "/skill-a\n\nbody",
+				"--permission-mode", "bypassPermissions", "--model", "agent-model", "--effort", "low",
 			},
 		},
 	}
@@ -49,11 +58,13 @@ func TestInvocationPromptAndArgv(t *testing.T) {
 	}
 }
 
-// Verifies ae434449cac9: unset effort/budget emit no flags at all.
+// Verifies ae434449cac9: unset model/effort/budget emit no flags at all (the
+// omission path serves direct sequencer invocations; engine runs always set
+// model and effort from the template's mandatory fields).
 func TestInvocationOmitsUnsetFlags(t *testing.T) {
 	argv := Invocation{CLI: "agent-cli", Skill: "skill-a", Body: "b"}.Argv()
 	joined := strings.Join(argv, " ")
-	for _, flag := range []string{"--effort", "--max-budget-usd"} {
+	for _, flag := range []string{"--model", "--effort", "--max-budget-usd"} {
 		if strings.Contains(joined, flag) {
 			t.Fatalf("argv %q carries %s though unset", joined, flag)
 		}

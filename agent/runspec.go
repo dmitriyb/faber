@@ -72,8 +72,10 @@ type BoxSpec struct {
 	// May be omitted when the template's env already carries FABER_AGENT_CLI.
 	AgentCLI string
 
-	// Effort, ExtraInstruction and MaxBudget are pass-throughs to the agent
-	// invocation; empty omits them.
+	// Model, Effort, ExtraInstruction and MaxBudget are pass-throughs to the
+	// agent invocation; empty omits them. Model and Effort come from the
+	// template's mandatory fields, so engine callers always set them.
+	Model            string
 	Effort           string
 	ExtraInstruction string
 	MaxBudget        string
@@ -188,6 +190,7 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	}
 	setIf(contract.EnvIdentity, tpl.Identity)
 	setIf(contract.EnvAgentCLI, spec.AgentCLI)
+	setIf(contract.EnvModel, spec.Model)
 	setIf(contract.EnvEffort, spec.Effort)
 	setIf(contract.EnvExtraInstruction, spec.ExtraInstruction)
 	setIf(contract.EnvMaxBudget, spec.MaxBudget)

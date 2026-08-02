@@ -283,6 +283,12 @@ func (v *validator) checkTemplates() {
 		if t.Skill == "" {
 			v.addf(path+".skill", "required")
 		}
+		if t.Model == "" {
+			v.addf(path+".model", "required; the agent model is pinned per template, never left to the CLI's vendor default")
+		}
+		if t.Effort == "" {
+			v.addf(path+".effort", "required; the agent effort level is pinned per template, never left to the CLI's vendor default")
+		}
 		v.checkToolset(path, t)
 		if t.Build != nil {
 			v.checkPin(path+".build.pin", t.Build.Pin)

@@ -131,6 +131,8 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		PreludeHook: node.Template.Hooks.Prelude,
 		SkillsDir:   skillsHost,
 		SkillsLink:  skillsLink(node.Template),
+		Model:       node.Template.Model,
+		Effort:      node.Template.Effort,
 	})
 	if err != nil {
 		return err

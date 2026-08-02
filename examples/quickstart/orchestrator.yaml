@@ -13,6 +13,8 @@ templates:
       env:
         FABER_AGENT_CLI: claude        # which agent CLI the box invokes (no vendor default)
     skill: summarize
+    model: claude-sonnet-5
+    effort: medium
     inputs:
       topic: {type: string, required: true}
       audience: {type: string, required: false, default: engineers}

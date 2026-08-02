@@ -50,6 +50,7 @@ type BoxEnv struct {
 	// FABER_ATTEMPT is absent).
 	Attempt int
 
+	Model            string
 	Effort           string
 	ExtraInstruction string
 	MaxBudget        string
@@ -114,6 +115,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		RemoteURL:        get(security.EnvRemoteURL),
 		HostKey:          get(security.EnvHostKey),
 		Inputs:           map[string]string{},
+		Model:            get(contract.EnvModel),
 		Effort:           get(contract.EnvEffort),
 		ExtraInstruction: get(contract.EnvExtraInstruction),
 		MaxBudget:        get(contract.EnvMaxBudget),

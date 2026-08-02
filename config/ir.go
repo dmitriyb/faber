@@ -128,6 +128,8 @@ type ResolvedTemplate struct {
 	Env       map[string]string   `json:"env,omitempty"`
 	Volumes   map[string]string   `json:"volumes,omitempty"`
 	Skill     string              `json:"skill"`
+	Model     string              `json:"model"`  // mandatory opaque agent pass-through (the box renders --model)
+	Effort    string              `json:"effort"` // mandatory opaque agent pass-through (the box renders --effort)
 	Hooks     HookSet             `json:"hooks"`
 	Skills    *ResolvedSkills     `json:"skills,omitempty"` // optional skill-definition delivery; nil = no skills leg
 	Inputs    map[string]ParamDef `json:"inputs"`
