@@ -15,7 +15,8 @@ skip otherwise.
   merge steps.
 - A fake resolver script emitting a fixed token; a failing variant (exit 1);
   a slow variant (context-cancellation tests).
-- Throwaway file keys per identity; a scratch dir for agent sockets.
+- Throwaway file keys per identity; agent sockets live in per-spawn
+  `MkdirTemp` dirs (short paths — the `sun_path` cap), never under scratch.
 
 ## Scenarios
 
@@ -23,7 +24,8 @@ skip otherwise.
    ordered fragment — network flags, proxy env, NO_PROXY list, remote URL
    env with the repo param spliced (`.../sandbox.git`), pinned host-key
    env, socket mount + SSH_AUTH_SOCK, service handle env, no runtime flag —
-   byte-identical across repeated assembly. With `agent-api` in file mode
+   byte-identical across repeated assembly except the socket mount's host
+   path, which is attempt-unique by design. With `agent-api` in file mode
    the fragment also carries exactly one `--tmpfs /run/secrets` and **no**
    token flag; `Assembled.SecretsStdin` decodes to `{"agent-api":
    "<base64(token)>"}`. Adding `runtime: runsc` appends exactly
