@@ -760,8 +760,8 @@ func TestSigningCommitterIdentity(t *testing.T) {
 }
 
 // Verifies proposal 2026-08-03-gated-committer-email: a gated step with no
-// committer email aborts at the signing phase naming FABER_GIT_EMAIL — the
-// box never invents an address.
+// committer email aborts at the signing phase naming the add-key remedy —
+// the box never invents an address.
 func TestSigningMissingEmailAborts(t *testing.T) {
 	d := newTestDirs(t)
 	fr := &fakeRunner{}
@@ -772,8 +772,8 @@ func TestSigningMissingEmailAborts(t *testing.T) {
 	}
 	err := b.configureSigning(context.Background())
 	berr := &boxError{}
-	if err == nil || !asBoxErrorOK(err, &berr) || berr.Reason != contract.ReasonSigning || !strings.Contains(berr.Detail, "FABER_GIT_EMAIL") {
-		t.Fatalf("err = %v, want signing violation naming FABER_GIT_EMAIL", err)
+	if err == nil || !asBoxErrorOK(err, &berr) || berr.Reason != contract.ReasonSigning || !strings.Contains(berr.Detail, "--git-email") {
+		t.Fatalf("err = %v, want signing violation naming the add-key --git-email remedy", err)
 	}
 	for _, call := range fr.argvs() {
 		if strings.HasPrefix(call, "git config") {
@@ -911,7 +911,7 @@ func TestContractVersionHandshake(t *testing.T) {
 	}
 	rec := readRecord(t, d)
 	if rec.Error == nil || rec.Error.Reason != contract.ReasonEnvContract ||
-		!strings.Contains(rec.Error.Detail, "FABER_BOX_BIN") {
+		!strings.Contains(rec.Error.Detail, "box_bin") {
 		t.Fatalf("want env-contract failure naming FABER_BOX_BIN, got %+v", rec.Error)
 	}
 

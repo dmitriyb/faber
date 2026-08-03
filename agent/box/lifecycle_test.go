@@ -405,7 +405,7 @@ func TestLifecycle_HookLessTemplate(t *testing.T) {
 // 2026-08-03-gated-committer-email): signing config is derived from the
 // forwarded agent — the clone's git config matches ssh-add -L — two loaded
 // keys abort at the signing phase naming the count, and a missing
-// FABER_GIT_EMAIL aborts at the signing phase naming the variable.
+// registered committer email aborts at the signing phase naming the add-key remedy.
 func TestLifecycle_SigningDerivedFromForwardedAgent(t *testing.T) {
 	t.Run("one key configures the clone", func(t *testing.T) {
 		f := newFixture(t)
@@ -464,8 +464,8 @@ func TestLifecycle_SigningDerivedFromForwardedAgent(t *testing.T) {
 		if h.Phase != "signing" || h.Reason != contract.ReasonSigning {
 			t.Fatalf("handoff = %+v", h)
 		}
-		if rec := f.record(); !strings.Contains(rec.Error.Detail, "FABER_GIT_EMAIL") {
-			t.Fatalf("detail = %q, want FABER_GIT_EMAIL named", rec.Error.Detail)
+		if rec := f.record(); !strings.Contains(rec.Error.Detail, "--git-email") {
+			t.Fatalf("detail = %q, want the add-key --git-email remedy named", rec.Error.Detail)
 		}
 	})
 }
