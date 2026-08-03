@@ -34,7 +34,10 @@ is the run contract faber itself constructs and injects per container.)
    typically `0` on macOS, unset on Linux), `state_dir`. Strict decode
    (unknown keys refused), absent file = all defaults, malformed file
    refuses the invocation. The effective config is logged at run start so
-   what a run uses is visible.
+   what a run uses is visible. The one deliberate env residue is
+   XDG_CONFIG_HOME: it relocates the config HOME (the platform convention
+   roles.json already follows), never a value — an attacker who can plant a
+   whole alternate config tree already owns the account.
 
 ## Impact expectation
 

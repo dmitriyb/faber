@@ -37,7 +37,10 @@ type HostConfig struct {
 
 // HostConfigPath returns host.json under faber's config home, sibling of
 // roles.json: $XDG_CONFIG_HOME/faber/host.json when XDG_CONFIG_HOME is set
-// and absolute, else ~/.config/faber/host.json.
+// and absolute, else ~/.config/faber/host.json. XDG_CONFIG_HOME is the one
+// deliberate env residue: it relocates the config HOME (the platform
+// convention roles.json already follows), never a value — an attacker who
+// can plant a whole alternate config tree already owns the account.
 func HostConfigPath() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(xdg) {
 		return filepath.Join(xdg, "faber", "host.json")
@@ -62,6 +65,21 @@ func LoadHostConfig(path string) (HostConfig, error) {
 			return hc, nil
 		}
 		return hc, fmt.Errorf("read host config %s: %w", path, err)
+	}
+	// Key check is byte-exact BEFORE the decode: Go's case-insensitive JSON
+	// field matching would otherwise accept "BOX_BIN" — a differently-cased
+	// key is at best a typo and at worst a shadow, so it is refused, not
+	// normalized.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return hc, fmt.Errorf("parse host config %s: %w", path, err)
+	}
+	for key := range raw {
+		switch key {
+		case "box_bin", "agent_socket_group", "state_dir":
+		default:
+			return hc, fmt.Errorf("parse host config %s: unknown key %q (keys are byte-exact lowercase snake_case)", path, key)
+		}
 	}
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.DisallowUnknownFields()

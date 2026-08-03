@@ -106,11 +106,14 @@ func TestReferenceBrokenWiringFailsValidate(t *testing.T) {
 // complete — every seam non-nil — and the executor adapter refuses to run
 // without the CLI wiring context instead of panicking on nil config.
 func TestWiredDepsComplete(t *testing.T) {
-	deps := wireDeps(os.Stdout, os.Stderr)
+	deps, err := wireDeps(os.Stdout, os.Stderr)
+	if err != nil {
+		t.Fatalf("wireDeps: %v", err)
+	}
 	if deps.Prover == nil || deps.Builder == nil || deps.Executor == nil || deps.Journal == nil {
 		t.Fatalf("wireDeps left a seam nil: %+v", deps)
 	}
-	err := deps.Executor.Execute(t.Context(), &config.IR{}, nil, config.RunOptions{}, discardLogger())
+	err = deps.Executor.Execute(t.Context(), &config.IR{}, nil, config.RunOptions{}, discardLogger())
 	if err == nil || !strings.Contains(err.Error(), "wiring context") {
 		t.Errorf("executor without wiring context: want a clear refusal, got %v", err)
 	}

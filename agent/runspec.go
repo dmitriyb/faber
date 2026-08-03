@@ -80,7 +80,9 @@ type BoxSpec struct {
 	ExtraInstruction string
 	MaxBudget        string
 
-	// GitName and GitEmail override the box's committer defaults.
+	// GitName and GitEmail set the box committer identity (per-role registry
+	// state; the name falls back to faber-<identity>, the email never falls
+	// back — gated steps abort without one).
 	GitName  string
 	GitEmail string
 

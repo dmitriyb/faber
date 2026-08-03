@@ -211,8 +211,11 @@ func WriteRegistryList(reg Registry, stdout, stderr io.Writer) {
 	for _, role := range roles {
 		e := reg[role]
 		git := e.GitEmail
-		if e.GitName != "" && git != "" {
+		switch {
+		case e.GitName != "" && e.GitEmail != "":
 			git = e.GitName + " <" + e.GitEmail + ">"
+		case e.GitName != "":
+			git = e.GitName
 		}
 		cols := []string{role, e.Fingerprint, git, e.Comment}
 		for len(cols) > 2 && cols[len(cols)-1] == "" {

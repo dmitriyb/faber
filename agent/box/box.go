@@ -675,7 +675,7 @@ func (b *Box) configureSigning(ctx context.Context) error {
 	if b.Env.GitEmail == "" {
 		return &boxError{
 			Reason: contract.ReasonSigning,
-			Detail: "FABER_GIT_EMAIL is empty; a gated step requires an explicit committer email (set it in the faber host environment)",
+			Detail: "no committer email for this role; a gated step requires one — register it: faber add-key --role <role> --fingerprint <fp> --git-email <addr>",
 		}
 	}
 	name := b.Env.GitName

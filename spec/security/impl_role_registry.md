@@ -97,10 +97,17 @@ re-run in an init flow.
 ## list-keys
 
 Load the registry and print one line per role in sorted order:
-`<role>  <fingerprint>  <comment>` (comment column omitted when empty),
-aligned for reading. Output goes to stdout; an empty registry prints a
+`<role>  <fingerprint>  <git identity>  <comment>` — the git identity renders
+as `name <email>`, bare email, or bare name, whichever fields exist; empty
+trailing columns are right-trimmed. Aligned for reading. Output goes to stdout; an empty registry prints a
 one-line "no roles registered" note to stderr and exits 0. Fingerprints are
 public material and safe to print; no key material exists to leak.
+
+Note: for a path-form identity (an explicit `key:` in the orchestrator), the
+registry entry's git identity is applied by ROLE NAME without verifying the
+path's key against the entry's fingerprint — binding-level enforcement of
+key↔email consistency is the gate's business, not faber's (mechanism, not
+policy).
 
 ## KeyLocator and resolution (internal/security/resolve.go)
 

@@ -76,7 +76,7 @@ subcommand.
 | `faber run <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
 | `faber resume <run-id> [--fresh] [--interactive <step-id>] [--report-json path\|-]` | journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
 | `faber upgrade [--check\|--dry-run] [--version vX.Y.Z] [--rollback] [--force]` | active-runs guard (refuse while live/unfinished unless `--force`) -> resolve faber/faber-box paths -> run the embedded install.sh in upgrade mode (`Installer` seam; forward-only latest, or the exact `--version` in any direction) | both binaries moved forward to the latest signed release (or installed at `--version`, or rolled back), or reported for `--check` |
-| `faber add-key --role <name> --fingerprint SHA256:… [--comment <c>] [--force]` | security.RoleRegistry load -> AddKey -> atomic save | the role points at the fingerprint (upsert or verified no-op) |
+| `faber add-key --role <name> --fingerprint SHA256:… [--comment <c>] [--git-name <n>] [--git-email <e>] [--force]` | security.RoleRegistry load -> AddKey -> atomic save | the role points at the fingerprint with its committer identity (upsert or verified no-op) |
 | `faber list-keys` | security.RoleRegistry load -> print | the registry was read and printed |
 | `faber version` (also `--version` / `-v` on the root) | print version, commit, build date | — |
 
@@ -154,6 +154,23 @@ project file**; `Load` transitively pulls its `include:` closure and merges the
 component libraries before validation (see `arch_loader.md`). A single-file config
 with no `include:` behaves exactly as before, so the default and every existing
 invocation are unchanged.
+
+## Host configuration (config/hostcfg.go)
+
+Faber reads no configuration from its process environment. Per-machine
+inputs live in `host.json` beside the role registry under faber's config
+home: `box_bin` (absolute-only path of the faber-box sequencer; default
+next-to-faber), `agent_socket_group` (the identity binding's `--group-add`
+escape; typically "0" on macOS docker VMs, unset on Linux), `state_dir`
+(default `.faber`). The wiring loads it exactly once, before anything is
+constructed: absent file = all defaults; a malformed file — bad JSON, an
+unknown or differently-cased key (byte-exact lowercase snake_case), a
+relative `box_bin`, trailing content — refuses the whole invocation through
+main's single exit path (operational, exit 1), version/help included: faber
+never runs with half-read host state and has no ambient fallback to degrade
+to. The effective config is logged at run start (`HostConfig.Describe`). The
+one deliberate env residue is `XDG_CONFIG_HOME`, which relocates the config
+HOME (the platform convention `roles.json` already follows), never a value.
 
 ## Exit codes
 

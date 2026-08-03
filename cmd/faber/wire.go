@@ -65,15 +65,14 @@ func boxBinary(hc config.HostConfig) string {
 // wireDeps builds the config.Deps injection for the real binary. The wiring
 // logger covers construction-time components only; every command passes its
 // own flag-configured logger through the seams.
-func wireDeps(stdout, stderr io.Writer) config.Deps {
+func wireDeps(stdout, stderr io.Writer) (config.Deps, error) {
 	wlog := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	// The host config is loaded exactly once, before anything is constructed:
-	// a malformed file refuses the whole invocation (exit 2) rather than
-	// running with half-read host state.
+	// a malformed file refuses the whole invocation — main maps the error to
+	// the operational exit code through its single exit path.
 	hc, err := config.LoadHostConfig(config.HostConfigPath())
 	if err != nil {
-		fmt.Fprintln(stderr, "faber:", err)
-		os.Exit(2)
+		return config.Deps{}, err
 	}
 	docker := infra.NewDockerCLI(wlog)
 	builder := infra.NewImageBuilder(docker, infra.NewNixCLI(wlog), infra.DefaultNixpkgsPin(),
@@ -89,7 +88,7 @@ func wireDeps(stdout, stderr io.Writer) config.Deps {
 		BuildInfo: config.BuildInfo{Version: version, Commit: commit, Date: date},
 		Installer: config.EmbeddedInstaller{},
 		BoxBinary: boxBinary(hc),
-	}
+	}, nil
 }
 
 // registryController adapts the security RoleRegistry to the config CLI's

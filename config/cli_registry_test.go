@@ -10,14 +10,14 @@ import (
 // fakeRegistry records add-key/list-keys calls and returns a scripted error so
 // the CLI's exit-code mapping is testable without the security module.
 type fakeRegistry struct {
-	added   []string // "role fingerprint comment force"
+	added   []string // "role fingerprint comment gitName gitEmail force"
 	addErr  error
 	listErr error
 	listOut string
 }
 
 func (f *fakeRegistry) AddKey(role, fingerprint, comment, gitName, gitEmail string, force bool) error {
-	f.added = append(f.added, fmt.Sprintf("%s %s %s %v", role, fingerprint, comment, force))
+	f.added = append(f.added, fmt.Sprintf("%s %s %s %s %s %v", role, fingerprint, comment, gitName, gitEmail, force))
 	return f.addErr
 }
 
@@ -35,11 +35,14 @@ const goodFP = "SHA256:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
 // controller and exits 0.
 func TestCLIAddKeyDispatches(t *testing.T) {
 	reg := &fakeRegistry{}
-	code, _, stderr := runCLI(t, Deps{Registry: reg}, "add-key", "--role", "reviewer", "--fingerprint", goodFP, "--comment", "yk")
+	code, _, stderr := runCLI(t, Deps{Registry: reg}, "add-key", "--role", "reviewer", "--fingerprint", goodFP, "--comment", "yk",
+		"--git-name", "faber-rev", "--git-email", "rev@example.com")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
-	if len(reg.added) != 1 || reg.added[0] != "reviewer "+goodFP+" yk false" {
+	// Positionally asserted so a transposed pair of the adjacent string flags
+	// cannot pass.
+	if len(reg.added) != 1 || reg.added[0] != "reviewer "+goodFP+" yk faber-rev rev@example.com false" {
 		t.Fatalf("controller calls: %v", reg.added)
 	}
 }

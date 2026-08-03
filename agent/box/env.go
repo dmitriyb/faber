@@ -176,11 +176,11 @@ func (e *BoxEnv) validate() error {
 	need(e.ResultDir, contract.EnvResultDir)
 	need(e.BundleDir, contract.EnvBundleDir)
 	// Contract handshake: a host that stamps a version must match this
-	// binary exactly — a mismatch means FABER_BOX_BIN points at a stale or
+	// binary exactly — a mismatch means the host's box_bin points at a stale or
 	// foreign sequencer and no phase below may run on guessed semantics.
 	// Absence is tolerated (direct invocations, lifecycle tests).
 	if e.rawContract != "" && e.rawContract != strconv.Itoa(contract.ContractVersion) {
-		errs = append(errs, fmt.Errorf("%s: host speaks contract v%s, this faber-box implements v%d — FABER_BOX_BIN points at a mismatched binary",
+		errs = append(errs, fmt.Errorf("%s: host speaks contract v%s, this faber-box implements v%d — the host config's box_bin points at a mismatched binary",
 			contract.EnvContractVersion, e.rawContract, contract.ContractVersion))
 	}
 	for _, slot := range e.RequiredInputs {

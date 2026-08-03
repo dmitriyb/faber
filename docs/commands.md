@@ -29,8 +29,10 @@ start.
   (`--git-name` / `--git-email`). The email is required before a role can run
   gated steps — a box refuses to invent one — and must be an address the
   forge can tie to the key's account.
-- `host.json` — per-machine knobs, strict-decoded (unknown keys refused,
-  malformed file refuses the invocation):
+- `host.json` — per-machine knobs, strict-decoded (unknown or
+  differently-cased keys refused; a malformed file refuses the whole
+  invocation with exit 1, `version`/`--help` included — faber never runs
+  with half-read host state):
 
 | Field | Purpose |
 |---|---|

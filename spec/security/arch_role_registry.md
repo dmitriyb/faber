@@ -21,14 +21,19 @@ A single JSON file, `$XDG_CONFIG_HOME/faber/roles.json` (fallback
 
 ```json
 {
-  "implementer_work": { "fingerprint": "SHA256:abc…", "comment": "yubikey 5c" },
-  "reviewer":         { "fingerprint": "SHA256:def…" }
+  "implementer_work": { "fingerprint": "SHA256:abc…", "comment": "yubikey 5c",
+                        "git_name": "faber-impl", "git_email": "you@example.com" },
+  "reviewer":         { "fingerprint": "SHA256:def…", "git_email": "you@example.com" }
 }
 ```
 
 Role names are free and may be split per project (`implementer_work`,
 `implementer_personal`); the registry keys off the role, never off a
-filename, and holds nothing but a fingerprint and an optional human label.
+filename, and holds nothing but a fingerprint, an optional human label, and
+the role's git committer identity (`git_name`/`git_email` — the email is a
+property of the role's key binding: a forge verifies a signature only when
+the committer email belongs to the account owning the key; gated boxes
+refuse to run a role without one).
 The directory is created lazily (0700) on first write; the file is written
 0600. There is exactly one registry per user; it is global, not per-repo
 (the per-repo `fingerprint → role` direction is the gate's concern and
@@ -36,7 +41,8 @@ lives entirely outside faber).
 
 ## Two operations (exposed as CLI subcommands)
 
-- **add-key** `role, fingerprint, comment?` — upsert one entry. The
+- **add-key** `role, fingerprint, comment?, git_name?, git_email?` — upsert
+  one entry. The
   fingerprint is validated (`SHA256:` + 43 base64 chars); a malformed
   fingerprint is rejected before any write. The role name is validated as a
   bare identifier (no path separators, no whitespace) since it is both a
@@ -47,11 +53,14 @@ lives entirely outside faber).
   credential out from under a running project. The optional comment is
   validated as a single printable line (control characters — newlines, tabs,
   terminal escapes — are rejected) since `list-keys` prints it back to the
-  operator's terminal verbatim. Only the fingerprint and label are ever
-  written; no key material.
+  operator's terminal verbatim; the git identity fields get the same check
+  plus a `local@domain` shape on the email (they are written into commit
+  headers). Changing only the label or git identity of an existing role
+  needs no `--force` — the credential binding is unchanged. Only the
+  fingerprint, label, and git identity are ever written; no key material.
 - **list-keys** — read the registry and report every entry (role,
-  fingerprint, comment) in a stable, sorted-by-role order. A missing
-  registry file reads as empty, not an error.
+  fingerprint, git identity, comment) in a stable, sorted-by-role order. A
+  missing registry file reads as empty, not an error.
 
 Both are thin: the CLI (config module) parses flags and dispatches; the
 registry owns the load/validate/atomic-write logic. See
