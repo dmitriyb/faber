@@ -197,7 +197,8 @@ type CmdResult struct{ Stdout []byte; StderrTail []byte; ExitCode int }
   history. Gateless steps get `os.MkdirTemp` instead and skip signing.
 - `configureSigning`: `ssh-add -L` via the runner; `len(lines) != 1` is an
   error naming the count; empty `Env.GitEmail` is an error naming
-  `FABER_GIT_EMAIL` (gated steps require an explicit committer email; no
+  `FABER_GIT_EMAIL`, which the host injects per role from the registry
+  (gated steps require an explicit committer email; no
   synthetic fallback); then four `git config` invocations (`gpg.format
   ssh`, `user.signingkey "key::"+pub`, `commit.gpgsign true`, name with
   default `faber-<identity>`, email verbatim).

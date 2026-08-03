@@ -28,8 +28,8 @@ import (
 // journal lives beside the config that produced it) but is absolutized HERE —
 // state-dir paths end up as docker -v host paths, and docker reads a relative
 // host path as a named volume, silently detaching every result mount.
-func stateDir() string {
-	d := os.Getenv("FABER_STATE_DIR")
+func stateDir(hc config.HostConfig) string {
+	d := hc.StateDir
 	if d == "" {
 		d = ".faber"
 	}
@@ -41,10 +41,12 @@ func stateDir() string {
 }
 
 // boxBinary locates the faber-box sequencer to bind-mount into containers:
-// next to the faber executable unless FABER_BOX_BIN overrides. Absolutized
-// for the same docker -v reason as stateDir.
-func boxBinary() string {
-	b := os.Getenv("FABER_BOX_BIN")
+// next to the faber executable unless the host config's box_bin overrides.
+// Absolutized for the same docker -v reason as stateDir. The override comes
+// ONLY from the explicit host file — a binary that runs as root inside every
+// box must never be swappable through ambient process environment.
+func boxBinary(hc config.HostConfig) string {
+	b := hc.BoxBin
 	if b == "" {
 		exe, err := os.Executable()
 		if err != nil {
@@ -65,20 +67,28 @@ func boxBinary() string {
 // own flag-configured logger through the seams.
 func wireDeps(stdout, stderr io.Writer) config.Deps {
 	wlog := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	// The host config is loaded exactly once, before anything is constructed:
+	// a malformed file refuses the whole invocation (exit 2) rather than
+	// running with half-read host state.
+	hc, err := config.LoadHostConfig(config.HostConfigPath())
+	if err != nil {
+		fmt.Fprintln(stderr, "faber:", err)
+		os.Exit(2)
+	}
 	docker := infra.NewDockerCLI(wlog)
 	builder := infra.NewImageBuilder(docker, infra.NewNixCLI(wlog), infra.DefaultNixpkgsPin(),
-		filepath.Join(stateDir(), "infra"), wlog)
-	store := failure.NewStore(filepath.Join(stateDir(), "runs"), wlog)
+		filepath.Join(stateDir(hc), "infra"), wlog)
+	store := failure.NewStore(filepath.Join(stateDir(hc), "runs"), wlog)
 	return config.Deps{
 		Prover:    builder.PackageProver(),
 		Builder:   builder.ConfigBuilder(),
 		Journal:   store,
 		Audit:     store,
-		Executor:  &wiredExecutor{stdout: stdout, docker: docker, builder: builder, store: store},
+		Executor:  &wiredExecutor{stdout: stdout, docker: docker, builder: builder, store: store, host: hc},
 		Registry:  registryController{},
 		BuildInfo: config.BuildInfo{Version: version, Commit: commit, Date: date},
 		Installer: config.EmbeddedInstaller{},
-		BoxBinary: boxBinary(),
+		BoxBinary: boxBinary(hc),
 	}
 }
 
@@ -94,13 +104,13 @@ type registryController struct{}
 // invocations where the later rename wins and drops the earlier update. For an
 // interactive init-flow CLI that window is acceptable; hardening it would mean
 // an advisory lock on the config dir, which this scope does not add.
-func (registryController) AddKey(role, fingerprint, comment string, force bool) error {
+func (registryController) AddKey(role, fingerprint, comment, gitName, gitEmail string, force bool) error {
 	path := security.RegistryPath()
 	reg, err := security.LoadRegistry(path)
 	if err != nil {
 		return err
 	}
-	reg, changed, err := security.AddKey(reg, role, fingerprint, comment, force)
+	reg, changed, err := security.AddKey(reg, role, fingerprint, comment, gitName, gitEmail, force)
 	if err != nil {
 		var ve *security.ValidationError
 		if errors.As(err, &ve) {
@@ -132,9 +142,11 @@ type wiredExecutor struct {
 	docker  infra.DockerClient
 	builder *infra.ImageBuilder
 	store   *failure.Store
+	host    config.HostConfig
 }
 
 func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params config.Params, opts config.RunOptions, logger *slog.Logger) error {
+	logger.Info("host config", "effective", w.host.Describe(config.HostConfigPath()))
 	cfg := opts.Config
 	if cfg == nil || opts.Targets == nil {
 		return fmt.Errorf("faber: internal: executor invoked without the CLI wiring context")
@@ -161,6 +173,7 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 	}
 	identityBinding.Registry = reg
 	identityBinding.Locator = security.NewKeyLocator(logger)
+	identityBinding.SocketGroup = w.host.AgentSocketGroup
 	bindings := security.NewBindingSet(
 		netBinding,
 		remoteBinding,
@@ -183,21 +196,28 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 		remote = nil
 	}
 
-	entry := boxBinary()
+	// Committer identity is per-role registry state — never process env. The
+	// map hands pipeline only what it needs, keeping it free of the security
+	// package.
+	gitIdentities := map[string]pipeline.GitIdentity{}
+	for role, e := range reg {
+		gitIdentities[role] = pipeline.GitIdentity{Name: e.GitName, Email: e.GitEmail}
+	}
+
+	entry := boxBinary(w.host)
 	images := imageTagger{b: w.builder}
 	ex := &pipeline.Executor{
 		Store: w.store,
 		Boxes: &pipeline.AgentBoxes{
-			Containers:  infra.NewContainerRunner(w.docker, logger),
-			Bindings:    bindings,
-			EntryBinary: entry,
-			Network:     network,
-			Remote:      remote,
-			Identities:  cfg.Identities,
-			Services:    cfg.Credentials.Services,
-			GitName:     os.Getenv("FABER_GIT_NAME"),
-			GitEmail:    os.Getenv("FABER_GIT_EMAIL"),
-			Log:         logger,
+			Containers:    infra.NewContainerRunner(w.docker, logger),
+			Bindings:      bindings,
+			EntryBinary:   entry,
+			Network:       network,
+			Remote:        remote,
+			Identities:    cfg.Identities,
+			Services:      cfg.Credentials.Services,
+			GitIdentities: gitIdentities,
+			Log:           logger,
 		},
 		Hooks:      &failure.ExecHookRunner{Log: logger},
 		Source:     infra.NewCommandRunner(logger),

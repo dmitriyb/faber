@@ -10,7 +10,8 @@ Both binaries — `faber` (the host CLI) and `faber-box` (bind-mounted
 read-only into every box; a static `linux` binary regardless of the host's
 own OS) — come from the signed GitHub release; see the README's install
 section. `faber` looks for `faber-box` next to its own executable by
-default; set `FABER_BOX_BIN` to relocate it. Building from source instead
+default; set `box_bin` in `~/.config/faber/host.json` to relocate it (an
+explicit absolute path — never an environment variable). Building from source instead
 (`go build ./cmd/faber`, `CGO_ENABLED=0 GOOS=linux go build ./cmd/faber-box`)
 works identically — the release pipeline runs the same build, just
 cross-compiled and signed; see `spec/delivery/arch_release.md`.
@@ -34,8 +35,8 @@ faber build    --config examples/quickstart/orchestrator.yaml
 
 ## State directory
 
-`FABER_STATE_DIR` (default `.faber`, resolved against the working directory)
-holds:
+The state directory (default `.faber`, resolved against the working
+directory; override with `state_dir` in `~/.config/faber/host.json`) holds:
 
 - `runs/<run-id>/journal.jsonl` — the append-only run journal plus per-box attempt directories (result records, failure handoffs). This is the only state `faber resume` needs; treat it as disposable-after-triage or archive it for audit. Journals never contain resolved input values or secrets — only hashes, statuses, and error records.
 - `infra/images.jsonl` — append-only bookkeeping of loaded images for a
@@ -95,10 +96,10 @@ upstream credential.
 
 ## Keys and credentials
 
-- **Identities**: `identities: {<role>: {key: <ref>}}` — the ref is interpreted by your resolver/tooling (file path, hardware-key handle). Per step, faber spawns an ephemeral ssh-agent, loads exactly that one key, and forwards only the socket; the private key never enters the box. On macOS docker VMs, set the identity binding's socket group if the box user can't read the forwarded socket.
+- **Identities**: `identities: {<role>: {key: <ref>}}` — the ref is interpreted by your resolver/tooling (file path, hardware-key handle). Per step, faber spawns an ephemeral ssh-agent, loads exactly that one key, and forwards only the socket; the private key never enters the box. On macOS docker VMs the VM presents the forwarded socket root-owned and the box's dropped user gets "Permission denied" — set `agent_socket_group` to `"0"` in `~/.config/faber/host.json` (adds `--group-add 0` to the box; group membership, not root powers). Leave it unset on Linux, where the socket keeps your uid.
 - **Host key pinning**: commit your gateway's public host key and reference it as `remote.host_key_file`. `tofu: true` (accept-new) is for sandboxes only; configuring neither aborts the run — there is no silent fallback.
 - **API credentials**: prefer `mode: proxy` (auth injected outside the box) or `mode: helper`; `mode: file` is the explicit degraded path — the resolver's token is written to a tmpfs-backed read-only mount and shredded after the step, but it *is* readable inside that box. The resolver (`credentials.resolver`) is any executable: `get_token(service)` on argv, token on stdout, invoked host-side only. Wire it to `pass`, `rbw`, your keychain, or your secrets manager.
-- **Commit identity**: set `FABER_GIT_NAME` / `FABER_GIT_EMAIL` for the committer identity boxes use; signing keys always come from the forwarded agent. `FABER_GIT_EMAIL` is **required** for gated steps — the box aborts the signing phase rather than fall back to a synthetic address, because a made-up email signs fine yet can never verify on a forge that ties signatures to a registered account email (e.g. GitHub's Verified badge). Use an email verified on the account that owns the signing keys.
+- **Commit identity**: register it with the role — `faber add-key --role <r> --fingerprint … --git-email <addr>`; signing keys always come from the forwarded agent. The email is **required** for gated steps — the box aborts the signing phase rather than fall back to a synthetic address, because a made-up email signs fine yet can never verify on a forge that ties signatures to a registered account email (e.g. GitHub's Verified badge). Use an address verified on the account that owns the role's key. Nothing is read from the process environment.
 
 ## Budgets and metering
 

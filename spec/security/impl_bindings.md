@@ -78,7 +78,9 @@ restated per binding.
   gate. Teardown kills the agent PID and removes the socket directory,
   independent errors joined with `errors.Join`. Resolution runs before the
   spawn, so a role that resolves to nothing fails without leaving an agent
-  behind.
+  behind. `SocketGroup`, when non-empty, contributes `--group-add
+  <SocketGroup>`; the cmd wiring fills it from the host config file's
+  `agent_socket_group` (empty ⇒ field empty ⇒ no flag emitted).
 
 ## BindingSet (internal/security/set.go)
 

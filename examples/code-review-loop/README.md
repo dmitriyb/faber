@@ -7,15 +7,18 @@ and merged — each phase in its own sealed box under its own role identity.
 ```sh
 faber validate --config examples/code-review-loop/orchestrator.yaml
 faber build    --config examples/code-review-loop/orchestrator.yaml
-FABER_GIT_EMAIL=<verified-account-email> \
 faber run task --config examples/code-review-loop/orchestrator.yaml \
   --param repo=sandbox --param item=I-1
 ```
 
-`FABER_GIT_EMAIL` is required because this workflow is gated (it configures a
-`remote:`): boxes sign their commits, and the committer email must be one your
-forge can tie the signature to (a verified account email), so faber refuses to
-invent one.
+This workflow is gated (it configures a `remote:`), so each role needs a
+registered committer email before its boxes can run — boxes sign their
+commits, the email must be one your forge can tie to the key's account, and
+faber refuses to invent one:
+
+```sh
+faber add-key --role implementer --fingerprint SHA256:… --git-email you@example.com
+```
 
 ## What each piece buys you
 

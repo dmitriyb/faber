@@ -28,6 +28,8 @@ forge, it only refuses to invent one.
   leaves `arch_phase_sequencer.md`, `impl_phase_sequencing.md`,
   `test_box_lifecycle.md`; `configureSigning` in `agent/box/box.go` + tests.
 - **docs**: `docs/deploy.md`, `docs/commands.md` env-var table.
-- No config-module change: `FABER_GIT_EMAIL` remains a host-env input, not a
-  schema field (template env cannot carry it — the `FABER_` namespace is
-  engine-owned and screened at validate time).
+- No orchestrator-schema change: the committer identity is role-registry
+  state (see proposal 2026-08-03-explicit-host-inputs); the box receives it
+  through the run contract env faber itself injects. Template env cannot
+  carry it — the `FABER_` namespace is engine-owned and screened at validate
+  time — and no host environment is read.

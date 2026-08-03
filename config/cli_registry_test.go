@@ -16,7 +16,7 @@ type fakeRegistry struct {
 	listOut string
 }
 
-func (f *fakeRegistry) AddKey(role, fingerprint, comment string, force bool) error {
+func (f *fakeRegistry) AddKey(role, fingerprint, comment, gitName, gitEmail string, force bool) error {
 	f.added = append(f.added, fmt.Sprintf("%s %s %s %v", role, fingerprint, comment, force))
 	return f.addErr
 }

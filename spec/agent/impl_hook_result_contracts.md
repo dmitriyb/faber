@@ -80,7 +80,7 @@ refuses a mismatching value (absence is tolerated for direct sequencer
 invocations), and `WriteResultFile` stamps the writer's version into
 `result.json` (`contract` field), which the host asserts on extract. Since
 faber-box ships from the host as the same build, any mismatch is a
-`FABER_BOX_BIN`-misconfiguration detector — a stale or foreign sequencer —
+box-binary-misconfiguration detector (a stale or foreign sequencer via the host config's `box_bin`) —
 not a migration path.
 
 ## Result emission (internal/agent/result.go)

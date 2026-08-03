@@ -47,8 +47,11 @@ user's gate maps fingerprint to role server-side. Faber guarantees the
    here — at prepare time — rather than late at the gate after a wasted run.
 4. **Contribute.** `-v <sock>:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent`. On
    platforms where the forwarded socket's group ownership blocks the box's
-   non-root user (the macOS VM case), the binding adds the documented
-   group-membership flag. Optionally, when the identity declares a public
+   non-root user (the macOS VM case), the binding adds `--group-add
+   <SocketGroup>`; the wiring fills the field from the host config file's
+   `agent_socket_group` (see the explicit-host-inputs proposal — an explicit
+   per-machine file, never process environment), and empty means the flag is
+   never emitted. Optionally, when the identity declares a public
    key file, `-e` with the public key line — otherwise the box's prelude
    derives the signing key by listing the forwarded agent (`ssh-add -L`).
 5. **Teardown.** Kill the agent process and remove the socket directory.

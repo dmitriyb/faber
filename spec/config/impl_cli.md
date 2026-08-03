@@ -235,7 +235,7 @@ copy (`config/install.sh`) is kept byte-identical to the released repo-root
 `install.sh` by `go generate ./config` and a build-failing identity test — that
 identity is the whole trust argument, since the script is run from the signed
 binary rather than fetched (`spec/delivery/arch_release.md`). `boxPath` uses the
-same `FABER_BOX_BIN`-or-next-to-faber convention `cmd/faber/wire.go` bind-mounts
+same host-config `box_bin`-or-next-to-faber convention `cmd/faber/wire.go` bind-mounts
 faber-box with (`boxBinary()`), injected as `Deps.BoxBinary`, so the config
 package never learns the convention twice.
 

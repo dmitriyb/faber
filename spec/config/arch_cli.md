@@ -101,7 +101,7 @@ the script rides inside the signed binary rather than being fetched) nothing to
 fetch-and-verify-the-script. The subcommand itself only runs the active-runs
 guard first (the `auditGate` body: faber is not swapped mid-run), resolves the
 two installed paths (`os.Executable` + `EvalSymlinks` for faber; the
-`FABER_BOX_BIN`-or-next-to-faber convention, injected as `Deps.BoxBinary`, for
+host-config `box_bin`-or-next-to-faber convention, injected as `Deps.BoxBinary`, for
 faber-box), and hands a `UpgradePlan` to the `Installer` seam, which stages the
 embedded script and runs it synchronously. The two binaries are updated as a
 unit because a mismatched pair is a broken state (`agent/extract.go`

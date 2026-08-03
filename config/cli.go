@@ -104,7 +104,7 @@ type RunAuditor interface {
 // package never imports security. AddKey returns a *RegistryUsageError for a
 // bad flag value (exit 2); any other non-nil error is operational (exit 1).
 type RegistryController interface {
-	AddKey(role, fingerprint, comment string, force bool) error
+	AddKey(role, fingerprint, comment, gitName, gitEmail string, force bool) error
 	ListKeys(stdout, stderr io.Writer) error
 }
 

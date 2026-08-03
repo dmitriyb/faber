@@ -87,10 +87,22 @@ type AgentBoxes struct {
 	Identities map[string]config.IdentityDef
 	Services   map[string]config.ServiceDef
 
-	GitName  string
-	GitEmail string
+	// GitIdentities maps a template's identity role to the committer identity
+	// its boxes use, sourced from the role registry by the wiring — a role
+	// property in an explicit per-host file, never process environment. A role
+	// absent from the map (or with an empty email) simply contributes nothing;
+	// gated boxes then fail their signing phase, which is the designed
+	// fail-fast for an unregistered committer identity.
+	GitIdentities map[string]GitIdentity
 
 	Log *slog.Logger
+}
+
+// GitIdentity is one role's committer identity as the boxes will write it
+// into commit objects.
+type GitIdentity struct {
+	Name  string
+	Email string
 }
 
 // RunAttempt implements BoxRunner.
@@ -146,8 +158,8 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		SkillsLink:  skillsLink(box.Template),
 		Model:       box.Template.Model,
 		Effort:      box.Template.Effort,
-		GitName:     b.GitName,
-		GitEmail:    b.GitEmail,
+		GitName:     b.GitIdentities[box.Template.Identity].Name,
+		GitEmail:    b.GitIdentities[box.Template.Identity].Email,
 	})
 	if err != nil {
 		return BoxResult{}, err

@@ -622,3 +622,43 @@ func TestBoxRun_ActuationErrorSurfaced(t *testing.T) {
 		}
 	}
 }
+
+// Verifies the explicit-host-inputs proposal (2026-08-03): the committer
+// identity a box receives is the ROLE's registry entry, resolved per template
+// identity — never process environment. A role absent from the map (or the
+// map itself absent) contributes nothing, leaving the box's signing phase to
+// fail fast on a gated step.
+func TestBoxRun_PerRoleGitIdentity(t *testing.T) {
+	run := func(t *testing.T, identities map[string]GitIdentity, role string) infra.RunSpec {
+		t.Helper()
+		containers := &fakeContainers{
+			record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "done"}, Attempt: 1},
+		}
+		boxes := &AgentBoxes{
+			Containers:    containers,
+			Bindings:      &fakeBindings{},
+			EntryBinary:   "/usr/local/bin/faber-box",
+			GitIdentities: identities,
+		}
+		attempt := boxAttempt(t)
+		attempt.Template.Identity = role
+		if _, err := boxes.RunAttempt(context.Background(), attempt); err != nil {
+			t.Fatalf("run attempt: %v", err)
+		}
+		return containers.specs[0]
+	}
+
+	spec := run(t, map[string]GitIdentity{
+		"implementer": {Name: "faber-impl", Email: "dev@example.com"},
+		"reviewer":    {Email: "other@example.com"},
+	}, "implementer")
+	if spec.Env[contract.EnvGitName] != "faber-impl" || spec.Env[contract.EnvGitEmail] != "dev@example.com" {
+		t.Fatalf("committer identity = %q/%q, want the implementer registry entry",
+			spec.Env[contract.EnvGitName], spec.Env[contract.EnvGitEmail])
+	}
+
+	spec = run(t, map[string]GitIdentity{"implementer": {Email: "dev@example.com"}}, "merger")
+	if _, ok := spec.Env[contract.EnvGitEmail]; ok {
+		t.Fatalf("unregistered role received a committer email: %q", spec.Env[contract.EnvGitEmail])
+	}
+}
