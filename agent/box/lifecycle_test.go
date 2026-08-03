@@ -88,6 +88,7 @@ func newFixture(t *testing.T) *fixture {
 		contract.EnvHooksDir:   f.hooksDir,
 		contract.EnvSecretsDir: f.secretsDir,
 		contract.EnvAttempt:    "3",
+		contract.EnvGitEmail:   "dev@example.com", // gated steps require it; gateless steps ignore it
 		"FABER_WORKSPACE_DIR":  f.workspace,
 	}
 	return f

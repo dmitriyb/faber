@@ -219,7 +219,10 @@ func TestFixedPhaseOrderHappyPath(t *testing.T) {
 	writeHook(t, d, contract.HookPrelude)
 
 	var logBuf bytes.Buffer
-	environ := baseEnv(d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git"})
+	environ := baseEnv(d, map[string]string{
+		"FABER_REMOTE_URL": "/gw/repo-a.git",
+		"FABER_GIT_EMAIL":  "dev@example.com",
+	})
 	b := New(ParseEnv(environ), fr, environ, slog.New(slog.NewJSONHandler(&logBuf, nil)))
 	if code := Main(context.Background(), b); code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
@@ -691,7 +694,10 @@ func TestSigningOneKeyInvariant(t *testing.T) {
 				}
 				return CmdResult{}, nil
 			}
-			b := newTestBox(t, d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git"}, fr)
+			b := newTestBox(t, d, map[string]string{
+				"FABER_REMOTE_URL": "/gw/repo-a.git",
+				"FABER_GIT_EMAIL":  "dev@example.com",
+			}, fr)
 			if err := b.checkEnv(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -722,13 +728,16 @@ func TestSigningOneKeyInvariant(t *testing.T) {
 	}
 }
 
-// Verifies 93ba0858d75f: committer identity defaults derive from the box
-// identity — faber-<identity> / faber-<identity>@box.invalid.
-func TestSigningCommitterDefaults(t *testing.T) {
+// Verifies 93ba0858d75f: the committer name defaults to faber-<identity>;
+// the email is taken verbatim from FABER_GIT_EMAIL.
+func TestSigningCommitterIdentity(t *testing.T) {
 	d := newTestDirs(t)
 	fr := &fakeRunner{}
 	fr.handle = oneKeyHandler(nil)
-	b := newTestBox(t, d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git"}, fr)
+	b := newTestBox(t, d, map[string]string{
+		"FABER_REMOTE_URL": "/gw/repo-a.git",
+		"FABER_GIT_EMAIL":  "dev@example.com",
+	}, fr)
 	if err := b.checkEnv(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -741,11 +750,33 @@ func TestSigningCommitterDefaults(t *testing.T) {
 			got[c.Argv[2]] = c.Argv[3]
 		}
 	}
-	if got["user.name"] != "faber-role-a" || got["user.email"] != "faber-role-a@box.invalid" {
-		t.Fatalf("committer = %q / %q, want faber-role-a defaults", got["user.name"], got["user.email"])
+	if got["user.name"] != "faber-role-a" || got["user.email"] != "dev@example.com" {
+		t.Fatalf("committer = %q / %q, want faber-role-a / dev@example.com", got["user.name"], got["user.email"])
 	}
 	if got["gpg.format"] != "ssh" || got["commit.gpgsign"] != "true" {
 		t.Fatalf("signing config = %v", got)
+	}
+}
+
+// Verifies 93ba0858d75f: a gated step with no committer email aborts at the
+// signing phase naming FABER_GIT_EMAIL — the box never invents an address.
+func TestSigningMissingEmailAborts(t *testing.T) {
+	d := newTestDirs(t)
+	fr := &fakeRunner{}
+	fr.handle = oneKeyHandler(nil)
+	b := newTestBox(t, d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git"}, fr)
+	if err := b.checkEnv(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	err := b.configureSigning(context.Background())
+	berr := &boxError{}
+	if err == nil || !asBoxErrorOK(err, &berr) || berr.Reason != contract.ReasonSigning || !strings.Contains(berr.Detail, "FABER_GIT_EMAIL") {
+		t.Fatalf("err = %v, want signing violation naming FABER_GIT_EMAIL", err)
+	}
+	for _, call := range fr.argvs() {
+		if strings.HasPrefix(call, "git config") {
+			t.Fatalf("git config ran despite the missing email: %q", call)
+		}
 	}
 }
 

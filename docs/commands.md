@@ -22,7 +22,7 @@ Exit codes: 0 ok, 1 validation/run failure, 2 usage.
 |---|---|
 | `FABER_STATE_DIR` | Journals + image manifest directory (default `.faber`) |
 | `FABER_BOX_BIN` | Path to the `faber-box` sequencer binary (default: next to the `faber` executable) |
-| `FABER_GIT_NAME` / `FABER_GIT_EMAIL` | Box committer identity |
+| `FABER_GIT_NAME` / `FABER_GIT_EMAIL` | Box committer identity; `FABER_GIT_EMAIL` is required for gated steps (a box refuses to invent an email) |
 
 `FABER_*` names (plus `SSH_AUTH_SOCK` and reserved mount paths) are engine- and security-owned: a template's own `env`/volumes are screened at validate or spec-build time, so a config can never accidentally override them.
 
