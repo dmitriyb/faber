@@ -86,7 +86,7 @@ need uname
 # and the test-only origin bases above stay env. --upgrade selects self-replace
 # semantics instead of install(1)-ing into INSTALL_DIR; --target / --box-target
 # are the exact installed faber and faber-box paths to replace (`faber upgrade`
-# resolves them via os.Executable and the FABER_BOX_BIN convention); --current
+# resolves them via os.Executable and the host-config box_bin convention); --current
 # is the installed version the script orders against (the forward-only anomaly
 # refusal on the latest path, and the "older than installed, as requested"
 # notice on the explicit-VERSION path); --rollback restores the previous pair
@@ -344,7 +344,7 @@ fi
 # --- default install mode ---
 # install_binary installs one already-verified binary from workdir, next to
 # any binary installed earlier in this run — faber looks for faber-box next
-# to its own executable by default (FABER_BOX_BIN overrides), so keeping
+# to its own executable by default (host-config box_bin overrides), so keeping
 # both in the same INSTALL_DIR is what makes that default resolution work.
 install_binary() {
   name="$1"

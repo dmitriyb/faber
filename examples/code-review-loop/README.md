@@ -11,6 +11,15 @@ faber run task --config examples/code-review-loop/orchestrator.yaml \
   --param repo=sandbox --param item=I-1
 ```
 
+This workflow is gated (it configures a `remote:`), so each role needs a
+registered committer email before its boxes can run — boxes sign their
+commits, the email must be one your forge can tie to the key's account, and
+faber refuses to invent one:
+
+```sh
+faber add-key --role implementer --fingerprint SHA256:… --git-email you@example.com
+```
+
 ## What each piece buys you
 
 - **Role isolation by construction.** `implement`/`fix` sign as the

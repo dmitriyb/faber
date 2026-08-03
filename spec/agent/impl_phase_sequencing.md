@@ -196,9 +196,13 @@ type CmdResult struct{ Stdout []byte; StderrTail []byte; ExitCode int }
   clones borrow objects from the shared read-only cache without duplicating
   history. Gateless steps get `os.MkdirTemp` instead and skip signing.
 - `configureSigning`: `ssh-add -L` via the runner; `len(lines) != 1` is an
-  error naming the count; then four `git config` invocations (`gpg.format
-  ssh`, `user.signingkey "key::"+pub`, `commit.gpgsign true`, name/email with
-  defaults `faber-<identity>` / `faber-<identity>@box.invalid`).
+  error naming the count; empty `Env.GitEmail` is an error naming
+  the contract env's committer email, which the host injects per role from
+  the registry — the abort names the `add-key --git-email` remedy (gated
+  steps require an explicit committer email; no
+  synthetic fallback); then four `git config` invocations (`gpg.format
+  ssh`, `user.signingkey "key::"+pub`, `commit.gpgsign true`, name with
+  default `faber-<identity>`, email verbatim).
 
 ## AgentInvoker
 

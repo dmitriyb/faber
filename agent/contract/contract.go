@@ -19,7 +19,7 @@ import "github.com/dmitriyb/faber/config"
 // changes incompatibly; a purely additive env variable whose absence the
 // box tolerates (e.g. FABER_MODEL) does not bump it. faber-box ships from
 // the host as the same build, so a version mismatch at either end is a
-// FABER_BOX_BIN-misconfiguration detector (a stale or foreign sequencer
+// box-binary-misconfiguration detector (a stale or foreign sequencer
 // binary), not a migration path.
 const ContractVersion = 1
 
@@ -70,8 +70,9 @@ const (
 	EnvExtraInstruction = "FABER_EXTRA_INSTRUCTION"
 	EnvMaxBudget        = "FABER_MAX_BUDGET"
 
-	// EnvGitName and EnvGitEmail override the committer identity configured
-	// by the signing phase.
+	// EnvGitName and EnvGitEmail carry the role's committer identity into
+	// the signing phase (injected per container from the role registry; the
+	// name falls back to faber-<identity>, the email never falls back).
 	EnvGitName  = "FABER_GIT_NAME"
 	EnvGitEmail = "FABER_GIT_EMAIL"
 
@@ -106,7 +107,7 @@ const (
 	EnvSecretsStdin = "FABER_SECRETS_STDIN"
 
 	// EnvContractVersion carries the host's ContractVersion. The box refuses
-	// a mismatching value (a stale FABER_BOX_BIN cannot half-speak the
+	// a mismatching value (a stale box binary cannot half-speak the
 	// contract); absence is tolerated for direct sequencer invocations.
 	EnvContractVersion = "FABER_CONTRACT_VERSION"
 

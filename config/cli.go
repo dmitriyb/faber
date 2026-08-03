@@ -104,7 +104,7 @@ type RunAuditor interface {
 // package never imports security. AddKey returns a *RegistryUsageError for a
 // bad flag value (exit 2); any other non-nil error is operational (exit 1).
 type RegistryController interface {
-	AddKey(role, fingerprint, comment string, force bool) error
+	AddKey(role, fingerprint, comment, gitName, gitEmail string, force bool) error
 	ListKeys(stdout, stderr io.Writer) error
 }
 
@@ -132,7 +132,7 @@ type Deps struct {
 	// Installer runs the embedded install.sh in upgrade mode (faber upgrade).
 	Installer Installer
 	// BoxBinary is the installed faber-box path, resolved by the integration
-	// layer with the same FABER_BOX_BIN-or-next-to-faber convention used to
+	// layer with the same host-config-box_bin-or-next-to-faber convention used to
 	// bind-mount it (cmd/faber/wire.go). Empty in the in-process test deps.
 	BoxBinary string
 }

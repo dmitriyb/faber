@@ -5,11 +5,20 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/dmitriyb/faber/config"
 )
 
 func main() {
-	os.Exit(config.RunWithDeps(os.Args[1:], os.Stdout, os.Stderr, wireDeps(os.Stdout, os.Stderr)))
+	deps, err := wireDeps(os.Stdout, os.Stderr)
+	if err != nil {
+		// A malformed host config refuses the whole invocation (including
+		// version/help): faber never runs with half-read host state, and
+		// there is no ambient fallback to degrade to. Operational exit (1).
+		fmt.Fprintln(os.Stderr, "faber:", err)
+		os.Exit(1)
+	}
+	os.Exit(config.RunWithDeps(os.Args[1:], os.Stdout, os.Stderr, deps))
 }

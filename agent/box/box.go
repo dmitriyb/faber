@@ -638,6 +638,11 @@ func repoDirName(url string) string {
 // identity-binding violation. The same key signs commits and authenticates
 // SSH: one fingerprint, one role. What that fingerprint may do is the user's
 // gate service's business, never the box's. Skipped on gateless steps.
+//
+// A gated step requires an explicit committer email: a synthetic address
+// would sign and pass a key-based gate, yet a forge that ties signature
+// verification to a registered account email could never verify it — a
+// silent misconfiguration this abort surfaces at the first run.
 func (b *Box) configureSigning(ctx context.Context) error {
 	if b.Env.RemoteURL == "" {
 		return nil
@@ -667,20 +672,22 @@ func (b *Box) configureSigning(ctx context.Context) error {
 	}
 	pub := fields[0] + " " + fields[1]
 
+	if b.Env.GitEmail == "" {
+		return &boxError{
+			Reason: contract.ReasonSigning,
+			Detail: "no committer email for this role; a gated step requires one — register it: faber add-key --role <role> --fingerprint <fp> --git-email <addr>",
+		}
+	}
 	name := b.Env.GitName
 	if name == "" {
 		name = "faber-" + b.Env.Identity
-	}
-	email := b.Env.GitEmail
-	if email == "" {
-		email = "faber-" + b.Env.Identity + "@box.invalid"
 	}
 	for _, kv := range [][2]string{
 		{"gpg.format", "ssh"},
 		{"user.signingkey", "key::" + pub},
 		{"commit.gpgsign", "true"},
 		{"user.name", name},
-		{"user.email", email},
+		{"user.email", b.Env.GitEmail},
 	} {
 		res, err := b.Runner.Run(ctx, CmdSpec{
 			Argv: []string{"git", "config", kv[0], kv[1]},

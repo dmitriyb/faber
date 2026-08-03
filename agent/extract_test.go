@@ -125,7 +125,7 @@ func TestExtractResultRecomputesUnthreaded(t *testing.T) {
 // Verifies ff8e85704b0a (§1 contract handshake): the host asserts the
 // record's stamped contract version on extract — an unstamped record (a
 // writer that predates stamping) and a wrong stamp both surface as a
-// contract-version failure naming FABER_BOX_BIN, never interpreted as if
+// contract-version failure pointing at the host config's box_bin, never interpreted as if
 // they spoke this contract.
 func TestExtractAssertsContractVersion(t *testing.T) {
 	dir := t.TempDir()
@@ -140,8 +140,8 @@ func TestExtractAssertsContractVersion(t *testing.T) {
 	if res.Status != StatusFailed || res.Error.Reason != contract.ReasonContractVersion {
 		t.Fatalf("unstamped record must fail contract-version, got %+v", res)
 	}
-	if !strings.Contains(res.Error.Detail, "FABER_BOX_BIN") {
-		t.Fatalf("detail must point at FABER_BOX_BIN: %s", res.Error.Detail)
+	if !strings.Contains(res.Error.Detail, "box_bin") {
+		t.Fatalf("detail must point at the host config's box_bin: %s", res.Error.Detail)
 	}
 
 	// A wrong stamp likewise.

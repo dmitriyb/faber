@@ -235,7 +235,7 @@ copy (`config/install.sh`) is kept byte-identical to the released repo-root
 `install.sh` by `go generate ./config` and a build-failing identity test — that
 identity is the whole trust argument, since the script is run from the signed
 binary rather than fetched (`spec/delivery/arch_release.md`). `boxPath` uses the
-same `FABER_BOX_BIN`-or-next-to-faber convention `cmd/faber/wire.go` bind-mounts
+same host-config `box_bin`-or-next-to-faber convention `cmd/faber/wire.go` bind-mounts
 faber-box with (`boxBinary()`), injected as `Deps.BoxBinary`, so the config
 package never learns the convention twice.
 
@@ -243,9 +243,9 @@ package never learns the convention twice.
 
 ```
 runAddKeyE:
-  flags: --role, --fingerprint, --comment, --force  (no --config)
+  flags: --role, --fingerprint, --comment, --git-name, --git-email, --force  (no --config)
   --role and --fingerprint required (missing ⇒ usageErr, exit 2)
-  return deps.Registry.AddKey(role, fingerprint, comment, force)
+  return deps.Registry.AddKey(role, fingerprint, comment, gitName, gitEmail, force)
       *RegistryUsageError (bad fingerprint/role) ⇒ exit 2 (via its own ExitCode() method)
       any other error (refusal to re-point without --force, IO) ⇒ exit 1
 
@@ -261,6 +261,22 @@ material — the CLI only ever handles a fingerprint string and an optional
 label. The store, validation, atomic write, and idempotency semantics are the
 security module's (`spec/security/impl_role_registry.md`); the CLI adds
 nothing but flag wiring and exit-code mapping.
+
+### HostConfig (config/hostcfg.go)
+
+```
+HostConfigPath() -> $XDG_CONFIG_HOME/faber/host.json | ~/.config/faber/host.json
+LoadHostConfig(path) (HostConfig, error)   // {box_bin, agent_socket_group, state_dir}
+HostConfig.Describe(path) string           // one log line naming the effective values
+```
+
+Load order in the decode: byte-exact key check over the raw object FIRST
+(Go's case-insensitive field matching would otherwise accept `"BOX_BIN"`),
+then `DisallowUnknownFields` decode, then a trailing-content check, then
+`box_bin` absolute-path validation. Missing file returns the zero config and
+nil error. The cmd wiring (`wireDeps`) threads the result to `stateDir`,
+`boxBinary`, and `IdentityBinding.SocketGroup`, and returns the load error to
+`main` for the single-exit-path mapping (exit 1).
 
 ## Logging (config/logging.go)
 

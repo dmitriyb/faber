@@ -18,6 +18,8 @@ func newAddKeyCmd(deps Deps) *cobra.Command {
 	cmd.Flags().String("role", "", "role name (a bare identifier)")
 	cmd.Flags().String("fingerprint", "", "key fingerprint (SHA256:…)")
 	cmd.Flags().String("comment", "", "optional human label")
+	cmd.Flags().String("git-name", "", "committer name boxes use for this role (default faber-<role>)")
+	cmd.Flags().String("git-email", "", "committer email boxes use for this role; REQUIRED before this role can run gated steps (a forge verifies signatures only against an email registered to the key's account)")
 	cmd.Flags().Bool("force", false, "re-point an existing role at a different fingerprint")
 	return cmd
 }
@@ -31,12 +33,14 @@ func runAddKeyE(cmd *cobra.Command, deps Deps) error {
 	role, _ := cmd.Flags().GetString("role")
 	fingerprint, _ := cmd.Flags().GetString("fingerprint")
 	comment, _ := cmd.Flags().GetString("comment")
+	gitName, _ := cmd.Flags().GetString("git-name")
+	gitEmail, _ := cmd.Flags().GetString("git-email")
 	force, _ := cmd.Flags().GetBool("force")
 	if role == "" || fingerprint == "" {
-		return usageErr(errors.New("usage: faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--force]"))
+		return usageErr(errors.New("usage: faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--git-name n] [--git-email e] [--force]"))
 	}
 	if deps.Registry == nil {
 		return errors.New("faber add-key: registry management requires the security module, which is not wired into this binary yet")
 	}
-	return deps.Registry.AddKey(role, fingerprint, comment, force)
+	return deps.Registry.AddKey(role, fingerprint, comment, gitName, gitEmail, force)
 }

@@ -9,6 +9,15 @@ faber validate --config examples/batch-fanout/orchestrator.yaml
 faber run rollout --config examples/batch-fanout/orchestrator.yaml --param repo=monorepo
 ```
 
+This workflow is gated (it configures a `remote:`), so each role needs a
+registered committer email before its boxes can run — boxes sign their
+commits, the email must be one your forge can tie to the key's account, and
+faber refuses to invent one:
+
+```sh
+faber add-key --role implementer --fingerprint SHA256:… --git-email you@example.com
+```
+
 The moving part is `hooks/list-modules`, an opaque command emitting
 
 ```json

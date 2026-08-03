@@ -9,16 +9,26 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"unicode"
 )
 
-// Entry is one role's record: a key fingerprint plus an optional human label.
-// No key material is ever stored — only the public fingerprint the identity
-// binding resolves against.
+// Entry is one role's record: a key fingerprint plus an optional human label
+// and the role's git committer identity. No key material is ever stored —
+// only the public fingerprint the identity binding resolves against.
+//
+// GitEmail is registry state rather than env or workflow config on purpose:
+// the committer email is a property of the ROLE (a forge verifies a signature
+// only when the committer email belongs to the account owning the key), and
+// the registry is the one explicit, auditable per-host file that already
+// binds roles to keys. Faber never reads committer identity from the process
+// environment.
 type Entry struct {
 	Fingerprint string `json:"fingerprint"`
 	Comment     string `json:"comment,omitempty"`
+	GitName     string `json:"git_name,omitempty"`
+	GitEmail    string `json:"git_email,omitempty"`
 }
 
 // Registry is the whole role→fingerprint table, marshaled as a JSON object
@@ -140,27 +150,34 @@ func SaveRegistry(path string, reg Registry) error {
 // and writes nothing. Re-pointing an existing role at a *different*
 // fingerprint is refused unless force is set — a silent overwrite would swap a
 // box's whole credential out from under a running project. Only the
-// fingerprint and label are ever written; no key material.
-func AddKey(reg Registry, role, fingerprint, comment string, force bool) (Registry, bool, error) {
+// fingerprint, label, and git identity are ever written; no key material.
+func AddKey(reg Registry, role, fingerprint, comment, gitName, gitEmail string, force bool) (Registry, bool, error) {
 	if !roleRE.MatchString(role) {
 		return reg, false, newValidationError("invalid role %q: must be a bare identifier (letters, digits, '.', '-', '_'; no path separators or whitespace)", role)
 	}
 	if !validFingerprint(fingerprint) {
 		return reg, false, newValidationError("invalid fingerprint %q: expected SHA256: followed by 43 base64 characters", fingerprint)
 	}
-	// The comment is a free-form label but it is later printed verbatim through
-	// a tabwriter to the operator's terminal (list-keys). Reject control
-	// characters so an embedded newline cannot forge or misalign a row and a
-	// terminal escape sequence cannot reach the terminal unfiltered.
-	for _, r := range comment {
-		if unicode.IsControl(r) {
-			return reg, false, newValidationError("invalid comment: control characters (newlines, tabs, terminal escapes) are not allowed; use a single printable line")
+	// Comment, git name, and git email are free-form but later printed
+	// verbatim through a tabwriter to the operator's terminal (list-keys) and,
+	// for the git identity, written into commit objects. Reject control
+	// characters so an embedded newline cannot forge or misalign a row, a
+	// terminal escape cannot reach the terminal unfiltered, and a crafted
+	// value cannot smuggle structure into a commit header.
+	for name, v := range map[string]string{"comment": comment, "git name": gitName, "git email": gitEmail} {
+		for _, r := range v {
+			if unicode.IsControl(r) {
+				return reg, false, newValidationError("invalid %s: control characters (newlines, tabs, terminal escapes) are not allowed; use a single printable line", name)
+			}
 		}
+	}
+	if gitEmail != "" && (strings.ContainsAny(gitEmail, " \t<>") || !strings.Contains(gitEmail, "@")) {
+		return reg, false, newValidationError("invalid git email %q: expected local@domain with no whitespace or angle brackets", gitEmail)
 	}
 	if reg == nil {
 		reg = Registry{}
 	}
-	next := Entry{Fingerprint: fingerprint, Comment: comment}
+	next := Entry{Fingerprint: fingerprint, Comment: comment, GitName: gitName, GitEmail: gitEmail}
 	if cur, ok := reg[role]; ok {
 		if cur.Fingerprint != fingerprint && !force {
 			return reg, false, fmt.Errorf("role %q already points at %s; refusing to re-point it at %s without --force", role, cur.Fingerprint, fingerprint)
@@ -174,10 +191,11 @@ func AddKey(reg Registry, role, fingerprint, comment string, force bool) (Regist
 }
 
 // WriteRegistryList prints every entry, one line per role, in sorted order:
-// "<role>  <fingerprint>  <comment>" (the comment column omitted when empty),
-// aligned for reading. A missing/empty registry prints a one-line note to
-// stderr and nothing to stdout. Fingerprints are public material and safe to
-// print; no key material exists to leak.
+// "<role>  <fingerprint>  <git identity>  <comment>" (empty columns omitted
+// from the right), aligned for reading. A missing/empty registry prints a
+// one-line note to stderr and nothing to stdout. Fingerprints and the git
+// identity are public material and safe to print; no key material exists to
+// leak.
 func WriteRegistryList(reg Registry, stdout, stderr io.Writer) {
 	if len(reg) == 0 {
 		fmt.Fprintln(stderr, "no roles registered")
@@ -192,11 +210,18 @@ func WriteRegistryList(reg Registry, stdout, stderr io.Writer) {
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, role := range roles {
 		e := reg[role]
-		if e.Comment != "" {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", role, e.Fingerprint, e.Comment)
-		} else {
-			fmt.Fprintf(tw, "%s\t%s\n", role, e.Fingerprint)
+		git := e.GitEmail
+		switch {
+		case e.GitName != "" && e.GitEmail != "":
+			git = e.GitName + " <" + e.GitEmail + ">"
+		case e.GitName != "":
+			git = e.GitName
 		}
+		cols := []string{role, e.Fingerprint, git, e.Comment}
+		for len(cols) > 2 && cols[len(cols)-1] == "" {
+			cols = cols[:len(cols)-1]
+		}
+		fmt.Fprintf(tw, "%s\n", strings.Join(cols, "\t"))
 	}
 	// tabwriter.Flush errors only when the underlying writer does; nothing the
 	// caller can do about a broken stdout, so the sole path is best-effort.

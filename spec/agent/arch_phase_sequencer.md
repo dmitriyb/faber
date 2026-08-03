@@ -107,11 +107,19 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    (`ssh-add -L` over `SSH_AUTH_SOCK`); exactly one key must be listed — zero
    or several is an identity-binding violation and aborts. Then:
    `git config gpg.format ssh`, `user.signingkey key::<pub>`,
-   `commit.gpgsign true`; committer name/email from `FABER_GIT_NAME`/
-   `FABER_GIT_EMAIL` or the defaults `faber-<identity>` /
-   `faber-<identity>@box.invalid`. The same key signs commits and
-   authenticates SSH — one fingerprint, one role; enforcement of what that
-   fingerprint may do belongs to the user's gate service, never to the box.
+   `commit.gpgsign true`; committer name from `FABER_GIT_NAME` or the default
+   `faber-<identity>`; committer email from `FABER_GIT_EMAIL`. Both are box
+   CONTRACT env, injected per container by the host from the role registry
+   (the role's `git_name`/`git_email`) — never inherited from any ambient
+   environment. The email is
+   **required** on a gated step — an empty email aborts the signing phase
+   naming the variable. There is no synthetic email fallback: a made-up
+   address signs fine and passes a key-based gate, but a forge that ties
+   signature verification to a registered account email can never verify it —
+   a silent misconfiguration this abort surfaces at the first run. The same
+   key signs commits and authenticates SSH — one fingerprint, one role;
+   enforcement of what that fingerprint may do belongs to the user's gate
+   service, never to the box.
 7. **Context hook.** First user-filled phase, under the PreludeHooks contract.
 8. **Prelude hook.** Second user-filled phase, same contract. After both, the
    context bundle must exist in the bundle directory or the step aborts —

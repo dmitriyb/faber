@@ -260,7 +260,10 @@ func TestDeclaredSideEffectVerification(t *testing.T) {
 			return base(spec, stream)
 		}
 		writeHook(t, d, contract.HookPrelude)
-		b := newTestBox(t, d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git"}, fr)
+		b := newTestBox(t, d, map[string]string{
+			"FABER_REMOTE_URL": "/gw/repo-a.git",
+			"FABER_GIT_EMAIL":  "dev@example.com",
+		}, fr)
 		code := Main(context.Background(), b)
 		return readRecord(t, d), code, fr
 	}

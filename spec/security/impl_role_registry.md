@@ -9,11 +9,17 @@ section owns the behavior they compose.
 ## Registry file and location (internal/security/registry.go)
 
 ```go
-// Entry is one role's record: a fingerprint plus an optional human label.
-// No key material is ever stored.
+// Entry is one role's record: a fingerprint, an optional human label, and
+// the role's git committer identity. No key material is ever stored.
+// GitEmail lives here on purpose: a forge verifies a signature only when the
+// committer email belongs to the account owning the key, so the email is a
+// property of the role's key binding — explicit per-host file state, never
+// process environment.
 type Entry struct {
     Fingerprint string `json:"fingerprint"`
     Comment     string `json:"comment,omitempty"`
+    GitName     string `json:"git_name,omitempty"`
+    GitEmail    string `json:"git_email,omitempty"`
 }
 
 // Registry is the whole role→fingerprint table, marshaled as a JSON object
@@ -54,24 +60,29 @@ A malformed fingerprint or role is a validation error carrying the offending
 value; the CLI maps it to the usage exit code (2). These run before the file
 is touched, so a bad flag never mutates the registry.
 
-The optional `--comment` is a free-form label, but it is printed back
-verbatim through a tabwriter on `list-keys`. It is therefore validated too:
+The optional `--comment`, `--git-name`, and `--git-email` are free-form, but
+they are printed back verbatim through a tabwriter on `list-keys` and the git
+identity is written into commit objects. All three are therefore validated:
 any Unicode control character (newline, tab, terminal escape) is rejected so
-an embedded newline cannot forge or misalign a `list-keys` row and an ANSI
-escape cannot reach the operator's terminal unfiltered. A comment must be a
-single printable line.
+an embedded newline cannot forge or misalign a `list-keys` row, an ANSI
+escape cannot reach the operator's terminal unfiltered, and a crafted value
+cannot smuggle structure into a commit header. Each must be a single
+printable line; a non-empty email must additionally be local@domain with no
+whitespace or angle brackets.
 
 ## add-key
 
 ```
-AddKey(reg Registry, role, fingerprint, comment string, force bool) (Registry, changed bool, err error)
+AddKey(reg Registry, role, fingerprint, comment, gitName, gitEmail string, force bool) (Registry, changed bool, err error)
 ```
 
-1. validate `role`, `fingerprint`, and `comment` (printable, single line);
+1. validate `role`, `fingerprint`, `comment`, `gitName`, and `gitEmail`;
    on failure return the validation error.
 2. if `reg[role]` exists:
-   - same fingerprint → update the comment if given; `changed` reflects
-     whether anything actually differs (identical input ⇒ no-op, no write).
+   - same fingerprint → update the label/git-identity fields; `changed`
+     reflects whether anything actually differs (identical input ⇒ no-op,
+     no write). Changing only the email needs no `--force` — the credential
+     binding is unchanged.
    - different fingerprint and `!force` → refuse with an error naming the
      role, the stored fingerprint, and the new one, telling the user to pass
      `--force` to re-point the role.
@@ -86,10 +97,17 @@ re-run in an init flow.
 ## list-keys
 
 Load the registry and print one line per role in sorted order:
-`<role>  <fingerprint>  <comment>` (comment column omitted when empty),
-aligned for reading. Output goes to stdout; an empty registry prints a
+`<role>  <fingerprint>  <git identity>  <comment>` — the git identity renders
+as `name <email>`, bare email, or bare name, whichever fields exist; empty
+trailing columns are right-trimmed. Aligned for reading. Output goes to stdout; an empty registry prints a
 one-line "no roles registered" note to stderr and exits 0. Fingerprints are
 public material and safe to print; no key material exists to leak.
+
+Note: for a path-form identity (an explicit `key:` in the orchestrator), the
+registry entry's git identity is applied by ROLE NAME without verifying the
+path's key against the entry's fingerprint — binding-level enforcement of
+key↔email consistency is the gate's business, not faber's (mechanism, not
+policy).
 
 ## KeyLocator and resolution (internal/security/resolve.go)
 

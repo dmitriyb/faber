@@ -40,7 +40,10 @@ mounts, and the env contract is set directly.)
    git config shows `gpg.format ssh`, `commit.gpgsign true`, and
    `user.signingkey key::<pub>` matching `ssh-add -L` of the fixture agent.
    With *two* keys loaded, the box aborts at the signing phase naming the
-   count — the one-key-per-box invariant is checked, not assumed.
+   count — the one-key-per-box invariant is checked, not assumed. With
+   no committer email in the contract env, the box aborts at the signing
+   phase pointing at the `add-key --git-email` remedy — a gated step never
+   invents a committer email.
 6. **Host-key policy.** An `ssh://` remote with neither pinned key nor TOFU
    aborts at the hostkey phase before clone; with `FABER_HOST_KEY` set, the
    known-hosts file contains the pinned line and `GIT_SSH_COMMAND` says

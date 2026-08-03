@@ -28,7 +28,7 @@ func TestRegistryRoundTripAndIdempotency(t *testing.T) {
 		t.Fatalf("missing registry must read empty, got %v", reg)
 	}
 
-	reg, changed, err := AddKey(reg, "implementer_work", fpA, "yubikey 5c", false)
+	reg, changed, err := AddKey(reg, "implementer_work", fpA, "yubikey 5c", "", "", false)
 	if err != nil || !changed {
 		t.Fatalf("first AddKey: changed=%v err=%v", changed, err)
 	}
@@ -58,7 +58,7 @@ func TestRegistryRoundTripAndIdempotency(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	reg2, _ := LoadRegistry(path)
-	_, changed, err = AddKey(reg2, "implementer_work", fpA, "yubikey 5c", false)
+	_, changed, err = AddKey(reg2, "implementer_work", fpA, "yubikey 5c", "", "", false)
 	if err != nil {
 		t.Fatalf("idempotent AddKey err: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestRegistryRoundTripAndIdempotency(t *testing.T) {
 func TestRegistryRepointRequiresForce(t *testing.T) {
 	reg := Registry{"reviewer": {Fingerprint: fpA}}
 
-	_, changed, err := AddKey(reg, "reviewer", fpB, "", false)
+	_, changed, err := AddKey(reg, "reviewer", fpB, "", "", "", false)
 	if err == nil {
 		t.Fatal("re-point without --force must be refused")
 	}
@@ -109,7 +109,7 @@ func TestRegistryRepointRequiresForce(t *testing.T) {
 		t.Fatal("re-point refusal must not be a ValidationError")
 	}
 
-	reg, changed, err = AddKey(reg, "reviewer", fpB, "", true)
+	reg, changed, err = AddKey(reg, "reviewer", fpB, "", "", "", true)
 	if err != nil || !changed {
 		t.Fatalf("forced re-point: changed=%v err=%v", changed, err)
 	}
@@ -122,7 +122,7 @@ func TestRegistryRepointRequiresForce(t *testing.T) {
 // fingerprint is a change (upsert the label), not a no-op.
 func TestRegistryCommentUpdateIsAChange(t *testing.T) {
 	reg := Registry{"reviewer": {Fingerprint: fpA, Comment: "old"}}
-	reg, changed, err := AddKey(reg, "reviewer", fpA, "new", false)
+	reg, changed, err := AddKey(reg, "reviewer", fpA, "new", "", "", false)
 	if err != nil || !changed {
 		t.Fatalf("comment update: changed=%v err=%v", changed, err)
 	}
@@ -143,7 +143,7 @@ func TestRegistryValidationRejectsMalformed(t *testing.T) {
 		"SHA256:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQX", // too long (44)
 	}
 	for _, fp := range badFingerprints {
-		_, changed, err := AddKey(Registry{}, "reviewer", fp, "", false)
+		_, changed, err := AddKey(Registry{}, "reviewer", fp, "", "", "", false)
 		var ve *ValidationError
 		if !errors.As(err, &ve) {
 			t.Fatalf("fingerprint %q: want ValidationError, got %v", fp, err)
@@ -155,7 +155,7 @@ func TestRegistryValidationRejectsMalformed(t *testing.T) {
 
 	badRoles := []string{"", "has space", "a/b", "../etc", "a\tb"}
 	for _, role := range badRoles {
-		_, changed, err := AddKey(Registry{}, role, fpA, "", false)
+		_, changed, err := AddKey(Registry{}, role, fpA, "", "", "", false)
 		var ve *ValidationError
 		if !errors.As(err, &ve) {
 			t.Fatalf("role %q: want ValidationError, got %v", role, err)
@@ -170,7 +170,7 @@ func TestRegistryValidationRejectsMalformed(t *testing.T) {
 	// rejected before any write; a plain printable comment is accepted.
 	badComments := []string{"line1\nline2", "col\tcol", "esc\x1b[31mred", "bell\a"}
 	for _, c := range badComments {
-		_, changed, err := AddKey(Registry{}, "reviewer", fpA, c, false)
+		_, changed, err := AddKey(Registry{}, "reviewer", fpA, c, "", "", false)
 		var ve *ValidationError
 		if !errors.As(err, &ve) {
 			t.Fatalf("comment %q: want ValidationError, got %v", c, err)
@@ -179,7 +179,7 @@ func TestRegistryValidationRejectsMalformed(t *testing.T) {
 			t.Fatalf("comment %q: rejected input must not change the registry", c)
 		}
 	}
-	if _, changed, err := AddKey(Registry{}, "reviewer", fpA, "yubikey 5c (work)", false); err != nil || !changed {
+	if _, changed, err := AddKey(Registry{}, "reviewer", fpA, "yubikey 5c (work)", "", "", false); err != nil || !changed {
 		t.Fatalf("printable comment must be accepted: changed=%v err=%v", changed, err)
 	}
 }
@@ -238,5 +238,31 @@ func TestRegistryPathHonorsXDG(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	if got, want := RegistryPath(), filepath.Join(xdg, "faber", "roles.json"); got != want {
 		t.Fatalf("RegistryPath: want %q, got %q", want, got)
+	}
+}
+
+// Verifies the explicit-host-inputs proposal (2026-08-03): a role's git
+// committer identity is registry state — stored with the key binding,
+// validated on write, printed by list-keys — never process environment.
+func TestAddKeyGitIdentity(t *testing.T) {
+	reg, changed, err := AddKey(Registry{}, "implementer", fpA, "yubikey", "faber-impl", "dev@example.com", false)
+	if err != nil || !changed {
+		t.Fatalf("add with git identity: changed=%v err=%v", changed, err)
+	}
+	if e := reg["implementer"]; e.GitName != "faber-impl" || e.GitEmail != "dev@example.com" {
+		t.Fatalf("entry = %+v", e)
+	}
+	// Same content is a no-op; changing only the email is a change (same
+	// fingerprint, no --force needed).
+	if _, changed, err = AddKey(reg, "implementer", fpA, "yubikey", "faber-impl", "dev@example.com", false); err != nil || changed {
+		t.Fatalf("identical re-add: changed=%v err=%v", changed, err)
+	}
+	if _, changed, err = AddKey(reg, "implementer", fpA, "yubikey", "faber-impl", "new@example.com", false); err != nil || !changed {
+		t.Fatalf("email update: changed=%v err=%v", changed, err)
+	}
+	for _, bad := range []string{"no-at-sign", "two words@x.y", "a@b\n", "<a@b>"} {
+		if _, changed, err := AddKey(Registry{}, "implementer", fpA, "", "", bad, false); err == nil || changed {
+			t.Errorf("email %q should be refused", bad)
+		}
 	}
 }
