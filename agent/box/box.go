@@ -647,12 +647,6 @@ func (b *Box) configureSigning(ctx context.Context) error {
 	if b.Env.RemoteURL == "" {
 		return nil
 	}
-	if b.Env.GitEmail == "" {
-		return &boxError{
-			Reason: contract.ReasonSigning,
-			Detail: "FABER_GIT_EMAIL is empty; a gated step requires an explicit committer email (set it on the template env or the faber host env)",
-		}
-	}
 	res, err := b.Runner.Run(ctx, CmdSpec{Argv: []string{"ssh-add", "-L"}, Env: b.Environ})
 	if err != nil {
 		return &boxError{Reason: contract.ReasonSigning, Detail: err.Error()}
@@ -678,6 +672,12 @@ func (b *Box) configureSigning(ctx context.Context) error {
 	}
 	pub := fields[0] + " " + fields[1]
 
+	if b.Env.GitEmail == "" {
+		return &boxError{
+			Reason: contract.ReasonSigning,
+			Detail: "FABER_GIT_EMAIL is empty; a gated step requires an explicit committer email (set it in the faber host environment)",
+		}
+	}
 	name := b.Env.GitName
 	if name == "" {
 		name = "faber-" + b.Env.Identity

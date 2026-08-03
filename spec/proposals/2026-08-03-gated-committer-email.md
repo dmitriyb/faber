@@ -28,5 +28,6 @@ forge, it only refuses to invent one.
   leaves `arch_phase_sequencer.md`, `impl_phase_sequencing.md`,
   `test_box_lifecycle.md`; `configureSigning` in `agent/box/box.go` + tests.
 - **docs**: `docs/deploy.md`, `docs/commands.md` env-var table.
-- No config-module change: `FABER_GIT_EMAIL` remains a host-env / template-env
-  input, not a schema field.
+- No config-module change: `FABER_GIT_EMAIL` remains a host-env input, not a
+  schema field (template env cannot carry it — the `FABER_` namespace is
+  engine-owned and screened at validate time).

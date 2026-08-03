@@ -6,8 +6,14 @@ starts only after both settle.
 
 ```sh
 faber validate --config examples/batch-fanout/orchestrator.yaml
+FABER_GIT_EMAIL=<verified-account-email> \
 faber run rollout --config examples/batch-fanout/orchestrator.yaml --param repo=monorepo
 ```
+
+`FABER_GIT_EMAIL` is required because this workflow is gated (it configures a
+`remote:`): boxes sign their commits, and the committer email must be one your
+forge can tie the signature to (a verified account email), so faber refuses to
+invent one.
 
 The moving part is `hooks/list-modules`, an opaque command emitting
 

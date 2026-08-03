@@ -728,8 +728,9 @@ func TestSigningOneKeyInvariant(t *testing.T) {
 	}
 }
 
-// Verifies 93ba0858d75f: the committer name defaults to faber-<identity>;
-// the email is taken verbatim from FABER_GIT_EMAIL.
+// Verifies 93ba0858d75f (email requirement per proposal
+// 2026-08-03-gated-committer-email): the committer name defaults to
+// faber-<identity>; the email is taken verbatim from FABER_GIT_EMAIL.
 func TestSigningCommitterIdentity(t *testing.T) {
 	d := newTestDirs(t)
 	fr := &fakeRunner{}
@@ -758,8 +759,9 @@ func TestSigningCommitterIdentity(t *testing.T) {
 	}
 }
 
-// Verifies 93ba0858d75f: a gated step with no committer email aborts at the
-// signing phase naming FABER_GIT_EMAIL — the box never invents an address.
+// Verifies proposal 2026-08-03-gated-committer-email: a gated step with no
+// committer email aborts at the signing phase naming FABER_GIT_EMAIL — the
+// box never invents an address.
 func TestSigningMissingEmailAborts(t *testing.T) {
 	d := newTestDirs(t)
 	fr := &fakeRunner{}

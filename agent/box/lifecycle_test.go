@@ -401,9 +401,11 @@ func TestLifecycle_HookLessTemplate(t *testing.T) {
 	}
 }
 
-// Scenario 5. Verifies 93ba0858d75f: signing config is derived from the
-// forwarded agent — the clone's git config matches ssh-add -L — and two
-// loaded keys abort at the signing phase naming the count.
+// Scenario 5. Verifies 93ba0858d75f (email requirement per proposal
+// 2026-08-03-gated-committer-email): signing config is derived from the
+// forwarded agent — the clone's git config matches ssh-add -L — two loaded
+// keys abort at the signing phase naming the count, and a missing
+// FABER_GIT_EMAIL aborts at the signing phase naming the variable.
 func TestLifecycle_SigningDerivedFromForwardedAgent(t *testing.T) {
 	t.Run("one key configures the clone", func(t *testing.T) {
 		f := newFixture(t)
@@ -446,6 +448,24 @@ func TestLifecycle_SigningDerivedFromForwardedAgent(t *testing.T) {
 		}
 		if rec := f.record(); !strings.Contains(rec.Error.Detail, "2 keys") {
 			t.Fatalf("detail = %q, want the key count named", rec.Error.Detail)
+		}
+	})
+	t.Run("missing email aborts at the signing phase", func(t *testing.T) {
+		f := newFixture(t)
+		f.gateway()
+		f.sshAgent(1)
+		delete(f.env, contract.EnvGitEmail)
+
+		code, _ := f.run()
+		if code == 0 {
+			t.Fatal("want nonzero exit")
+		}
+		h := f.handoff()
+		if h.Phase != "signing" || h.Reason != contract.ReasonSigning {
+			t.Fatalf("handoff = %+v", h)
+		}
+		if rec := f.record(); !strings.Contains(rec.Error.Detail, "FABER_GIT_EMAIL") {
+			t.Fatalf("detail = %q, want FABER_GIT_EMAIL named", rec.Error.Detail)
 		}
 	})
 }
