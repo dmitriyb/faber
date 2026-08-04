@@ -199,7 +199,7 @@ func loggedPhases(t *testing.T, log *bytes.Buffer) []string {
 
 // Verifies 93ba0858d75f: every agent step executes the same engine-owned
 // internal sequence — skills, env, secrets, hostkey, clone, signing, context,
-// prelude, agent, result — with no in-container DAG.
+// prelude, agent, postlude, result — with no in-container DAG.
 func TestFixedPhaseOrderHappyPath(t *testing.T) {
 	d := newTestDirs(t)
 	fr := &fakeRunner{}
@@ -228,7 +228,7 @@ func TestFixedPhaseOrderHappyPath(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 
-	want := []string{"skills", "env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "result"}
+	want := []string{"skills", "env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "postlude", "result"}
 	got := loggedPhases(t, &logBuf)
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("phase order = %v, want %v", got, want)

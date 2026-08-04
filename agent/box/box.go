@@ -2,9 +2,10 @@
 // sequencer the faber-box binary runs as every step container's entry
 // program. It owns the fixed, engine-defined phase order — skills link, env
 // contract, delegated secrets, host-key policy, gateway clone, signing config,
-// context hook, prelude hook, agent invocation, result emission — with
-// fail-stop between phases and one attempt record on every exit path. There is
-// no in-container DAG and nothing here is configurable per template.
+// context hook, prelude hook, agent invocation, postlude hook, result
+// emission — with fail-stop between phases and one attempt record on every
+// exit path. There is no in-container DAG and nothing here is configurable
+// per template.
 //
 // The package holds no resolver and fetches no secret (the host delegated
 // handles before the container existed), applies no policy, and never
@@ -100,6 +101,7 @@ var phases = []phase{
 	{"context", (*Box).runContextHook},
 	{"prelude", (*Box).runPreludeHook},
 	{"agent", (*Box).runAgent},
+	{"postlude", (*Box).runPostludeHook},
 	{"result", (*Box).emitResult},
 }
 
@@ -251,15 +253,16 @@ func asBoxError(phaseName string, err error) *boxError {
 		return berr
 	}
 	reason := map[string]string{
-		"env":     contract.ReasonEnvContract,
-		"secrets": contract.ReasonSecrets,
-		"hostkey": contract.ReasonHostKeyPolicy,
-		"clone":   contract.ReasonCloneFailed,
-		"signing": contract.ReasonSigning,
-		"context": contract.ReasonHookFailed,
-		"prelude": contract.ReasonHookFailed,
-		"agent":   contract.ReasonAgentFailed,
-		"result":  contract.ReasonResultWrite,
+		"env":      contract.ReasonEnvContract,
+		"secrets":  contract.ReasonSecrets,
+		"hostkey":  contract.ReasonHostKeyPolicy,
+		"clone":    contract.ReasonCloneFailed,
+		"signing":  contract.ReasonSigning,
+		"context":  contract.ReasonHookFailed,
+		"prelude":  contract.ReasonHookFailed,
+		"agent":    contract.ReasonAgentFailed,
+		"postlude": contract.ReasonHookFailed,
+		"result":   contract.ReasonResultWrite,
 	}[phaseName]
 	if reason == "" {
 		reason = phaseName

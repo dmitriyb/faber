@@ -13,7 +13,9 @@ mounts, and the env contract is set directly.)
   and exits with a configurable code.
 - Hook scripts: a happy pair (context writes `CONTEXT.md`, prelude appends
   `bundle.env` with `BRANCH=t-1` and touches a marker), a failing prelude
-  (exit 3 with stderr), and a bundle-less pair (exit 0, write nothing).
+  (exit 3 with stderr), a bundle-less pair (exit 0, write nothing), and a
+  postlude (touches a marker after asserting the agent's artifact exists; a
+  failing variant exits 5 with stderr).
 - A local bare git repository standing in for the gateway (path remote, so no
   ssh transport); host-key scenarios use a fake `ssh://` URL and never reach
   the network — the policy decision precedes any connection.
@@ -23,7 +25,9 @@ mounts, and the env contract is set directly.)
 
 1. **Happy path, fixed order.** Full run with the happy hooks and a stub
    emitting a valid payload: phase order is exactly
-   skills/env/secrets/hostkey/clone/signing/context/prelude/agent/result
+   skills/env/secrets/hostkey/clone/signing/context/prelude/agent/postlude/result
+   (postlude, like skills, always appears in the order and is a no-op when
+   its hook is undeclared)
    (asserted from the structured log; `skills` is a no-op when the fixture
    declares no skills leg); the stub's recorded prompt is `/<skill>` + blank
    line + the exact `CONTEXT.md` bytes; `result.json` is status ok with the
@@ -44,11 +48,19 @@ mounts, and the env contract is set directly.)
    no committer email in the contract env, the box aborts at the signing
    phase pointing at the `add-key --git-email` remedy — a gated step never
    invents a committer email.
-6. **Host-key policy.** An `ssh://` remote with neither pinned key nor TOFU
+6. **Postlude runs after the agent, before extraction.** With a postlude
+   hook declared: it observes the agent's artifacts (the stub's output file
+   exists when it runs — ordering proven, not assumed) and its own marker
+   lands before the record is read. A failing postlude aborts with
+   `handoff.json` carrying `{phase: postlude}` and the stderr tail — the
+   agent already ran, and the record is the failed-attempt shape. A template
+   WITHOUT a postlude behaves identically to before the phase existed, except
+   the phase-start log line and the timing-map entry the static order adds.
+7. **Host-key policy.** An `ssh://` remote with neither pinned key nor TOFU
    aborts at the hostkey phase before clone; with `FABER_HOST_KEY` set, the
    known-hosts file contains the pinned line and `GIT_SSH_COMMAND` says
    `StrictHostKeyChecking=yes`.
-7. **Secrets from stdin, reaching hooks, never the handoff.** With
+8. **Secrets from stdin, reaching hooks, never the handoff.** With
    `FABER_SECRETS_STDIN=1` and stdin fed the single JSON object
    `{"service_token":"<base64(value)>"}`, the secrets phase writes
    `<secrets-dir>/service_token` (the scratch stand-in for `/run/secrets`) at
@@ -60,28 +72,28 @@ mounts, and the env contract is set directly.)
    `secrets` before any hook runs. Unset `FABER_SECRETS_STDIN` with a
    pre-placed file in the secrets dir still exports it (the origin-agnostic
    second step), and stdin is left unread.
-8. **Fallback record.** Agent exits 0 writing no `output.json`: with an
+9. **Fallback record.** Agent exits 0 writing no `output.json`: with an
    all-optional output schema, `result.json` is ok, empty payload,
    `fallback: true`; with a required field, it is failed with reason
    `missing-output` — same fixture, schema flipped.
-9. **Schema violations collected.** A payload with a wrong-typed field *and*
+10. **Schema violations collected.** A payload with a wrong-typed field *and*
    an out-of-enum value fails with reason `output-schema` listing both; an
    extra undeclared field alone does not fail but is marked unthreaded.
-10. **Unfavorable is not failure.** `{"verdict": "changes"}` against the
+11. **Unfavorable is not failure.** `{"verdict": "changes"}` against the
     reference review schema yields status ok — conditions, not failure
     semantics, react to the verdict.
-11. **Declared side-effect verified.** Prelude declares `BRANCH=t-1`: when the
+12. **Declared side-effect verified.** Prelude declares `BRANCH=t-1`: when the
     stub agent actually pushes the branch to the bare repo, the record is ok;
     when it does not, the record is failed with `side-effect-unverified`
     despite a schema-valid payload.
-12. **Agent crash.** Stub exits 17: handoff `{phase: agent, exit_code: 17}`,
+13. **Agent crash.** Stub exits 17: handoff `{phase: agent, exit_code: 17}`,
     failed record, no extraction of the stale `output.json`.
-13. **Host boundary.** `ExtractResult` over the scenario-1 directory returns
+14. **Host boundary.** `ExtractResult` over the scenario-1 directory returns
     the same record; over a truncated `result.json` returns the synthesized
     `box-vanished` failure; over a record whose payload was hand-edited to
     break the schema, a failed record — the host never threads it.
 
-14. **Skills leg links a read-only tree, under the box `HOME` not the process
+15. **Skills leg links a read-only tree, under the box `HOME` not the process
     `HOME`.** The phase resolves `HOME` from the box environment (`b.Environ`),
     never `os.Getenv` — the preamble sets `HOME=/home/box` only in `b.Environ`,
     so on the drop path the process `HOME` diverges. The test makes them diverge

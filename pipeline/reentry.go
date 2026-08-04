@@ -119,20 +119,21 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	}
 	defer skillsCleanup()
 	spec, err := agent.BuildRunSpec(agent.BoxSpec{
-		RunID:       t.Header.RunID + "-interactive",
-		NodeID:      t.StepID,
-		Attempt:     attempt,
-		Template:    node.Template,
-		Image:       tag,
-		Inputs:      inputs,
-		ResultDir:   resultDir,
-		EntryBinary: r.EntryBinary,
-		ContextHook: node.Template.Hooks.Context,
-		PreludeHook: node.Template.Hooks.Prelude,
-		SkillsDir:   skillsHost,
-		SkillsLink:  skillsLink(node.Template),
-		Model:       node.Template.Model,
-		Effort:      node.Template.Effort,
+		RunID:        t.Header.RunID + "-interactive",
+		NodeID:       t.StepID,
+		Attempt:      attempt,
+		Template:     node.Template,
+		Image:        tag,
+		Inputs:       inputs,
+		ResultDir:    resultDir,
+		EntryBinary:  r.EntryBinary,
+		ContextHook:  node.Template.Hooks.Context,
+		PreludeHook:  node.Template.Hooks.Prelude,
+		PostludeHook: node.Template.Hooks.Postlude,
+		SkillsDir:    skillsHost,
+		SkillsLink:   skillsLink(node.Template),
+		Model:        node.Template.Model,
+		Effort:       node.Template.Effort,
 	})
 	if err != nil {
 		return err

@@ -15,7 +15,7 @@ Faber is **mechanism, not policy**: it knows `docker build`/`docker run`, a work
 | config | orchestrator.yaml schema, typed params, desugaring to JSON IR, validation, CLI, logging | — |
 | infra | Typed subprocess actuation (docker/git/nix), Nix image build, container run primitive | config |
 | security | Run-time bindings: network (egress lock), remote (pinned gateway), identity (ephemeral ssh-agent), credential delegation | config, infra |
-| agent | The box: fixed phase order context → prelude → agent → result, structured result extraction | config, infra, security |
+| agent | The box: fixed phase order context → prelude → agent → postlude → result, structured result extraction | config, infra, security |
 | metering | Pluggable estimate/actual budget hooks, endpoint fidelity tiers, 429-defer floor | config |
 | failure | Structured step results, on_failure cleanup, retry, run journal, resume/recovery modes | config |
 | pipeline | IR executor: topological + parallel step scheduling, CEL conditions, generate expansion | config, infra, security, agent, metering, failure |

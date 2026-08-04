@@ -143,6 +143,7 @@ type ResourceDef struct {
 type HookSet struct {
     Context   string `yaml:"context"`
     Prelude   string `yaml:"prelude"`
+    Postlude  string `yaml:"postlude"`
     OnFailure string `yaml:"on_failure"`
 }
 

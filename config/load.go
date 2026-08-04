@@ -179,6 +179,7 @@ func resolvePaths(cfg *Config, dir string) {
 		}
 		t.Hooks.Context = resolveHookField(dir, t.Hooks.Context)
 		t.Hooks.Prelude = resolveHookField(dir, t.Hooks.Prelude)
+		t.Hooks.Postlude = resolveHookField(dir, t.Hooks.Postlude)
 		t.Hooks.OnFailure = resolveHookField(dir, t.Hooks.OnFailure)
 		cfg.Templates[name] = t
 	}

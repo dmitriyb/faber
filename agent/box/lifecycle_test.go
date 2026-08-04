@@ -137,6 +137,22 @@ func (f *fixture) happyHooks() {
 	f.writeHook(contract.HookPrelude, "#!/bin/sh\nprintf 'BRANCH=t-1\\n' >> \"$FABER_BUNDLE_DIR/bundle.env\"\ntouch \"$STUB_DIR/prelude-marker\"\n")
 }
 
+// happyPostlude installs a postlude that asserts the agent's output.json
+// artifact already exists (proving it runs after the agent, not just
+// declared to) before touching its own marker.
+func (f *fixture) happyPostlude() {
+	f.writeHook(contract.HookPostlude, "#!/bin/sh\n"+
+		"[ -f \"$FABER_RESULT_DIR/output.json\" ] || { echo 'agent artifact missing' >&2; exit 1; }\n"+
+		"pwd > \"$STUB_DIR/postlude-cwd\"\n"+
+		"touch \"$STUB_DIR/postlude-marker\"\n")
+}
+
+// failingPostlude installs a postlude that exits 5 with stderr — the fixture
+// bullet's failing variant.
+func (f *fixture) failingPostlude() {
+	f.writeHook(contract.HookPostlude, "#!/bin/sh\necho 'postlude rejected' >&2\nexit 5\n")
+}
+
 // gateway seeds a local bare repository standing in for the gateway (path
 // remote, no ssh transport) and points the box at it.
 func (f *fixture) gateway() string {
@@ -293,15 +309,17 @@ func phasesFromLog(t *testing.T, log string) []string {
 
 // Scenario 1. Verifies 93ba0858d75f, ae434449cac9 and ff8e85704b0a: the full
 // run drives exactly skills/env/secrets/hostkey/clone/signing/context/prelude/
-// agent/result (skills is a no-op when the fixture declares no skills leg); the
-// stub's recorded prompt is /<skill> + blank line + the
-// exact CONTEXT.md bytes; result.json is ok with the validated payload and
-// attempt echoing FABER_ATTEMPT.
+// agent/[postlude/]result (skills is a no-op when the fixture declares no
+// skills leg; postlude likewise runs as a no-op phase here since this fixture
+// declares no postlude hook); the stub's recorded prompt is /<skill> + blank
+// line + the exact CONTEXT.md bytes; result.json is ok with the validated
+// payload and attempt echoing FABER_ATTEMPT.
 func TestLifecycle_HappyPathFixedOrder(t *testing.T) {
 	f := newFixture(t)
 	f.gateway()
 	f.sshAgent(1)
 	f.happyHooks()
+	f.happyPostlude()
 	f.env[contract.EnvOutputSchema] = `{"verdict": {"type": "string", "enum": ["ok", "changes"], "required": true}}`
 	f.env["STUB_OUTPUT"] = `{"verdict": "ok"}`
 	f.env["STUB_PUSH_BRANCH"] = "t-1" // satisfy the declared side-effect
@@ -310,7 +328,7 @@ func TestLifecycle_HappyPathFixedOrder(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d\n%s", code, log)
 	}
-	want := []string{"skills", "env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "result"}
+	want := []string{"skills", "env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "postlude", "result"}
 	if got := phasesFromLog(t, log); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
 	}
@@ -327,6 +345,21 @@ func TestLifecycle_HappyPathFixedOrder(t *testing.T) {
 	rec := f.record()
 	if rec.Status != contract.StatusOK || rec.Payload["verdict"] != "ok" || rec.Attempt != 3 {
 		t.Fatalf("record = %+v", rec)
+	}
+	// The postlude ran on the GATED path with cwd = the clone (not scratch).
+	if _, err := os.Stat(filepath.Join(f.root, "postlude-marker")); err != nil {
+		t.Fatalf("postlude marker missing on the gated path: %v", err)
+	}
+	cwd, err := os.ReadFile(filepath.Join(f.root, "postlude-cwd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCwd, err := filepath.EvalSymlinks(filepath.Join(f.workspace, "repo-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(cwd)); got != wantCwd {
+		t.Fatalf("postlude cwd = %q, want the clone %q", got, wantCwd)
 	}
 }
 
@@ -470,7 +503,78 @@ func TestLifecycle_SigningDerivedFromForwardedAgent(t *testing.T) {
 	})
 }
 
-// Scenario 6. Verifies 93ba0858d75f: host-key policy precedes any network
+// Scenario 6. Verifies spec/proposals/2026-08-04-postlude-phase.md: a
+// declared postlude runs after the agent and before result extraction — it
+// observes the agent's artifact (the stub's output.json exists when it
+// runs — ordering proven, not assumed) and its own marker lands before the
+// record is read. A failing postlude aborts with handoff.json carrying
+// {phase: postlude} and the stderr tail — the agent already ran, and the
+// record is the failed-attempt shape. A template WITHOUT a postlude behaves
+// byte-identically to before the phase existed.
+func TestLifecycle_PostludeRunsAfterAgentBeforeExtraction(t *testing.T) {
+	t.Run("postlude observes the agent's artifact and its marker precedes the record", func(t *testing.T) {
+		f := newFixture(t)
+		f.happyPostlude()
+		f.env["STUB_OUTPUT"] = `{}`
+
+		code, log := f.run()
+		if code != 0 {
+			t.Fatalf("exit = %d\n%s", code, log)
+		}
+		want := []string{"skills", "env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "postlude", "result"}
+		if got := phasesFromLog(t, log); fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("phase order = %v, want %v", got, want)
+		}
+		if _, err := os.Stat(filepath.Join(f.root, "postlude-marker")); err != nil {
+			t.Fatalf("postlude marker missing: %v", err)
+		}
+		if rec := f.record(); rec.Status != contract.StatusOK {
+			t.Fatalf("record = %+v", rec)
+		}
+	})
+	t.Run("failing postlude aborts with a failed record after the agent ran", func(t *testing.T) {
+		f := newFixture(t)
+		f.failingPostlude()
+		f.env["STUB_OUTPUT"] = `{}`
+
+		code, _ := f.run()
+		if code == 0 {
+			t.Fatal("want nonzero exit")
+		}
+		if argv := f.stubArgv(); argv == nil {
+			t.Fatal("the agent never ran before the postlude failure")
+		}
+		h := f.handoff()
+		if h.Phase != "postlude" || h.ExitCode != 5 || !strings.Contains(h.StderrTail, "postlude rejected") {
+			t.Fatalf("handoff = %+v", h)
+		}
+		rec := f.record()
+		if rec.Status != contract.StatusFailed || rec.Error.Handoff != contract.HandoffFile {
+			t.Fatalf("record = %+v", rec)
+		}
+	})
+	t.Run("no postlude declared is byte-identical to before the phase existed", func(t *testing.T) {
+		f := newFixture(t)
+		f.writeHook(contract.HookContext, "#!/bin/sh\nprintf 'ctx body line\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
+		f.env[contract.EnvOutputSchema] = `{"verdict": {"type": "string", "enum": ["ok", "changes"], "required": true}}`
+		f.env["STUB_OUTPUT"] = `{"verdict": "ok"}`
+
+		code, log := f.run()
+		if code != 0 {
+			t.Fatalf("exit = %d\n%s", code, log)
+		}
+		phases := phasesFromLog(t, log)
+		want := []string{"skills", "env", "secrets", "hostkey", "clone", "signing", "context", "prelude", "agent", "postlude", "result"}
+		if fmt.Sprint(phases) != fmt.Sprint(want) {
+			t.Fatalf("phase order = %v, want %v", phases, want)
+		}
+		if rec := f.record(); rec.Status != contract.StatusOK || rec.Payload["verdict"] != "ok" {
+			t.Fatalf("record = %+v", rec)
+		}
+	})
+}
+
+// Scenario 7. Verifies 93ba0858d75f: host-key policy precedes any network
 // use — an ssh remote with neither pinned key nor TOFU aborts at the hostkey
 // phase before clone; a pinned key lands in a known-hosts file and
 // StrictHostKeyChecking=yes reaches git.
@@ -540,7 +644,7 @@ exit 0
 	})
 }
 
-// Scenario 7. Verifies 93ba0858d75f and b880aa49b3b9: with FABER_SECRETS_STDIN=1
+// Scenario 8. Verifies 93ba0858d75f and b880aa49b3b9: with FABER_SECRETS_STDIN=1
 // and a single JSON object on stdin, the secrets phase writes the 0600
 // /run/secrets file (scratch stand-in) with the decoded bytes and exports it,
 // so the hook environment carries SERVICE_TOKEN; a later failure's handoff
@@ -631,7 +735,7 @@ func TestLifecycle_SecretsReachHooksNeverHandoff(t *testing.T) {
 	})
 }
 
-// Scenario 8. Verifies ff8e85704b0a: an agent that exits 0 writing no
+// Scenario 9. Verifies ff8e85704b0a: an agent that exits 0 writing no
 // output.json yields the fallback record — ok and empty under an
 // all-optional schema, missing-output when a field is required.
 func TestLifecycle_FallbackRecord(t *testing.T) {
@@ -655,7 +759,7 @@ func TestLifecycle_FallbackRecord(t *testing.T) {
 	})
 }
 
-// Scenario 9. Verifies ff8e85704b0a and f1ce19e94daa (first pass): schema
+// Scenario 10. Verifies ff8e85704b0a and f1ce19e94daa (first pass): schema
 // violations are collected under reason output-schema; an extra undeclared
 // field alone does not fail but is marked unthreaded.
 func TestLifecycle_SchemaViolationsCollected(t *testing.T) {
@@ -690,7 +794,7 @@ func TestLifecycle_SchemaViolationsCollected(t *testing.T) {
 	})
 }
 
-// Scenario 10. Verifies ff8e85704b0a: a valid-but-unfavorable payload is an
+// Scenario 11. Verifies ff8e85704b0a: a valid-but-unfavorable payload is an
 // ok result.
 func TestLifecycle_UnfavorableIsNotFailure(t *testing.T) {
 	f := newFixture(t)
@@ -703,7 +807,7 @@ func TestLifecycle_UnfavorableIsNotFailure(t *testing.T) {
 	}
 }
 
-// Scenario 11. Verifies ff8e85704b0a: the declared BRANCH side-effect is
+// Scenario 12. Verifies ff8e85704b0a: the declared BRANCH side-effect is
 // verified against the gateway — pushed means ok, unpushed means failed with
 // side-effect-unverified despite a schema-valid payload.
 func TestLifecycle_DeclaredSideEffectVerified(t *testing.T) {
@@ -738,7 +842,7 @@ func TestLifecycle_DeclaredSideEffectVerified(t *testing.T) {
 	})
 }
 
-// Scenario 12. Verifies ae434449cac9: an agent crash yields handoff
+// Scenario 13. Verifies ae434449cac9: an agent crash yields handoff
 // {phase: agent, exit_code: 17} and a failed record; the stale output.json
 // is never extracted.
 func TestLifecycle_AgentCrash(t *testing.T) {
@@ -760,7 +864,7 @@ func TestLifecycle_AgentCrash(t *testing.T) {
 	}
 }
 
-// Scenario 13. Verifies ff8e85704b0a: the host boundary returns the same
+// Scenario 14. Verifies ff8e85704b0a: the host boundary returns the same
 // record over a good directory, synthesizes box-vanished over a truncated
 // one, and refuses to thread a hand-edited payload that breaks the schema.
 func TestLifecycle_HostBoundary(t *testing.T) {

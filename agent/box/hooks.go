@@ -65,6 +65,16 @@ func (b *Box) runPreludeHook(ctx context.Context) error {
 	return nil
 }
 
+// runPostludeHook is phase 10: the third user-filled phase, running after the
+// agent and before result extraction. Identical shape to runContextHook — a
+// missing hook file is a no-op, a nonzero exit fail-stops with phase
+// "postlude" and the stderr tail. Unlike runPreludeHook, no bundle-existence
+// assertion follows it: that gate belongs to the pre-agent pair, and the
+// result phase's own validations run next regardless.
+func (b *Box) runPostludeHook(ctx context.Context) error {
+	return b.runHook(ctx, contract.HookPostlude)
+}
+
 // reservedSidecarKey reports whether an environment key user-named material
 // (a bundle.env sidecar entry, an exported secret) would use to override the
 // engine/security env contract or the process runner environment. Both rule

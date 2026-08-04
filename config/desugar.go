@@ -595,6 +595,7 @@ func resolveHooks(cfg *Config, h HookSet) HookSet {
 	return HookSet{
 		Context:   resolveHook(cfg, h.Context),
 		Prelude:   resolveHook(cfg, h.Prelude),
+		Postlude:  resolveHook(cfg, h.Postlude),
 		OnFailure: resolveHook(cfg, h.OnFailure),
 	}
 }

@@ -269,6 +269,124 @@ func TestSidecarCannotOverrideEngineEnv(t *testing.T) {
 	}
 }
 
+// Verifies the postlude phase (spec/proposals/2026-08-04-postlude-phase.md):
+// the postlude hook runs after the agent — order proven via the fake runner's
+// recorded call sequence, not assumed — and is a no-op when the template
+// declares none.
+func TestPostludeRunsAfterAgent(t *testing.T) {
+	d := newTestDirs(t)
+	fr := &fakeRunner{}
+	fr.handle = func(spec CmdSpec, stream bool) (CmdResult, error) {
+		if spec.Argv[0] == "agent-cli" {
+			writeOutput(t, d, `{}`)
+		}
+		return CmdResult{}, nil
+	}
+	writeHook(t, d, contract.HookPostlude)
+	b := newTestBox(t, d, nil, fr)
+	if code := Main(context.Background(), b); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	want := []string{"agent-cli -p", filepath.Join(d.hooks, contract.HookPostlude)}
+	gotCalls := fr.argvs()
+	if len(gotCalls) != 2 || gotCalls[0] != want[0] || gotCalls[1] != want[1] {
+		t.Fatalf("call order = %v, want %v", gotCalls, want)
+	}
+}
+
+// Verifies: a template that declares no postlude hook is unaffected — the
+// phase is a no-op and the run completes exactly as it did before the phase
+// existed.
+func TestPostludeAbsentIsNoOp(t *testing.T) {
+	d := newTestDirs(t)
+	fr := &fakeRunner{}
+	fr.handle = func(spec CmdSpec, stream bool) (CmdResult, error) {
+		if spec.Argv[0] == "agent-cli" {
+			writeOutput(t, d, `{}`)
+		}
+		return CmdResult{}, nil
+	}
+	b := newTestBox(t, d, nil, fr)
+	if code := Main(context.Background(), b); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	for _, call := range fr.argvs() {
+		if strings.Contains(call, "postlude") {
+			t.Fatalf("no postlude declared, but a postlude call ran: %v", fr.argvs())
+		}
+	}
+	if rec := readRecord(t, d); rec.Status != contract.StatusOK {
+		t.Fatalf("record status = %q, want ok", rec.Status)
+	}
+}
+
+// Verifies: a nonzero postlude exit fail-stops with phase "postlude", a
+// stderr tail in the handoff, and a failed attempt record — the agent already
+// ran (its argv recording exists), and no result phase overwrites the outcome.
+func TestFailedPostludeAbortsExtraction(t *testing.T) {
+	d := newTestDirs(t)
+	fr := &fakeRunner{}
+	fr.handle = func(spec CmdSpec, stream bool) (CmdResult, error) {
+		switch spec.Argv[0] {
+		case "agent-cli":
+			writeOutput(t, d, `{}`)
+		case filepath.Join(d.hooks, contract.HookPostlude):
+			return CmdResult{ExitCode: 5, StderrTail: []byte("postlude broke\n")}, nil
+		}
+		return CmdResult{}, nil
+	}
+	writeHook(t, d, contract.HookPostlude)
+	b := newTestBox(t, d, nil, fr)
+	if code := Main(context.Background(), b); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	sawAgent := false
+	for _, call := range fr.argvs() {
+		if strings.HasPrefix(call, "agent-cli") {
+			sawAgent = true
+		}
+	}
+	if !sawAgent {
+		t.Fatal("the agent never ran before the postlude failure")
+	}
+	h := readHandoff(t, d)
+	if h.Phase != "postlude" || h.Reason != contract.ReasonHookFailed || h.ExitCode != 5 {
+		t.Fatalf("handoff = %+v", h)
+	}
+	if !strings.Contains(h.StderrTail, "postlude broke") {
+		t.Fatalf("handoff stderr tail = %q", h.StderrTail)
+	}
+	rec := readRecord(t, d)
+	if rec.Status != contract.StatusFailed || rec.Error.Reason != contract.ReasonHookFailed {
+		t.Fatalf("record = %+v", rec)
+	}
+}
+
+// Verifies the hookDeclared careful case the impl leaf calls out: a template
+// with ONLY a postlude (no context or prelude) still gets today's
+// synthesized-context behavior for the missing pre-agent hooks — the postlude
+// phase runs strictly after the prelude phase's synthesis decision, so its
+// own hook file can never influence it.
+func TestPostludeOnlyTemplateStillSynthesizesBundle(t *testing.T) {
+	d := newTestDirs(t)
+	fr := &fakeRunner{}
+	fr.handle = func(spec CmdSpec, stream bool) (CmdResult, error) {
+		if spec.Argv[0] == "agent-cli" {
+			writeOutput(t, d, `{}`)
+		}
+		return CmdResult{}, nil
+	}
+	writeHook(t, d, contract.HookPostlude)
+	b := newTestBox(t, d, map[string]string{"FABER_INPUT_ALPHA": "v1"}, fr)
+	if code := Main(context.Background(), b); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	t.Cleanup(func() { os.RemoveAll(b.Workdir) })
+	if !strings.Contains(b.Bundle.Doc, "ALPHA: v1") {
+		t.Fatalf("synthesized bundle missing the input enumeration, got:\n%s", b.Bundle.Doc)
+	}
+}
+
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {

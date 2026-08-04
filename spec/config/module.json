@@ -21,7 +21,7 @@
       "preq_id": "78296a64cc3c",
       "type": "functional",
       "title": "Opaque policy seams",
-      "description": "All domain behavior enters through opaque, engine-agnostic config values: hook script paths (context, prelude, on_failure), data-source commands for generate, resolver commands for credentials, and free-form param names. The schema never names a tracker, gate service, or spec tool; faber passes these values through without interpreting their contents."
+      "description": "All domain behavior enters through opaque, engine-agnostic config values: hook script paths (context, prelude, postlude, on_failure), data-source commands for generate, resolver commands for credentials, and free-form param names. The schema never names a tracker, gate service, or spec tool; faber passes these values through without interpreting their contents."
     },
     {
       "id": "014aaac22619",

@@ -204,6 +204,43 @@ func TestBuildRunSpecSkillsLegOneSided(t *testing.T) {
 	}
 }
 
+// Verifies spec/proposals/2026-08-04-postlude-phase.md: a declared postlude
+// hook mounts read-only at ContainerHooksDir/postlude, mirroring the prelude
+// mount exactly; absent (as in validSpec) it stays unmounted — hook-only
+// templates that predate the phase are unaffected.
+func TestBuildRunSpecPostludeHookMount(t *testing.T) {
+	spec := validSpec()
+	spec.PostludeHook = "/host/hooks/post"
+	rs, err := BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/host/hooks/post:" + contract.ContainerHooksDir + "/" + contract.HookPostlude + ":ro"
+	found := false
+	for _, m := range rs.Mounts {
+		if m.Host == "/host/hooks/post" {
+			found = true
+			if m.Container != contract.ContainerHooksDir+"/"+contract.HookPostlude || !m.ReadOnly {
+				t.Fatalf("postlude mount = %+v, want %q", m, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("postlude mount missing from %+v", rs.Mounts)
+	}
+
+	// Absent, no postlude mount is emitted (validSpec sets no PostludeHook).
+	rs2, err := BuildRunSpec(validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range rs2.Mounts {
+		if m.Container == contract.ContainerHooksDir+"/"+contract.HookPostlude {
+			t.Fatalf("mounts unexpectedly carry the postlude bind %+v", m)
+		}
+	}
+}
+
 // Verifies ae434449cac9: the agent CLI is opaque user config with no vendor
 // default — absent everywhere it is a build error, and the template env is
 // an accepted source.

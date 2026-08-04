@@ -37,7 +37,7 @@ templates:
     skill: implement                  # the /<skill> prompt token
     model: claude-sonnet-5            # agent model, passed through as --model (required; no vendor default)
     effort: high                      # agent effort level, passed through as --effort (required)
-    hooks: {context: ./hooks/gather-context, on_failure: release}  # a bare name (library ref) or a path
+    hooks: {context: ./hooks/gather-context, on_failure: release}  # a bare name (library ref) or a path; also prelude (pre-agent) and postlude (post-agent, pre-result)
     inputs:  {repo: {type: string, required: true}, item: {type: string, required: true}}
     output:  {branch: {type: string, required: true}, pr: {type: int, required: true}}
 

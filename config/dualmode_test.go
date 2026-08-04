@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -110,6 +111,88 @@ func resolvedBox(t *testing.T, cfg *Config) *ResolvedTemplate {
 	}
 	t.Fatal("no agent node")
 	return nil
+}
+
+// Verifies spec/proposals/2026-08-04-postlude-phase.md: hooks.postlude follows
+// the same dual-mode resolution as the other hook fields — a bare name
+// resolves against the Hooks library, a path form passes through verbatim —
+// and, absent, resolves to the empty string (the phase is a no-op).
+func TestHooksPostludeResolution(t *testing.T) {
+	t.Run("named form resolves against the hooks library", func(t *testing.T) {
+		cfg, err := loadStr(t, `
+version: 1
+identities:
+  worker: {key: ./keys/worker}
+images:
+  base: {packages: [git]}
+hooks:
+  ctx: {path: ./hooks/ctx}
+  post: {path: ./hooks/post}
+templates:
+  box:
+    image: base
+    identity: worker
+    run: {env: {FABER_AGENT_CLI: agent-cli}}
+    skill: act
+    model: agent-model
+    effort: high
+    hooks: {context: ctx, postlude: post}
+    inputs: {input: {type: string, required: true}}
+    output: {result: {type: string, required: true}}
+workflows:
+  flow:
+    params: {subject: {type: string, required: true}}
+    steps:
+      - id: first
+        use: box
+        with: {input: "${params.subject}"}
+`)
+		if err != nil {
+			t.Fatalf("must validate: %v", err)
+		}
+		if got := resolvedBox(t, cfg).Hooks.Postlude; got != "./hooks/post" {
+			t.Fatalf("resolved postlude = %q, want the library path verbatim", got)
+		}
+	})
+	t.Run("inline path form passes through verbatim, uninterpreted", func(t *testing.T) {
+		cfg, err := loadStr(t, `
+version: 1
+identities:
+  worker: {key: ./keys/worker}
+templates:
+  box:
+    build: {packages: [git]}
+    run: {identity: worker, env: {FABER_AGENT_CLI: agent-cli}}
+    skill: act
+    model: agent-model
+    effort: high
+    hooks: {context: ./hooks/ctx, postlude: ./hooks/post}
+    inputs: {input: {type: string, required: true}}
+    output: {result: {type: string, required: true}}
+workflows:
+  flow:
+    params: {subject: {type: string, required: true}}
+    steps:
+      - id: first
+        use: box
+        with: {input: "${params.subject}"}
+`)
+		if err != nil {
+			t.Fatalf("must validate: %v", err)
+		}
+		if got := resolvedBox(t, cfg).Hooks.Postlude; got != "./hooks/post" {
+			t.Fatalf("resolved postlude = %q, want the inline path verbatim", got)
+		}
+	})
+	t.Run("absent resolves to empty — the phase stays a no-op", func(t *testing.T) {
+		cfg, err := loadStr(t, inlineForm)
+		if err != nil {
+			t.Fatalf("must validate: %v", err)
+		}
+		if got := resolvedBox(t, cfg).Hooks.Postlude; got != "" {
+			t.Fatalf("resolved postlude = %q, want empty", got)
+		}
+	})
 }
 
 // Scenario 14: named skills desugar to an ordered, name-deduped Sources set
@@ -343,7 +426,7 @@ templates:
     effort: high
     skills: [real, ghostskill]
     skills_link: .claude/skills
-    hooks: {context: ghosthook}
+    hooks: {context: ghosthook, postlude: ghostposthook}
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
 workflows:
@@ -359,6 +442,7 @@ workflows:
 		`templates.box.image: unknown image "ghostimage"`,
 		`templates.box.identity: unknown identity "ghostid"`,
 		`templates.box.hooks.context: unknown hook "ghosthook"`,
+		`templates.box.hooks.postlude: unknown hook "ghostposthook"`,
 		`templates.box.skills[1]: unknown skill "ghostskill"`,
 	} {
 		if !strings.Contains(joined, want) {
@@ -402,5 +486,19 @@ workflows:
 		if !strings.Contains(joined, want) {
 			t.Fatalf("collected report missing %q:\n%s", want, joined)
 		}
+	}
+}
+
+// Verifies proposal 2026-08-04-postlude-phase: the postlude hook field
+// round-trips under its exact lowercase JSON tag — the IR wire name is
+// pinned here since no golden fixture declares one (omitempty keeps the
+// existing goldens byte-identical).
+func TestHookSetPostludeJSONTag(t *testing.T) {
+	b, err := json.Marshal(HookSet{Postlude: "./hooks/post-answers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"postlude":"./hooks/post-answers"`) {
+		t.Fatalf("postlude JSON tag not pinned: %s", b)
 	}
 }
