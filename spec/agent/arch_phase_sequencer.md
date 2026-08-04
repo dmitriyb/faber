@@ -24,8 +24,16 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    daemon owned by root. Before any other phase, `faber-box` `chown`s exactly
    those writable mounts to `FABER_RUN_UID:FABER_RUN_GID` (the host user's
    uid:gid, so result-bind files stay host-owned), then drops privileges —
-   `setgroups` to the single run group, `setgid`, `setuid` — so every phase
-   below, and the untrusted agent in particular, runs non-root. The
+   `setgroups` to the run group **plus the forwarded-agent socket group when one
+   was granted**, `setgid`, `setuid` — so every phase below, and the untrusted
+   agent in particular, runs non-root. Keeping the socket group is load-bearing:
+   the identity binding's `--group-add <agent_socket_group>` (the macOS VM case,
+   where the forwarded agent socket is root-owned) admits the still-root box to
+   that group, but `setgroups` *replaces* the supplementary set — so dropping to
+   the run group alone would strip the grant and leave the dropped box unable to
+   open the agent socket (a `Permission denied (publickey)` clone failure). The
+   host names the gid to keep in `FABER_AGENT_SOCKET_GID`; unset ⇒ run group only.
+   The
    `/run/secrets` tmpfs (present only in file mode, mounted root-owned by the
    binding's `--tmpfs` flag) is a **gated add to the chown set**: chowned only
    when it exists, so the dropped run user can write its `0600` secret files in

@@ -201,6 +201,58 @@ func TestIdentityTeardownAndSocketGroup(t *testing.T) {
 	}
 }
 
+// hasFlagPair reports whether args contains the two consecutive tokens flag,
+// value at some position i, i+1.
+func hasFlagPair(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+// Verifies the agent-socket-group setgroups fix: a non-empty SocketGroup
+// emits both the docker-level "--group-add <g>" grant and the box-contract
+// "-e FABER_AGENT_SOCKET_GID=<g>" pair the preamble needs to keep that group
+// across its setgroups drop; an empty SocketGroup emits neither.
+func TestIdentityAgentSocketGIDEnv(t *testing.T) {
+	agent := newFakeAgent()
+	b := identityBinding(agent, nil)
+	b.SocketGroup = "101"
+	c, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if !hasFlagPair(c.Args, "--group-add", "101") {
+		t.Fatalf("want --group-add 101 in args, got %q", c.Args)
+	}
+	if !hasFlagPair(c.Args, "-e", EnvAgentSocketGID+"=101") {
+		t.Fatalf("want -e %s=101 in args, got %q", EnvAgentSocketGID, c.Args)
+	}
+	if err := c.Teardown(context.Background()); err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+
+	agent2 := newFakeAgent()
+	b2 := identityBinding(agent2, nil)
+	c2, err := b2.Prepare(context.Background(), implementStep(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if slices.Contains(c2.Args, "--group-add") {
+		t.Fatalf("empty SocketGroup must not emit --group-add, got %q", c2.Args)
+	}
+	for _, a := range c2.Args {
+		if strings.HasPrefix(a, EnvAgentSocketGID+"=") {
+			t.Fatalf("empty SocketGroup must not emit %s, got %q", EnvAgentSocketGID, c2.Args)
+		}
+	}
+	if err := c2.Teardown(context.Background()); err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+}
+
 // Verifies e47a00273f03: a template with no identity contributes nothing —
 // no agent is ever spawned.
 func TestIdentityAbsentContributesNothing(t *testing.T) {

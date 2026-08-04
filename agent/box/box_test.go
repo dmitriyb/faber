@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/dmitriyb/faber/agent/contract"
+	"github.com/dmitriyb/faber/security"
 )
 
 // fakeRunner records every CmdSpec and answers from a scripted handler; unit
@@ -922,6 +923,62 @@ func TestContractVersionHandshake(t *testing.T) {
 	env = ParseEnv(baseEnv(d, nil)) // absent: tolerated (direct invocations)
 	if err := env.validate(); err != nil {
 		t.Fatalf("absent contract version must validate: %v", err)
+	}
+}
+
+// Verifies the agent-socket-group setgroups fix's group-list construction:
+// the run gid is always present; the socket gid joins it only when granted
+// (>= 0) and distinct from the run gid — covering the exact logic the
+// preamble hands to setgroups without a real (root-only) syscall.
+func TestRunUserGroups(t *testing.T) {
+	cases := []struct {
+		name           string
+		runGID         int
+		agentSocketGID int
+		want           []int
+	}{
+		{"no socket gid (sentinel -1)", 1000, -1, []int{1000}},
+		{"distinct socket gid (macOS root socket)", 1000, 0, []int{1000, 0}},
+		{"socket gid equals run gid: no duplicate", 1000, 1000, []int{1000}},
+		{"positive distinct socket gid", 1000, 101, []int{1000, 101}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runUserGroups(tc.runGID, tc.agentSocketGID)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("runUserGroups(%d, %d) = %v, want %v", tc.runGID, tc.agentSocketGID, got, tc.want)
+			}
+		})
+	}
+}
+
+// Verifies the agent-socket-group setgroups fix's parse side: -1 is the
+// "none" sentinel (0 is a valid gid — macOS's socket group — and cannot
+// double as unset), a present "0" parses to 0, a positive value parses
+// normally, and blank or garbage both fall back to -1.
+func TestParseEnvAgentSocketGID(t *testing.T) {
+	d := newTestDirs(t)
+	cases := []struct {
+		name string
+		val  string
+		want int
+	}{
+		{"absent", "", -1},
+		{"zero", "0", 0},
+		{"positive", "101", 101},
+		{"garbage", "not-a-gid", -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			overrides := map[string]string{}
+			if tc.val != "" {
+				overrides[security.EnvAgentSocketGID] = tc.val
+			}
+			env := ParseEnv(baseEnv(d, overrides))
+			if env.AgentSocketGID != tc.want {
+				t.Fatalf("AgentSocketGID = %d, want %d", env.AgentSocketGID, tc.want)
+			}
+		})
 	}
 }
 
