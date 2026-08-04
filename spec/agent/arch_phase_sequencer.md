@@ -126,7 +126,15 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    the agent never starts on a missing bundle.
 9. **Agent.** Delegated to AgentInvoker: one headless skill invocation, the
    only nondeterministic phase in the box.
-10. **Result.** Delegated to ResultExtractor: extraction, schema validation,
+10. **Postlude hook.** Third user-filled phase, same PreludeHooks contract,
+   running AFTER the agent and BEFORE result extraction. Declared per
+   template (`hooks.postlude`), optional — absent skips the phase. Its job
+   is deterministic post-agent work: act on and validate the agent's
+   artifacts (turning "the agent's last step silently didn't happen" into
+   exact diagnostics — artifact absent vs malformed vs empty-but-legal),
+   and host post-steps the agent should not even know exist. Fail-stop with
+   phase name `postlude`.
+11. **Result.** Delegated to ResultExtractor: extraction, schema validation,
    declared side-effect verification, and emission of the attempt record.
 
 ## The skills leg

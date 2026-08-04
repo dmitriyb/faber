@@ -37,7 +37,7 @@
       "id": "299d74b42425",
       "type": "functional",
       "title": "The box lifecycle",
-      "description": "Every agent step runs in a fresh container with the fixed internal phase order context -> prelude -> agent -> result. Phases are user-filled (opaque scripts and an agent skill); the sequence is engine-owned and not configurable. A step is a lambda: its only durable state is its typed output plus the repo reached via the user's gateway.",
+      "description": "Every agent step runs in a fresh container with the fixed internal phase order context -> prelude -> agent -> postlude -> result. Phases are user-filled (opaque scripts and an agent skill); the sequence is engine-owned and not configurable. A step is a lambda: its only durable state is its typed output plus the repo reached via the user's gateway.",
       "priority": 1,
       "depends_on": ["67c87e1854ba"]
     },
@@ -148,7 +148,7 @@
       "id": "38eac7b92e62",
       "name": "agent",
       "path": "agent",
-      "description": "The box: fixed in-container phase order context -> prelude -> agent -> result, deterministic hook contracts, unrestricted agent invocation inside the sealed environment, and structured result extraction at the container boundary.",
+      "description": "The box: fixed in-container phase order context -> prelude -> agent -> postlude -> result, deterministic hook contracts, unrestricted agent invocation inside the sealed environment, and structured result extraction at the container boundary.",
       "requires_module": ["51be984560a5", "5baa87e1c166", "7fad2a9e2f92"]
     },
     {
@@ -189,7 +189,7 @@
     {
       "id": "011cabfde619",
       "title": "The Box",
-      "description": "A single agent step runs end-to-end: context and prelude hooks, agent invocation, structured result extracted and schema-validated at the container boundary.",
+      "description": "A single agent step runs end-to-end: context, prelude, and postlude hooks, agent invocation, structured result extracted and schema-validated at the container boundary.",
       "groups": ["38eac7b92e62"]
     },
     {

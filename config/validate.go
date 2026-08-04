@@ -393,6 +393,7 @@ func (v *validator) checkHooks(path string, t TemplateDef) {
 	fields := []struct{ name, value string }{
 		{"context", t.Hooks.Context},
 		{"prelude", t.Hooks.Prelude},
+		{"postlude", t.Hooks.Postlude},
 		{"on_failure", t.Hooks.OnFailure},
 	}
 	for _, f := range fields {

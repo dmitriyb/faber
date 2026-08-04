@@ -64,6 +64,7 @@ var phases = []Phase{
     {"context", (*Box).runContextHook},
     {"prelude", (*Box).runPreludeHook},
     {"agent", (*Box).runAgent},
+    {"postlude", (*Box).runPostludeHook},
     {"result", (*Box).emitResult},
 }
 
@@ -203,6 +204,16 @@ type CmdResult struct{ Stdout []byte; StderrTail []byte; ExitCode int }
   synthetic fallback); then four `git config` invocations (`gpg.format
   ssh`, `user.signingkey "key::"+pub`, `commit.gpgsign true`, name with
   default `faber-<identity>`, email verbatim).
+
+- `runPostludeHook`: identical shape to `runPreludeHook` — no-op when the
+  hook file is absent (the absence CHECK is per hook; the shared
+  `hookDeclared` flag it sets is consumed only by the pre-agent pair, which
+  already ran); runs
+  the mounted `/faber/hooks/postlude` with the box child env, cwd = the
+  workdir; nonzero exit fail-stops with phase `postlude` and the stderr
+  tail in the handoff. No bundle-existence assertion follows it (that
+  gate belongs to the pre-agent pair); the result phase's own validations
+  run next regardless.
 
 ## AgentInvoker
 

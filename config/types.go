@@ -305,10 +305,13 @@ type ResourceDef struct {
 	CPUs   float64 `yaml:"cpus,omitempty" json:"cpus,omitempty"`
 }
 
-// HookSet holds the opaque hook script paths — the policy seams.
+// HookSet holds the opaque hook script paths — the policy seams. Context and
+// Prelude run before the agent; Postlude runs after it and before result
+// extraction; OnFailure runs on step failure, outside the box phase order.
 type HookSet struct {
 	Context   string `yaml:"context,omitempty" json:"context,omitempty"`
 	Prelude   string `yaml:"prelude,omitempty" json:"prelude,omitempty"`
+	Postlude  string `yaml:"postlude,omitempty" json:"postlude,omitempty"`
 	OnFailure string `yaml:"on_failure,omitempty" json:"on_failure,omitempty"`
 }
 

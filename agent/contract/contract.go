@@ -131,7 +131,7 @@ const (
 	ContainerBundleDir = "/faber/bundle"
 
 	// ContainerHooksDir is where hook executables are bind-mounted
-	// read-only, one file per phase name (context, prelude).
+	// read-only, one file per phase name (context, prelude, postlude).
 	ContainerHooksDir = "/faber/hooks"
 
 	// ContainerSkillsDir is the fixed neutral path the host bind-mounts the
@@ -182,10 +182,12 @@ const (
 	// reported tier reads; the box never interprets it.
 	UsageFile = "usage.json"
 
-	// HookContext and HookPrelude are the per-phase hook file names under
-	// the hooks directory.
-	HookContext = "context"
-	HookPrelude = "prelude"
+	// HookContext, HookPrelude, and HookPostlude are the per-phase hook file
+	// names under the hooks directory. Context and Prelude run before the
+	// agent; Postlude runs after it, before result extraction.
+	HookContext  = "context"
+	HookPrelude  = "prelude"
+	HookPostlude = "postlude"
 )
 
 // InputEnv returns the environment variable carrying the named input slot:

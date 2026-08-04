@@ -1,14 +1,20 @@
 # PreludeHooks — the deterministic hook contract
 
+(One contract, three user slots: `context` and `prelude` before the agent,
+`postlude` after it — everything below applies to all three unless a slot is
+named explicitly.)
+
 ## What it is
 
-`context` and `prelude` are opaque user executables declared per template
-(`hooks.context`, `hooks.prelude`), bind-mounted read-only at
-`/faber/hooks/context` and `/faber/hooks/prelude` as part of the box run
-contract. They run *before* the agent, contain no agent, and hold no
-credentials beyond the handles already delegated to the box. Faber never reads
-their contents — it enforces only their environment, their exit codes, and
-their postcondition: the context bundle.
+`context`, `prelude`, and `postlude` are opaque user executables declared per
+template (`hooks.context`, `hooks.prelude`, `hooks.postlude`), bind-mounted
+read-only at `/faber/hooks/context`, `/faber/hooks/prelude`, and
+`/faber/hooks/postlude` as part of the box run contract. The pre-agent pair
+runs *before* the agent, the postlude *after* it (and before result
+extraction); none contains an agent, and none holds credentials beyond the
+handles already delegated to the box. Faber never reads their contents — it
+enforces only their environment, their exit codes, and (for the pre-agent
+pair) their postcondition: the context bundle.
 
 ## Inputs: the environment
 
@@ -42,6 +48,11 @@ time the prelude exits, it must contain:
 - Any further files (resolved document lists, per-item context directories),
   referenced from `CONTEXT.md` by path.
 
+The bundle is read once, after the prelude: `bundle.env` values (including
+the `BRANCH` side-effect declaration) are captured then, so a postlude's
+writes into the bundle are snapshotted on failure but never interpreted —
+declare side-effects from the prelude only.
+
 The split of labor is convention, not enforcement: `context` gathers and
 derives (read-only — resolve the work item, collect the authoritative
 documents), `prelude` acts (create the branch, claim the item with a signed
@@ -52,10 +63,13 @@ inputs, so a hook-less template (the reference `merge`) is valid.
 
 ## Exit semantics
 
-Each hook must exit 0. A nonzero exit — or a missing/empty `CONTEXT.md` after
-both hooks succeeded — aborts the step through the fail-stop path: a handoff
-record naming the phase (`context` or `prelude`), the exit code, and a stderr
-tail, plus a failed attempt record. The agent never starts. There is no
+Each hook must exit 0. A nonzero exit — or, for the pre-agent pair, a
+missing/empty `CONTEXT.md` after both succeeded — aborts the step through the
+fail-stop path: a handoff record naming the phase (`context`, `prelude`, or
+`postlude`), the exit code, and a stderr tail, plus a failed attempt record.
+A pre-agent failure means the agent never starts; a postlude failure comes
+after the agent ran, and its artifacts survive in the mounted result
+directory for diagnosis. There is no
 partial credit and no retry inside the box; the host's failure policy decides
 whether the whole step runs again (with `on_failure` cleanup between
 attempts, which is what lets a claiming prelude be re-run safely).

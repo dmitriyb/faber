@@ -105,7 +105,7 @@ TemplateDef  (named-reference form)
 ├── SkillsLink string              in-box $HOME-relative discovery path (was skills.link); required when Skills is non-empty
 ├── Model     string               REQUIRED opaque agent pass-through (the box renders --model)
 ├── Effort    string               REQUIRED opaque agent pass-through (the box renders --effort)
-├── Hooks     HookSet              {context, prelude, on_failure} — each a ref → Hooks
+├── Hooks     HookSet              {context, prelude, postlude, on_failure} — each a ref → Hooks
 ├── Run       RunDef               resources, runtime, env, volumes (+ Identity, back-compat)
 ├── Inputs    map[string]ParamDef  typed slots
 └── Output    map[string]FieldDef  typed output schema (validated at the boundary)
@@ -173,7 +173,7 @@ Disambiguation is by YAML node kind and lexical form, so it is deterministic:
 - **image**: `image:` (a scalar) vs `build:` (a mapping) are distinct keys.
 - **skills**: the `skills:` value is a *sequence* ⇒ named form; a *mapping*
   ⇒ inline `{dir, link}` form. One key, two node kinds, no ambiguity.
-- **hooks**: each `hooks.{context,prelude,on_failure}` value is a **path** iff it
+- **hooks**: each `hooks.{context,prelude,postlude,on_failure}` value is a **path** iff it
   contains a path separator `/` or begins with `.`, `~`, or `/`; otherwise it is a
   **hook name** resolved against the `Hooks` library. This path test is
   POSIX-oriented (it keys on `/`, `.`, `~`), which matches faber's Linux-container

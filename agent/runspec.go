@@ -52,11 +52,13 @@ type BoxSpec struct {
 	// bind-mounted read-only and set as the container command.
 	EntryBinary string
 
-	// ContextHook and PreludeHook are host paths of the template's opaque
-	// hook executables (resolved from Template.Hooks by the caller); empty
-	// means the phase is a no-op inside the box.
-	ContextHook string
-	PreludeHook string
+	// ContextHook, PreludeHook, and PostludeHook are host paths of the
+	// template's opaque hook executables (resolved from Template.Hooks by
+	// the caller); empty means the phase is a no-op inside the box.
+	// PostludeHook runs after the agent, before result extraction.
+	ContextHook  string
+	PreludeHook  string
+	PostludeHook string
 
 	// SkillsDir and SkillsLink are the template's optional skills leg (from
 	// Template.Skills). SkillsDir is the host directory bind-mounted read-only
@@ -220,6 +222,11 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	if spec.PreludeHook != "" {
 		mounts = append(mounts, infra.Mount{
 			Host: spec.PreludeHook, Container: contract.ContainerHooksDir + "/" + contract.HookPrelude, ReadOnly: true,
+		})
+	}
+	if spec.PostludeHook != "" {
+		mounts = append(mounts, infra.Mount{
+			Host: spec.PostludeHook, Container: contract.ContainerHooksDir + "/" + contract.HookPostlude, ReadOnly: true,
 		})
 	}
 	// The skills leg: a per-template read-only capability at the fixed neutral
