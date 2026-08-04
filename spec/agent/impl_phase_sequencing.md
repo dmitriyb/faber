@@ -32,6 +32,7 @@ type BoxEnv struct {
     Attempt              int
     OutputSchema         config.OutputSchema // decoded from FABER_OUTPUT_SCHEMA
     RunUID, RunGID       int               // FABER_RUN_UID/GID; the preamble drops to these; 0/0 = no drop
+    AgentSocketGID       int               // FABER_AGENT_SOCKET_GID; supplementary group the preamble KEEPS across the drop so the forwarded-agent socket stays reachable; -1 = none (unset/blank)
     GitCache             string            // FABER_GIT_CACHE; ro object cache for clone --reference-if-able, empty = none
     SkillsLink           string            // FABER_SKILLS_LINK; $HOME-relative path to symlink at /faber/skills, empty = no skills leg
     SecretsStdin         bool              // FABER_SECRETS_STDIN=1; file-mode tokens arrive on stdin for phase 3 to materialize
@@ -109,7 +110,20 @@ func (b *Box) enterRunUser() error {
         }
     }
     b.setEnv("HOME", home) // b.Environ only — never os.Setenv (no-global-state policy)
-    if err := syscall.Setgroups([]int{b.Env.RunGID}); err != nil { return err }
+    // Supplementary set = the run group, PLUS the forwarded-agent socket group
+    // when one was granted. The identity binding's `--group-add
+    // <agent_socket_group>` (macOS VM case, where the forwarded socket is
+    // root-owned) admits the still-root box to that group, but Setgroups
+    // REPLACES the supplementary set — so dropping to `[]int{RunGID}` alone
+    // strips the very group the docker flag granted, and the dropped box can no
+    // longer open the agent socket (ssh-add: Permission denied -> no key
+    // offered -> clone Permission denied (publickey)). Re-add it here so the
+    // grant survives the drop; -1 (unset) or equal-to-RunGID contributes nothing.
+    groups := []int{b.Env.RunGID}
+    if g := b.Env.AgentSocketGID; g >= 0 && g != b.Env.RunGID {
+        groups = append(groups, g)
+    }
+    if err := syscall.Setgroups(groups); err != nil { return err }
     if err := syscall.Setgid(b.Env.RunGID); err != nil { return err }
     if err := syscall.Setuid(b.Env.RunUID); err != nil { return err } // all-thread since Go 1.16
     return nil

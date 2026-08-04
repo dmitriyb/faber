@@ -27,6 +27,13 @@ const (
 	// ephemeral agent socket inside the box.
 	ContainerAgentSocket = "/ssh-agent"
 
+	// EnvAgentSocketGID carries the supplementary gid the box's privileged
+	// preamble must keep across its setgroups drop so the forwarded,
+	// root-owned agent socket stays reachable after the drop. Emitted only
+	// when the identity binding also emits "--group-add" (the macOS VM
+	// socket-ownership case); absent on platforms that need nothing.
+	EnvAgentSocketGID = "FABER_AGENT_SOCKET_GID"
+
 	// ContainerSecretsDir is where file-mode credential mounts land; the
 	// box's secrets phase exports each file under it into the agent process
 	// env (in-box process only, by the agent module's contract).

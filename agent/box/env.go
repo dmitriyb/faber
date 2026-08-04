@@ -71,6 +71,14 @@ type BoxEnv struct {
 	RunUID int
 	RunGID int
 
+	// AgentSocketGID is the supplementary gid the identity binding granted via
+	// --group-add so the box can reach the forwarded, root-owned agent socket
+	// (the macOS VM case); the preamble's setgroups must keep it alongside
+	// RunGID or the grant is silently stripped. -1 means none: the env var was
+	// absent or blank, or failed to parse (0 is a valid gid — macOS's socket
+	// group — so it cannot double as the sentinel).
+	AgentSocketGID int
+
 	// GitCache is a read-only git object cache path; when set the clone adds
 	// --reference-if-able so it borrows objects instead of duplicating history.
 	GitCache string
@@ -143,6 +151,15 @@ func ParseEnv(environ []string) *BoxEnv {
 	// drop" — the same fail-safe as an already-non-root box.
 	env.RunUID, _ = strconv.Atoi(get(contract.EnvRunUID))
 	env.RunGID, _ = strconv.Atoi(get(contract.EnvRunGID))
+	// -1 sentinel: absent, blank, or unparseable all mean "no socket gid to
+	// preserve" — 0 is a valid gid (macOS's socket group) and must not be
+	// confused with "unset".
+	env.AgentSocketGID = -1
+	if raw := get(security.EnvAgentSocketGID); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			env.AgentSocketGID = n
+		}
+	}
 	if req := strings.TrimSpace(get(contract.EnvRequiredInputs)); req != "" {
 		for _, name := range strings.Split(req, ",") {
 			if name = strings.TrimSpace(name); name != "" {

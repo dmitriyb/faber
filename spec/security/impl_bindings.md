@@ -78,9 +78,13 @@ restated per binding.
   gate. Teardown kills the agent PID and removes the socket directory,
   independent errors joined with `errors.Join`. Resolution runs before the
   spawn, so a role that resolves to nothing fails without leaving an agent
-  behind. `SocketGroup`, when non-empty, contributes `--group-add
-  <SocketGroup>`; the cmd wiring fills it from the host config file's
-  `agent_socket_group` (empty ⇒ field empty ⇒ no flag emitted).
+  behind. `SocketGroup`, when non-empty, contributes BOTH `--group-add
+  <SocketGroup>` AND `-e FABER_AGENT_SOCKET_GID=<SocketGroup>` — the box's
+  preamble re-adds that gid across its `setgroups` drop, which otherwise strips
+  the docker-granted group and breaks agent-socket access (see the phase
+  sequencer); the cmd wiring fills it from the host config file's
+  `agent_socket_group` (empty ⇒ field empty ⇒ neither emitted). `SocketGroup` is
+  a numeric gid so the preamble can pass it to `setgroups`.
 
 ## BindingSet (internal/security/set.go)
 

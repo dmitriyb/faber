@@ -130,11 +130,12 @@ func Main(ctx context.Context, b *Box) int {
 // enterRunUser is the privileged preamble (arch phase 0). The container starts
 // as root because the writable mounts arrive root-owned; this chowns exactly
 // those mounts to the run user, exports HOME, and drops privileges — setgroups
-// to the single run group, setgid, setuid — so every phase below, and the
-// untrusted agent above all, runs non-root. The toolset store paths stay
-// root-owned and read-only. A box already running non-root, or with no run uid
-// (a gateless local invocation with no root to drop), is a no-op. It is the
-// only moment faber-box holds privilege.
+// to the run group (plus the forwarded agent socket's group, when granted),
+// setgid, setuid — so every phase below, and the untrusted agent above all,
+// runs non-root. The toolset store paths stay root-owned and read-only. A box
+// already running non-root, or with no run uid (a gateless local invocation
+// with no root to drop), is a no-op. It is the only moment faber-box holds
+// privilege.
 func (b *Box) enterRunUser(ctx context.Context) error {
 	if os.Getuid() != 0 || b.Env.RunUID == 0 {
 		return nil
@@ -157,7 +158,7 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 		}
 	}
 	b.setEnv("HOME", contract.ContainerHome)
-	if err := syscall.Setgroups([]int{b.Env.RunGID}); err != nil {
+	if err := syscall.Setgroups(runUserGroups(b.Env.RunGID, b.Env.AgentSocketGID)); err != nil {
 		return fail("setgroups", err)
 	}
 	if err := syscall.Setgid(b.Env.RunGID); err != nil {
@@ -168,6 +169,22 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 	}
 	b.Log.InfoContext(ctx, "dropped to run user", "uid", b.Env.RunUID, "gid", b.Env.RunGID)
 	return nil
+}
+
+// runUserGroups builds the preamble's supplementary group list: the run gid,
+// plus the identity binding's forwarded-socket gid when one was granted
+// (agentSocketGID >= 0) and it names a distinct group. setgroups REPLACES the
+// calling process's supplementary set rather than appending to it, so a bare
+// {runGID} would silently strip the docker-level --group-add grant for the
+// forwarded, root-owned agent socket (the macOS VM case), leaving the dropped
+// box unable to open it. A pure function so the list-building logic is
+// unit-testable without a real (root-only) setgroups call.
+func runUserGroups(runGID, agentSocketGID int) []int {
+	groups := []int{runGID}
+	if agentSocketGID >= 0 && agentSocketGID != runGID {
+		groups = append(groups, agentSocketGID)
+	}
+	return groups
 }
 
 // boxError is a phase failure carrying the record fields the fail-stop funnel

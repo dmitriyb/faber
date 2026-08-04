@@ -198,6 +198,7 @@ func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribut
 	}
 	if b.SocketGroup != "" {
 		args = append(args, "--group-add", b.SocketGroup)
+		args = append(args, "-e", EnvAgentSocketGID+"="+b.SocketGroup)
 	}
 	return Contribution{Args: args, Teardown: teardown}, nil
 }
