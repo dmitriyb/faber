@@ -48,18 +48,21 @@ type Totals struct {
 
 // StepLine is one node's report line.
 type StepLine struct {
-	ID          string               `json:"id"`
-	Status      string               `json:"status"` // ok|failed|halted|skipped-condition|skipped-dependency|skipped-halt|absent
-	Cached      bool                 `json:"cached,omitempty"`
-	Duration    string               `json:"duration,omitempty"`
-	Attempts    int                  `json:"attempts,omitempty"`
-	Deferred    int                  `json:"deferred,omitempty"`
-	DeferredFor string               `json:"deferred_for,omitempty"`
-	Outputs     map[string]any       `json:"outputs,omitempty"`
-	Error       *failure.ErrorRecord `json:"error,omitempty"`
-	Halt        *failure.HaltRecord  `json:"halt,omitempty"`     // halted step's reason/detail/phase
-	Ancestor    string               `json:"ancestor,omitempty"` // skipped-dependency / skipped-halt root cause
-	Chose       string               `json:"chose,omitempty"`    // selector's resolved candidate
+	ID     string `json:"id"`
+	Status string `json:"status"` // ok|failed|halted|skipped-condition|skipped-dependency|skipped-halt|absent
+	Cached bool   `json:"cached,omitempty"`
+	// AgentSkipped marks a step whose attempt ran without an agent phase
+	// (the prelude of an agent-skippable template made the decision).
+	AgentSkipped bool                 `json:"agent_skipped,omitempty"`
+	Duration     string               `json:"duration,omitempty"`
+	Attempts     int                  `json:"attempts,omitempty"`
+	Deferred     int                  `json:"deferred,omitempty"`
+	DeferredFor  string               `json:"deferred_for,omitempty"`
+	Outputs      map[string]any       `json:"outputs,omitempty"`
+	Error        *failure.ErrorRecord `json:"error,omitempty"`
+	Halt         *failure.HaltRecord  `json:"halt,omitempty"`     // halted step's reason/detail/phase
+	Ancestor     string               `json:"ancestor,omitempty"` // skipped-dependency / skipped-halt root cause
+	Chose        string               `json:"chose,omitempty"`    // selector's resolved candidate
 }
 
 // GenRollup groups one generate node's fan-out.
@@ -305,6 +308,7 @@ func lineFromRecord(id string, rec failure.ResultRecord) StepLine {
 	res := rec.Result
 	deferred, deferredFor, cached, _ := decodeAnnotations(res.Attempts)
 	line.Cached = cached
+	line.AgentSkipped = res.AgentSkipped
 	line.Deferred = deferred
 	if deferredFor > 0 {
 		line.DeferredFor = deferredFor.String()
@@ -504,6 +508,9 @@ func stepText(line StepLine) string {
 	fmt.Fprintf(&sb, "%-19s %s", line.Status, line.ID)
 	if line.Cached {
 		sb.WriteString("  (cached)")
+	}
+	if line.AgentSkipped {
+		sb.WriteString("  (agent-skipped)")
 	}
 	if line.Duration != "" {
 		fmt.Fprintf(&sb, "  %s", line.Duration)

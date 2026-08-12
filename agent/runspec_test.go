@@ -140,6 +140,30 @@ func TestBuildRunSpecModelEffortPassThrough(t *testing.T) {
 	}
 }
 
+// Verifies 93ba0858d75f: the agent-skippable opt-in reaches the box env as
+// the exact contract value, and only when the template declares it — no
+// opt-in, no variable, so a stray value can never read as a silent opt-in.
+func TestBuildRunSpecAgentOptionalOptIn(t *testing.T) {
+	spec := validSpec()
+	rs, err := BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := rs.Env[contract.EnvAgentOptional]; ok {
+		t.Fatalf("env[%s] = %q, want absent without the template opt-in", contract.EnvAgentOptional, v)
+	}
+
+	spec = validSpec()
+	spec.Template.AgentOptional = true
+	rs, err = BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rs.Env[contract.EnvAgentOptional]; got != "1" {
+		t.Fatalf("env[%s] = %q, want \"1\"", contract.EnvAgentOptional, got)
+	}
+}
+
 // Verifies 93ba0858d75f: a template with a skills leg adds the read-only
 // /faber/skills bind (a sibling of the hook binds, before the writable engine
 // mounts) and emits FABER_SKILLS_LINK; the mount is present exactly once and

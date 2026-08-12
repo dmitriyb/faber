@@ -82,6 +82,24 @@ func TestExtractResultHaltedWithoutReason(t *testing.T) {
 	}
 }
 
+// Verifies ff8e85704b0a: the agent-skipped marker survives the host
+// boundary — an ok record whose agent phase was skipped re-validates
+// normally and keeps the marker for journal and report.
+func TestExtractResultPreservesAgentSkipped(t *testing.T) {
+	dir := t.TempDir()
+	rec := Result{Status: StatusOK, Payload: map[string]any{"verdict": "ok"}, AgentSkipped: true, Attempt: 1}
+	if err := contract.WriteResultFile(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ExtractResult(dir, reviewSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusOK || !got.AgentSkipped {
+		t.Fatalf("extract = %+v, want ok with agent_skipped preserved", got)
+	}
+}
+
 // Verifies ff8e85704b0a: a missing or truncated record is synthesized as a
 // box-vanished failure — no path yields zero records.
 func TestExtractResultBoxVanished(t *testing.T) {

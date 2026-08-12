@@ -64,6 +64,7 @@ type StepLine struct {
     ID       string         // task/review-cycle@2/fix
     Status   string         // ok|failed|halted|skipped-condition|skipped-dependency|skipped-halt|absent
     Cached   bool           // journal hit
+    AgentSkipped bool       // the attempt's agent phase was skipped by the prelude
     Duration time.Duration
     Attempts int
     Deferred int            // count; DeferredFor total wait

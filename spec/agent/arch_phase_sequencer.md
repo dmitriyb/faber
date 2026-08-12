@@ -133,7 +133,11 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    context bundle must exist in the bundle directory or the step aborts —
    the agent never starts on a missing bundle.
 9. **Agent.** Delegated to AgentInvoker: one headless skill invocation, the
-   only nondeterministic phase in the box.
+   only nondeterministic phase in the box. On an agent-skippable template
+   (`FABER_AGENT_OPTIONAL=1`) whose prelude wrote `FABER_SKIP_AGENT=1` into
+   `bundle.env`, the invocation is skipped as a logged no-op — the phase
+   stays in the order, the postlude and result phases run unchanged, and the
+   attempt record marks `agent_skipped` (see AgentInvoker).
 10. **Postlude hook.** Third user-filled phase, same PreludeHooks contract,
    running AFTER the agent and BEFORE result extraction. Declared per
    template (`hooks.postlude`), optional — absent skips the phase. Its job

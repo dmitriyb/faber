@@ -105,6 +105,7 @@ TemplateDef  (named-reference form)
 ├── SkillsLink string              in-box $HOME-relative discovery path (was skills.link); required when Skills is non-empty
 ├── Model     string               REQUIRED opaque agent pass-through (the box renders --model)
 ├── Effort    string               REQUIRED opaque agent pass-through (the box renders --effort)
+├── AgentOptional bool             agent_optional: the template's prelude may skip the agent (FABER_SKIP_AGENT=1 in bundle.env); default false — the agent runs
 ├── Hooks     HookSet              {context, prelude, postlude, on_failure} — each a ref → Hooks
 ├── Run       RunDef               resources, runtime, env, volumes (+ Identity, back-compat)
 ├── Inputs    map[string]ParamDef  typed slots
@@ -147,6 +148,7 @@ TemplateDef  (inline form — current schema, still accepted)
 ├── Skill     string               the primary skill token (a free-form /<skill>, not a ref, in this mode)
 ├── Model     string               REQUIRED opaque agent pass-through (the box renders --model)
 ├── Effort    string               REQUIRED opaque agent pass-through (the box renders --effort)
+├── AgentOptional bool             agent_optional: prelude-skippable agent (shared with the named form)
 ├── Run.Identity string            identity (instead of top-level Identity)
 ├── Inputs / Output                unchanged
 ```

@@ -119,22 +119,28 @@ type SelSpec struct {
 // the YAML. Its shape is preserved by the config library redesign except the
 // skills leg, which widens from a single {dir, link} to ResolvedSkills.
 type ResolvedTemplate struct {
-	Name      string              `json:"name"`
-	Packages  []string            `json:"packages"`
-	Overlay   string              `json:"overlay,omitempty"`
-	Pin       *PinDef             `json:"pin,omitempty"` // optional resolved nixpkgs pin; nil ⇒ omitted ⇒ IR byte-stable when absent
-	Identity  string              `json:"identity,omitempty"`
-	Resources ResourceDef         `json:"resources"`
-	Runtime   string              `json:"runtime,omitempty"`
-	Env       map[string]string   `json:"env,omitempty"`
-	Volumes   map[string]string   `json:"volumes,omitempty"`
-	Skill     string              `json:"skill"`
-	Model     string              `json:"model"`  // mandatory opaque agent pass-through (the box renders --model)
-	Effort    string              `json:"effort"` // mandatory opaque agent pass-through (the box renders --effort)
-	Hooks     HookSet             `json:"hooks"`
-	Skills    *ResolvedSkills     `json:"skills,omitempty"` // optional skill-definition delivery; nil = no skills leg
-	Inputs    map[string]ParamDef `json:"inputs"`
-	Output    map[string]FieldDef `json:"output"`
+	Name      string            `json:"name"`
+	Packages  []string          `json:"packages"`
+	Overlay   string            `json:"overlay,omitempty"`
+	Pin       *PinDef           `json:"pin,omitempty"` // optional resolved nixpkgs pin; nil ⇒ omitted ⇒ IR byte-stable when absent
+	Identity  string            `json:"identity,omitempty"`
+	Resources ResourceDef       `json:"resources"`
+	Runtime   string            `json:"runtime,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	Volumes   map[string]string `json:"volumes,omitempty"`
+	Skill     string            `json:"skill"`
+	Model     string            `json:"model"`  // mandatory opaque agent pass-through (the box renders --model)
+	Effort    string            `json:"effort"` // mandatory opaque agent pass-through (the box renders --effort)
+	// AgentOptional carries the template's agent-skippable opt-in into the
+	// box env contract. omitempty: a template without the opt-in emits IR
+	// bytes identical to before the field existed, and flipping it changes
+	// the IR hash — resume then refuses (drift) rather than silently
+	// changing whether a resumed step's agent runs.
+	AgentOptional bool                `json:"agent_optional,omitempty"`
+	Hooks         HookSet             `json:"hooks"`
+	Skills        *ResolvedSkills     `json:"skills,omitempty"` // optional skill-definition delivery; nil = no skills leg
+	Inputs        map[string]ParamDef `json:"inputs"`
+	Output        map[string]FieldDef `json:"output"`
 }
 
 // ResolvedSkills is the resolved source side of a template's skills leg. Exactly

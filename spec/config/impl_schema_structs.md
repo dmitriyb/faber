@@ -87,6 +87,7 @@ type TemplateDef struct {
     Skill  string              `yaml:"skill"`  // the /<skill> prompt token; a Skills-library ref ONLY in named mode, else free-form
     Model  string              `yaml:"model"`  // agent model id; REQUIRED, opaque pass-through (box renders --model)
     Effort string              `yaml:"effort"` // agent effort level; REQUIRED, opaque pass-through (box renders --effort)
+    AgentOptional bool         `yaml:"agent_optional"` // the prelude may skip the agent; default false (the agent runs)
     Hooks  HookSet             `yaml:"hooks"`  // each value: a hook NAME (bare) or a PATH (has separator)
     Skills SkillsRef           `yaml:"-"`      // sequence of names OR inline {dir,link}; set by UnmarshalYAML
     Inputs map[string]ParamDef `yaml:"inputs"`

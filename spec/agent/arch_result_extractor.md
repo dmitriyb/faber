@@ -28,6 +28,16 @@ The skill writes its declared output fields as a JSON object to
   Either way there is a record — an agent that says nothing does not produce
   an absent step.
 
+The same discipline covers a skipped agent (the prelude's
+`FABER_SKIP_AGENT=1` on an opted-in template): the output contract does not
+relax — the prelude or the postlude must have written `output.json`, and an
+unsatisfied contract fails `missing-output` with the detail naming the skip
+("the agent was skipped by the prelude…"), so the operator reads the actual
+cause instead of a mystery about a silent agent. The record carries
+`agent_skipped: true` on every path, ok and failed alike, so journal, cost
+records, and report show that no agent ran (no usage sidecar exists either —
+reported-tier metering sees no agent cost).
+
 Beside `output.json`, the skill may deposit optional sidecars. The one named
 convention: `usage.json`, a vendor usage block the metering module's reported
 tier reads for actual-cost accounting. Sidecars are advisory — absence is at

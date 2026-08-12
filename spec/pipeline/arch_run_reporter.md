@@ -24,7 +24,9 @@ never silently shrinks.
 
 One line per node: terminal status, wall-clock duration, attempt count, and
 the payload's key output fields (`branch=…, pr=17`, `verdict=approved`).
-Journal-hit steps are marked cached; deferred-then-resolved steps carry their
+Journal-hit steps are marked cached; steps whose agent phase was skipped by
+the prelude are marked agent-skipped (cost honesty at a glance);
+deferred-then-resolved steps carry their
 defer count and total deferred wait. Selector lines name the candidate they
 resolved to.
 

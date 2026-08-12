@@ -83,6 +83,14 @@ directory past container teardown and records its path. Recovery tooling —
 notably the interactive recovery mode — resolves the pointer to show the
 operator exactly what the failed box saw.
 
+## Annotation metadata
+
+`agent_skipped: true` marks an attempt whose agent phase never ran because
+the prelude of an agent-skippable template made the step's decision itself
+(the agent module's skip contract). It is honesty metadata, not a status:
+valid beside any status, journaled and reported so cost accounting and the
+run report show that no agent was invoked.
+
 ## Timing and attempt metadata
 
 `timing` records start, finish, and duration for the attempt. `attempt` is the

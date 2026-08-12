@@ -148,15 +148,20 @@ type TemplateDef struct {
 	SkillsLink string `yaml:"skills_link,omitempty"` // in-box $HOME-relative discovery path; required when Skills is the named list
 
 	// shared / inline forms
-	Build  *BuildDef           `yaml:"build,omitempty"` // inline {packages, overlay} (xor Image)
-	Run    RunDef              `yaml:"run,omitempty"`
-	Skill  string              `yaml:"skill,omitempty"`  // the /<skill> prompt token; a Skills-library ref ONLY in named mode, else free-form
-	Model  string              `yaml:"model,omitempty"`  // agent model id; REQUIRED, opaque pass-through (the box renders --model)
-	Effort string              `yaml:"effort,omitempty"` // agent effort level; REQUIRED, opaque pass-through (the box renders --effort)
-	Hooks  HookSet             `yaml:"hooks,omitempty"`  // each value: a hook NAME (bare) or a PATH (has separator / begins ./~//)
-	Skills SkillsRef           `yaml:"-"`                // sequence of names OR inline {dir,link}; set by UnmarshalYAML
-	Inputs map[string]ParamDef `yaml:"inputs,omitempty"`
-	Output map[string]FieldDef `yaml:"output,omitempty"`
+	Build  *BuildDef `yaml:"build,omitempty"` // inline {packages, overlay} (xor Image)
+	Run    RunDef    `yaml:"run,omitempty"`
+	Skill  string    `yaml:"skill,omitempty"`  // the /<skill> prompt token; a Skills-library ref ONLY in named mode, else free-form
+	Model  string    `yaml:"model,omitempty"`  // agent model id; REQUIRED, opaque pass-through (the box renders --model)
+	Effort string    `yaml:"effort,omitempty"` // agent effort level; REQUIRED, opaque pass-through (the box renders --effort)
+	// AgentOptional declares the template agent-skippable: its prelude may
+	// skip the agent phase via the bundle sidecar (FABER_SKIP_AGENT=1).
+	// Default false — the agent always runs; a skip request on a template
+	// without the opt-in is ignored with a warning.
+	AgentOptional bool                `yaml:"agent_optional,omitempty"`
+	Hooks         HookSet             `yaml:"hooks,omitempty"` // each value: a hook NAME (bare) or a PATH (has separator / begins ./~//)
+	Skills        SkillsRef           `yaml:"-"`               // sequence of names OR inline {dir,link}; set by UnmarshalYAML
+	Inputs        map[string]ParamDef `yaml:"inputs,omitempty"`
+	Output        map[string]FieldDef `yaml:"output,omitempty"`
 }
 
 // SkillsRef captures the two skills: node kinds without ambiguity: a YAML

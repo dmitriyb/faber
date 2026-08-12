@@ -28,21 +28,29 @@ func (b *Box) emitResult(ctx context.Context) error {
 		// The fallback with required outputs is a quiet agent, not a shape
 		// mismatch: it gets its own reason.
 		reason := contract.ReasonOutputSchema
+		detail := contract.JoinViolations(violations)
 		if fallback {
 			reason = contract.ReasonMissingOutput
+			if b.skipAgent {
+				// The output contract does not relax for a skipped agent —
+				// the prelude or postlude owed output.json — but the
+				// diagnosis must name the skip, not a silent agent.
+				detail = "the agent was skipped by the prelude and neither the prelude nor the postlude satisfied the output contract: " + detail
+			}
 		}
-		return &boxError{Reason: reason, Detail: contract.JoinViolations(violations)}
+		return &boxError{Reason: reason, Detail: detail}
 	}
 	if err := b.verifySideEffects(ctx); err != nil {
 		return err
 	}
 	rec := contract.Result{
-		Status:     contract.StatusOK,
-		Payload:    payload,
-		Unthreaded: extras,
-		Fallback:   fallback,
-		Timing:     b.Timing,
-		Attempt:    b.Env.Attempt,
+		Status:       contract.StatusOK,
+		Payload:      payload,
+		Unthreaded:   extras,
+		Fallback:     fallback,
+		AgentSkipped: b.skipAgent,
+		Timing:       b.Timing,
+		Attempt:      b.Env.Attempt,
 	}
 	if err := contract.WriteResultFile(b.Env.ResultDir, rec); err != nil {
 		return &boxError{Reason: contract.ReasonResultWrite, Detail: err.Error()}

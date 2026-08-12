@@ -240,7 +240,8 @@ func outputTail(out []byte, max int) string {
 // bind an arbitrary host directory into the operator's re-entry container.
 func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult, log *slog.Logger) failure.Result {
 	out := failure.Result{
-		Attempt: box.Attempt,
+		Attempt:      box.Attempt,
+		AgentSkipped: rec.AgentSkipped,
 		Timing: failure.Timing{
 			Started:  runRes.Started,
 			Finished: runRes.Started.Add(runRes.Duration),
@@ -250,10 +251,11 @@ func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult, log *
 		raw, err := json.Marshal(rec.Payload)
 		if err != nil {
 			return failure.Result{
-				Status:  failure.StatusFailed,
-				Error:   &failure.ErrorRecord{Reason: contract.ReasonOutputSchema, Detail: fmt.Sprintf("encode payload: %v", err)},
-				Attempt: box.Attempt,
-				Timing:  out.Timing,
+				Status:       failure.StatusFailed,
+				Error:        &failure.ErrorRecord{Reason: contract.ReasonOutputSchema, Detail: fmt.Sprintf("encode payload: %v", err)},
+				AgentSkipped: rec.AgentSkipped,
+				Attempt:      box.Attempt,
+				Timing:       out.Timing,
 			}
 		}
 		out.Status = failure.StatusOK

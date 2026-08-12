@@ -64,6 +64,11 @@ type Box struct {
 	// hookDeclared records whether any hook file existed; a hook-less
 	// template gets a synthesized context bundle.
 	hookDeclared bool
+
+	// skipAgent records the prelude's honored skip request (the bundle
+	// sidecar's SkipAgentKey on an agent-skippable template): the agent
+	// phase becomes a logged no-op and the attempt record is marked.
+	skipAgent bool
 }
 
 // New constructs a Box. environ is the process environment (os.Environ() in
@@ -273,8 +278,11 @@ func (b *Box) failStop(ctx context.Context, phaseName string, err error) {
 			Detail:  berr.Detail,
 			Handoff: handoffRef,
 		},
-		Timing:  b.Timing,
-		Attempt: b.Env.Attempt,
+		// A failure after an honored skip (a failing postlude, an unmet
+		// output contract) still records that no agent ran.
+		AgentSkipped: b.skipAgent,
+		Timing:       b.Timing,
+		Attempt:      b.Env.Attempt,
 	}
 	if werr := contract.WriteResultFile(dir, rec); werr != nil {
 		b.Log.ErrorContext(ctx, "write failed record", "err", werr)
