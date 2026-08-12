@@ -173,6 +173,14 @@ const (
 	// exit path.
 	ResultFile = "result.json"
 
+	// HaltFile is the operator-stop request a user phase (hook or agent
+	// skill) may write into the result directory:
+	// {"reason": "<machine word>", "detail": "<human text>"}. The sequencer
+	// checks for it after each user phase that exits 0 and settles the step
+	// halted; it is never a magic exit code — exit status keeps meaning
+	// pass/fail.
+	HaltFile = "halt.json"
+
 	// HandoffFile is the structured fail-stop record beside the attempt
 	// record; HandoffBundleDir is the bundle snapshot taken with it.
 	HandoffFile      = "handoff.json"

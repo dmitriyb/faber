@@ -7,14 +7,14 @@
       "preq_id": "0186891639d3",
       "type": "functional",
       "title": "Structured step result",
-      "description": "Every step emits exactly one result record: {status: ok|failed, payload (schema-typed) | error {reason, detail, handoff}, timing, attempt}. Failure is a record, not an absence. An unfavorable-but-valid payload (a review verdict of 'changes') is status ok — workflow conditions, not failure semantics, react to it."
+      "description": "Every step emits exactly one result record: {status: ok|failed|halted, payload (schema-typed) | error {reason, detail, handoff} | halt {reason, detail, phase}, timing, attempt}. Failure is a record, not an absence. An unfavorable-but-valid payload (a review verdict of 'changes') is status ok — workflow conditions, not failure semantics, react to it. Halted is the third outcome — the step settled decisively but the run must not continue past it: an operator decision point, not an error, carrying a halt reason instead of an error record."
     },
     {
       "id": "9796e2bddf7a",
       "preq_id": "0186891639d3",
       "type": "functional",
       "title": "Fail-stop and cleanup hooks",
-      "description": "A failed step halts its dependency chain (fail-stop); independent branches continue. A template or step may declare an on_failure hook — an opaque user script faber runs host-side (or in a fresh box) with the failed step's inputs and error record, to undo external side-effects (delete an orphan branch, release a claimed item). Cleanup failure is reported but does not mask the original failure."
+      "description": "A failed step halts its dependency chain (fail-stop); independent branches continue. A template or step may declare an on_failure hook — an opaque user script faber runs host-side (or in a fresh box) with the failed step's inputs and error record, to undo external side-effects (delete an orphan branch, release a claimed item). Cleanup failure is reported but does not mask the original failure. A halted step also stops its dependency chain, but outside the failure path: no retry, no on_failure cleanup, dependents skipped naming the halt, and a run exit code distinct from failure."
     },
     {
       "id": "9cb70f998931",
@@ -36,7 +36,7 @@
       "preq_id": "0186891639d3",
       "type": "functional",
       "title": "Recovery modes",
-      "description": "Three ways to re-enter a failed run: resume (journal hits with matching input-hash are skipped, execution restarts at the first failed or absent step), fresh (--fresh: ignore the journal, run everything), and interactive (drop the operator into the failed step's box — same image, bindings, and inputs — for manual diagnosis). A failed generate item is a normal failure plus journal entry, not a special partial-run state.",
+      "description": "Three ways to re-enter a stopped run: resume (journal hits with matching input-hash are skipped, execution restarts at the first failed, halted, or absent step), fresh (--fresh: ignore the journal, run everything), and interactive (drop the operator into the failed step's box — same image, bindings, and inputs — for manual diagnosis). A failed generate item is a normal failure plus journal entry, not a special partial-run state.",
       "depends_on": ["bff0f92afc29"]
     },
     {
@@ -58,14 +58,14 @@
     {
       "id": "dcfa188fa679",
       "name": "ResultContract",
-      "description": "The step-result record type and its invariants: status vocabulary, schema-typed payload, error record with handoff pointer, timing and attempt metadata. The single contract consumed by threading, journal, metering, and reporting.",
+      "description": "The step-result record type and its invariants: status vocabulary (ok|failed|halted), schema-typed payload, error record with handoff pointer, halt record with the halter's reason, timing and attempt metadata. The single contract consumed by threading, journal, metering, and reporting.",
       "content": "arch_result_contract.md",
       "implements": ["3b7d2586b5ae"]
     },
     {
       "id": "e8bdb768191e",
       "name": "FailurePolicy",
-      "description": "Fail-stop semantics, on_failure hook execution (host-side opaque script with the error record), retry orchestration with between-attempt cleanup, and attempt accounting. Owns the deferred timeout/cancellation seam.",
+      "description": "Fail-stop semantics, on_failure hook execution (host-side opaque script with the error record), retry orchestration with between-attempt cleanup, attempt accounting, and the halt bypass (a halted result returns without retry or cleanup). Owns the deferred timeout/cancellation seam.",
       "content": "arch_failure_policy.md",
       "implements": ["9796e2bddf7a", "9cb70f998931", "690a06d8a44b"],
       "uses": ["dcfa188fa679"]

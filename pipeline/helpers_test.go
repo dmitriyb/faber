@@ -96,6 +96,14 @@ func failedResult(reason, detail string) failure.Result {
 	}
 }
 
+func haltedResult(reason, detail string) failure.Result {
+	return failure.Result{
+		Status: failure.StatusHalted,
+		Halt:   &failure.HaltRecord{Reason: reason, Detail: detail, Phase: "prelude"},
+		Timing: failure.Timing{Started: testBase, Finished: testBase.Add(time.Second)},
+	}
+}
+
 func (f *fakeBoxes) script(node string, results ...failure.Result) *scripted {
 	s := &scripted{results: results}
 	f.scripts[node] = s
@@ -298,10 +306,14 @@ func recordState(rec failure.ResultRecord) string {
 	switch {
 	case rec.Result.Status == failure.StatusOK:
 		return StateOK
+	case rec.Result.Status == failure.StatusHalted:
+		return StateHalted
 	case isSkipRecord(rec, reasonSkippedCondition):
 		return StateSkippedCondition
 	case isSkipRecord(rec, reasonSkippedDependency):
 		return StateSkippedDependency
+	case isSkipRecord(rec, reasonSkippedHalt):
+		return StateSkippedHalt
 	default:
 		return StateFailed
 	}

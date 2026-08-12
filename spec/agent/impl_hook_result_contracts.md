@@ -113,6 +113,17 @@ func (b *Box) emitResult(ctx context.Context) error {
   record — one record per attempt is an invariant of the binary, not a
   convention.
 
+## The halt file
+
+`$FABER_RESULT_DIR/halt.json` is the user phases' operator-stop request:
+`{"reason": "<machine word>", "detail": "<human text>"}` — reason required,
+detail optional, both opaque to the engine. The sequencer's post-phase check
+(see the phase-sequencing section) consumes it into a `halted` attempt record
+`{status: halted, halt: {reason, detail, phase}, timing, attempt}`; the read
+is size-bounded like every container-boundary record, and a file that exists
+but does not parse or lacks a reason converts into a `halt-invalid` failure
+instead of a guess.
+
 ## The host half
 
 ```go

@@ -67,6 +67,11 @@ Each hook must exit 0. A nonzero exit — or, for the pre-agent pair, a
 missing/empty `CONTEXT.md` after both succeeded — aborts the step through the
 fail-stop path: a handoff record naming the phase (`context`, `prelude`, or
 `postlude`), the exit code, and a stderr tail, plus a failed attempt record.
+A hook that exits 0 after writing `halt.json` into `$FABER_RESULT_DIR`
+settles the step `halted` instead — the operator-stop path the
+PhaseSequencer's halt-request contract defines; exit codes never carry that
+third meaning. A halting prelude is exempt from the bundle postcondition:
+the agent will never run, so no prompt bundle is owed.
 A pre-agent failure means the agent never starts; a postlude failure comes
 after the agent ran, and its artifacts survive in the mounted result
 directory for diagnosis. There is no

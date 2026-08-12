@@ -13,10 +13,15 @@ import (
 
 // JournalFormat is the journal file's schema version, stamped into every
 // header this package writes. Independent of the application version —
-// bumped only when the on-disk record shapes change. Replay fails closed on
-// any other stamp (and on the absent stamp of a pre-versioning journal):
-// there is no auto-migration; a mismatched run is finished on the faber that
-// wrote it or restarted with --fresh.
+// bumped only when the on-disk record shapes change incompatibly for THIS
+// reader. Replay fails closed on any other stamp (and on the absent stamp of
+// a pre-versioning journal): there is no auto-migration; a mismatched run is
+// finished on the faber that wrote it or restarted with --fresh. Additive
+// record values (the halted status arm) stay within the format: this faber
+// replays older format-1 journals unchanged, while an older faber replaying
+// a newer journal fails closed at record validation ("unknown status") —
+// less curated than the format message, but the upgrade flow is forward-only
+// and refuses to move mid-run, so the downgrade read is already off-path.
 const JournalFormat = 1
 
 // Journal record kinds — the "kind" discriminator on every JSONL line.
@@ -115,7 +120,8 @@ const (
 type RunEndRecord struct {
 	Kind     string    `json:"kind"`
 	Status   string    `json:"status"`
-	Failed   int       `json:"failed"` // failed steps this execution settled
+	Failed   int       `json:"failed"`           // failed steps this execution settled
+	Halted   int       `json:"halted,omitempty"` // halted steps this execution settled
 	Detail   string    `json:"detail,omitempty"`
 	Finished time.Time `json:"finished"`
 }

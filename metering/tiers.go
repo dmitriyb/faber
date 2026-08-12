@@ -107,9 +107,12 @@ func (m *exactMeter) Estimate(ctx context.Context, s Step) (Estimate, error) {
 // Actual implements Meter: it prefers the endpoint's own usage when fields
 // are allowlisted into the tier's unit and the sidecar is present — never a
 // blind sum of every sidecar field, which would coerce foreign units. With no
-// usable usage it falls back to the estimated bound, but only for successful
-// attempts: a failed attempt (a rate-limited one especially) must not charge
-// the full pessimistic bound into non-replenishing spent per attempt.
+// usable usage it falls back to the estimated bound, but only for settled
+// attempts (ok or halted): a failed attempt (a rate-limited one especially)
+// must not charge the full pessimistic bound into non-replenishing spent per
+// attempt, while a halted attempt is terminal and may have run the agent to
+// completion — charging zero would under-count in the unsafe direction for a
+// budget that is a circuit breaker.
 func (m *exactMeter) Actual(_ context.Context, r ResultView) ([]Cost, error) {
 	m.mu.Lock()
 	bound, haveBound := m.bounds[r.NodeID]
@@ -134,7 +137,7 @@ func (m *exactMeter) Actual(_ context.Context, r ResultView) ([]Cost, error) {
 		}
 		return []Cost{{Unit: m.unit, Amount: total}}, nil
 	}
-	if r.Status != StatusOK {
+	if r.Status != StatusOK && r.Status != StatusHalted {
 		m.logger.Debug("failed attempt without mapped usage; recording zero", "node", r.NodeID)
 		return nil, nil
 	}

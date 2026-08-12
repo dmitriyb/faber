@@ -9,12 +9,15 @@ import (
 )
 
 // Terminal step states — the vocabulary FailurePolicy defines and the
-// scheduler applies. A failed step halts its dependency chain (fail-stop);
+// scheduler applies. A failed step stops its dependency chain (fail-stop);
 // there is no continue-on-error mode, because the type system promised
-// dependents a schema-valid payload.
+// dependents a schema-valid payload. A halted step stops its chain too, but
+// outside the failure path: dependents are skipped naming the halt, and the
+// run's exit distinguishes the two.
 const (
 	StateOK      = string(StatusOK)
 	StateFailed  = string(StatusFailed)
+	StateHalted  = string(StatusHalted)
 	StateSkipped = "skipped (dependency failed)"
 )
 
@@ -104,7 +107,11 @@ func (p *Policy) RunStep(ctx context.Context, spec StepSpec, run StepRunner) Res
 				Attempts: history,
 			}
 		}
-		if res.Status == StatusOK {
+		if res.Status != StatusFailed {
+			// ok and halted are both terminal here. A halt bypasses retry and
+			// on_failure cleanup by design: the step settled decisively —
+			// nothing broke, re-running would reproduce the very state that
+			// asked for an operator, and there is no debris to release.
 			return res
 		}
 		log.Info("step attempt failed",

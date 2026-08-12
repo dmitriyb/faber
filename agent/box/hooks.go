@@ -28,6 +28,12 @@ func (b *Box) runPreludeHook(ctx context.Context) error {
 	if err := b.runHook(ctx, contract.HookPrelude); err != nil {
 		return err
 	}
+	if b.haltRequested() {
+		// A halting prelude owes no prompt bundle: the agent will never run,
+		// so the postcondition below is moot. Main's post-phase halt check
+		// settles the step (or fails it loudly on a malformed halt file).
+		return nil
+	}
 	if !b.hookDeclared {
 		if err := synthesizeBundle(b.Env.BundleDir, b.Env.Inputs); err != nil {
 			return &boxError{Reason: contract.ReasonBundleMissing, Detail: fmt.Sprintf("synthesize bundle: %v", err)}

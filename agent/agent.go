@@ -28,6 +28,9 @@ type (
 	// Handoff is the structured fail-stop record beside a failed attempt.
 	Handoff = contract.Handoff
 
+	// ResultHalt is the halt arm of a halted record.
+	ResultHalt = contract.ResultHalt
+
 	// OutputSchema is the template's declared output fields.
 	OutputSchema = contract.OutputSchema
 )
@@ -36,4 +39,5 @@ type (
 const (
 	StatusOK     = contract.StatusOK
 	StatusFailed = contract.StatusFailed
+	StatusHalted = contract.StatusHalted
 )

@@ -25,6 +25,15 @@ func failedResult(reason, detail string) Result {
 	}
 }
 
+func haltedResult(reason, detail string) Result {
+	return Result{
+		Status:  StatusHalted,
+		Halt:    &HaltRecord{Reason: reason, Detail: detail, Phase: "prelude"},
+		Timing:  fixedTiming(1),
+		Attempt: 1,
+	}
+}
+
 // fixedTiming returns a deterministic timing so records can be compared
 // byte-for-byte across policy runs.
 func fixedTiming(attempt int) Timing {
@@ -59,6 +68,28 @@ func TestResultValidateUnion(t *testing.T) {
 			r.Error = &ErrorRecord{Reason: ReasonAgent, Detail: "x"}
 		}), "must not carry a payload"},
 		{"failed with empty reason", failedResult("", "detail"), "requires a reason"},
+		{"halted with halt record", haltedResult("needs-triage", "ci stuck"), ""},
+		{"halted without halt record", Result{Status: StatusHalted, Timing: fixedTiming(1), Attempt: 1}, "requires a halt record"},
+		{"halted with empty reason", haltedResult("", "detail"), "halt record requires a reason"},
+		{"halted with payload", valid(func(r *Result) {
+			r.Status = StatusHalted
+			r.Halt = &HaltRecord{Reason: "needs-triage"}
+		}), "must not carry a payload"},
+		{"halted with error", Result{
+			Status:  StatusHalted,
+			Halt:    &HaltRecord{Reason: "needs-triage"},
+			Error:   &ErrorRecord{Reason: ReasonAgent, Detail: "x"},
+			Timing:  fixedTiming(1),
+			Attempt: 1,
+		}, "must not carry an error record"},
+		{"ok with halt record", valid(func(r *Result) { r.Halt = &HaltRecord{Reason: "x"} }), "must not carry a halt record"},
+		{"failed with halt record", Result{
+			Status:  StatusFailed,
+			Error:   &ErrorRecord{Reason: ReasonAgent, Detail: "x"},
+			Halt:    &HaltRecord{Reason: "x"},
+			Timing:  fixedTiming(1),
+			Attempt: 1,
+		}, "must not carry a halt record"},
 		{"attempt zero", valid(func(r *Result) { r.Attempt = 0 }), "not 1-based"},
 		{"unknown status", valid(func(r *Result) { r.Status = "maybe" }), `unknown status "maybe"`},
 	}
@@ -99,6 +130,64 @@ func TestUnfavorableIsNotFailure(t *testing.T) {
 	}
 	if len(hooks.invocations) != 0 {
 		t.Fatalf("cleanup must not run for an ok result, ran %d times", len(hooks.invocations))
+	}
+}
+
+// Verifies 3b7d2586b5ae + 9796e2bddf7a: a halted result is terminal outside
+// the failure path — the attempt loop returns it on the first attempt,
+// consuming no retry and running no on_failure cleanup — and it journals
+// under its real key like any executed settlement.
+func TestHaltBypassesRetryAndCleanup(t *testing.T) {
+	hooks := &recordingHooks{}
+	p := &Policy{Hooks: hooks}
+	runner, calls := scriptedRunner(t, haltedResult("needs-triage", "ci stuck past budget"))
+	got := p.RunStep(t.Context(), StepSpec{ID: "task/merge", Retry: 2, OnFailure: "hook.sh"}, runner)
+	if got.Status != StatusHalted || got.Attempt != 1 || len(got.Attempts) != 0 {
+		t.Fatalf("want single halted attempt, got %+v", got)
+	}
+	if got.Halt == nil || got.Halt.Reason != "needs-triage" {
+		t.Fatalf("halt record lost in the attempt loop: %+v", got.Halt)
+	}
+	if *calls != 1 {
+		t.Fatalf("halt must consume no retry, runner ran %d times", *calls)
+	}
+	if len(hooks.invocations) != 0 {
+		t.Fatalf("on_failure must not run for a halt, ran %d times", len(hooks.invocations))
+	}
+
+	store := NewStore(t.TempDir(), nil)
+	j, err := store.Begin(Header{RunID: "run-halt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	if err := j.AppendResult(ResultRecord{StepID: "task/merge", InputHash: "h", Result: got}); err != nil {
+		t.Fatalf("halted record must journal: %v", err)
+	}
+	rp, err := store.Load("run-halt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := rp.Results[Key{"task/merge", "h"}]
+	if !ok || rec.Result.Status != StatusHalted || rec.Result.Halt.Reason != "needs-triage" {
+		t.Fatalf("halted record did not replay intact: %+v", rec.Result)
+	}
+}
+
+// Verifies 87f006277d2c: a halted record is never a resume reuse hit — the
+// readiness-time lookup treats it like a failed record, so resume re-enters
+// the run at the halted step.
+func TestHaltedIsNotAResumeHit(t *testing.T) {
+	inputs := map[string]any{"slot": "v"}
+	h, err := InputHash(inputs, "tpl", "img:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := &RunSeed{Prior: map[Key]ResultRecord{
+		{StepID: "task/merge", InputHash: h}: {StepID: "task/merge", InputHash: h, Result: haltedResult("needs-triage", "")},
+	}}
+	if _, hit, err := seed.Lookup("task/merge", inputs, "tpl", "img:1"); err != nil || hit {
+		t.Fatalf("halted record must not be a reuse hit (hit=%v, err=%v)", hit, err)
 	}
 }
 

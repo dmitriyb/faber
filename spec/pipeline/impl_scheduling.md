@@ -148,15 +148,17 @@ carries the splice (or the contract error, settling the node failed). The node
 settles `ok` only after the splice is applied, so no dependent can slip
 between expansion and rewiring.
 
-## Failure propagation
+## Failure and halt propagation
 
 ```go
-func (s *Scheduler) propagate(failed string) {
-    q := s.edges.dependents(failed)
+// state is StateSkippedDependency for a failed root, StateSkippedHalt for a
+// halted one; the root's id is recorded as the ancestor either way.
+func (s *Scheduler) propagate(root, state string) {
+    q := s.edges.dependents(root)
     for len(q) > 0 {
         id := pop(&q)
         if s.nodes[id].settledOrRunning() { continue }
-        s.settle(id, failure.SkippedDependency(failed)) // ancestor recorded
+        s.settle(id, skip(state, root)) // ancestor recorded
         q = append(q, s.edges.dependents(id)...)
     }
 }
@@ -165,11 +167,16 @@ func (s *Scheduler) propagate(failed string) {
 BFS, idempotent, and cheap: nodes already settled (or mid-flight — their own
 result will tell) are left alone; everything else downstream terminates
 immediately with the root cause attached. Independent subgraphs never appear
-in `dependents` and keep executing.
+in `dependents` and keep executing. A `halted` settlement additionally counts
+into the scheduler's halt tally (with the halt reason), which the executor
+folds into the run-end record and the exit-code decision.
 
 ## Journal records for skips
 
 Skip settlements append journal records with a null input hash (a skipped
 node's inputs may be unresolvable — its producer failed). Null-hash records
 are never resume hits; they exist so the report and journal replay see every
-terminal state. Ok/failed records carry the real hash and full result.
+terminal state. All three skip flavors (condition, dependency, halt) share
+the encoding: a failed-status record carrying the reserved skip reason, the
+ancestor in the detail. Ok/failed/halted records carry the real hash and
+full result.

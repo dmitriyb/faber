@@ -71,6 +71,16 @@ StepRunner and a recording HookRunner unless a real container is stated;
     iterations journals a normal failure record with reason `loop-exhausted`;
     resume treats it like any failed step (re-enters the loop chain, does not
     special-case it).
+14. **Halt bypasses retry and cleanup.** A step with `retry: 2` and an
+    `on_failure` hook whose first attempt returns `halted`: exactly one
+    attempt ran, the hook never ran, and the journaled record is
+    `halted, attempt: 1` with the halt reason intact. `Validate` enforces the
+    halted arm of the union: a halted record with a payload, with an error,
+    or without a halt reason is refused at every boundary.
+15. **Halted is resumable, not reusable.** After a run whose step b settled
+    halted: resume with the identical config re-runs b (a halted record is
+    never a lookup hit) and, when b then settles ok, its dependents run;
+    interactive re-entry on the halted step is refused naming its state.
 
 ## Edge cases
 

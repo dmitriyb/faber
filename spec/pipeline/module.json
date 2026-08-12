@@ -28,7 +28,7 @@
       "preq_id": "296f9fba2c0f",
       "type": "functional",
       "title": "Failure propagation and skip semantics",
-      "description": "When a step fails (final, after retries), every transitive dependent is marked skipped with the failed ancestor recorded; independent branches continue to completion. Terminal step states are exactly: ok, failed, skipped (condition false), skipped (dependency failed); deferral is non-terminal — a deferred step later settles into one of the four, its record annotated with the defer history."
+      "description": "When a step fails (final, after retries), every transitive dependent is marked skipped with the failed ancestor recorded; independent branches continue to completion. A halted step propagates the same walk with its own marking (skipped-halt naming the halting step) and its own run exit code, distinct from failure. Terminal step states are exactly: ok, failed, halted, skipped (condition false), skipped (dependency failed), skipped (halt); deferral is non-terminal — a deferred step later settles into one of these, its record annotated with the defer history."
     },
     {
       "id": "990c3d8a7888",
@@ -70,7 +70,7 @@
     {
       "id": "d7f1415da14a",
       "name": "Scheduler",
-      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure propagation via dependent traversal, and defer(until) re-queueing. Consults the journal for resume skips and the meter for admission. Owns the host-side run-prep seam that assembles each infra.RunSpec, including staging the resolved skills leg into the single read-only /faber/skills mount — a per-attempt copy of real files for named skills (not a symlink farm, whose targets would dangle across the bind into the container), a direct mount for the inline skills-root.",
+      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure and halt propagation via dependent traversal, and defer(until) re-queueing. Consults the journal for resume skips and the meter for admission. Owns the host-side run-prep seam that assembles each infra.RunSpec, including staging the resolved skills leg into the single read-only /faber/skills mount — a per-attempt copy of real files for named skills (not a symlink farm, whose targets would dangle across the bind into the container), a direct mount for the inline skills-root.",
       "content": "arch_scheduler.md",
       "implements": ["8879dc1597d6", "a0f44481f57b", "ae796d2a1503", "93d829b3f3d3"],
       "uses": ["072cf2b54377", "b3b271a87136"]
@@ -92,7 +92,7 @@
     {
       "id": "433118dc3ddb",
       "name": "RunReporter",
-      "description": "Aggregates the settled run from the journal into the human summary and JSON report: stable ordering, per-step lines, generate-item rollups, failure diagnostics with handoff pointers. Owns the deferred live-observability seam.",
+      "description": "Aggregates the settled run from the journal into the human summary and JSON report: stable ordering, per-step lines, generate-item rollups, failure diagnostics with handoff pointers, and halt blocks naming the halting step and reason. Owns the deferred live-observability seam.",
       "content": "arch_run_reporter.md",
       "implements": ["990c3d8a7888", "b8db39a923b7"]
     }

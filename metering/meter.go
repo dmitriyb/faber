@@ -68,13 +68,14 @@ type Step struct {
 const (
 	StatusOK     = "ok"
 	StatusFailed = "failed"
+	StatusHalted = "halted"
 )
 
 // ResultView is the actual view of a completed attempt: the step's result
 // record plus the decoded usage sidecar the box deposited (nil if none).
 type ResultView struct {
 	NodeID  string
-	Status  string           // StatusOK | StatusFailed
+	Status  string           // StatusOK | StatusFailed | StatusHalted
 	Usage   map[string]int64 // decoded usage sidecar; nil if none deposited
 	Elapsed time.Duration
 }

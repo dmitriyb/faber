@@ -93,7 +93,19 @@ mounts, and the env contract is set directly.)
     `box-vanished` failure; over a record whose payload was hand-edited to
     break the schema, a failed record — the host never threads it.
 
-15. **Skills leg links a read-only tree, under the box `HOME` not the process
+15. **Halt request settles the step halted.** A prelude that writes
+    `halt.json` (`{"reason":"needs-triage","detail":"…"}`) and exits 0: the
+    agent stub and the postlude never ran, `result.json` is
+    `{status: halted, halt: {reason: needs-triage, phase: prelude}}`, and the
+    box exits 0 (the record, not the exit code, is authoritative). The same
+    file written by the agent stub halts after the agent phase — the postlude
+    marker is absent. A malformed `halt.json` (not JSON, or no reason) fails
+    the step with reason `halt-invalid`; a prelude that writes `halt.json`
+    but exits 3 fails with the ordinary `hook-failed` shape — the halt file
+    is ignored on a failing phase. `ExtractResult` over the halted directory
+    returns the halted record with its payload nil; over a hand-edited
+    `{status: halted}` with no halt body it returns a `halt-invalid` failure.
+16. **Skills leg links a read-only tree, under the box `HOME` not the process
     `HOME`.** The phase resolves `HOME` from the box environment (`b.Environ`),
     never `os.Getenv` — the preamble sets `HOME=/home/box` only in `b.Environ`,
     so on the drop path the process `HOME` diverges. The test makes them diverge

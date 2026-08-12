@@ -10,15 +10,23 @@ type Status string
 const (
     StatusOK     Status = "ok"
     StatusFailed Status = "failed"
+    StatusHalted Status = "halted"
 )
 
 type Result struct {
     Status   Status          `json:"status"`
     Payload  json.RawMessage `json:"payload,omitempty"` // schema-validated upstream (agent module)
     Error    *ErrorRecord    `json:"error,omitempty"`
+    Halt     *HaltRecord     `json:"halt,omitempty"`     // status halted's record arm
     Timing   Timing          `json:"timing"`
     Attempt  int             `json:"attempt"`            // 1-based, the attempt this record describes
     Attempts []AttemptInfo   `json:"attempts,omitempty"` // prior attempts, oldest first
+}
+
+type HaltRecord struct {
+    Reason string `json:"reason"`           // stable machine word chosen by the halter
+    Detail string `json:"detail,omitempty"` // human elaboration
+    Phase  string `json:"phase,omitempty"`  // box phase that requested the halt
 }
 
 type ErrorRecord struct {
@@ -39,8 +47,9 @@ type AttemptInfo struct {
 }
 ```
 
-`(*Result).Validate()` enforces the union: `ok` ⇒ Payload set, Error nil;
-`failed` ⇒ Error set, Payload nil; Attempt ≥ 1. Every boundary that accepts a
+`(*Result).Validate()` enforces the union: `ok` ⇒ Payload set, Error and Halt
+nil; `failed` ⇒ Error set, Payload and Halt nil; `halted` ⇒ Halt set (with a
+reason), Payload and Error nil; Attempt ≥ 1. Every boundary that accepts a
 Result (journal append, threading, metering) calls it — cheap defense against
 a hand-edited `result.json`.
 
@@ -99,9 +108,9 @@ type ResultRecord struct {
 }
 // CostRecord ("cost": StepID, InputHash, metering.Cost),
 // CleanupRecord ("cleanup": StepID, InputHash, OK bool, Detail) and
-// RunEndRecord ("run-end": Status settled|aborted, Failed, Finished) mirror
-// the shape. appendHeader owns the Format stamp; Load refuses any other
-// stamp (fail closed, no auto-migration).
+// RunEndRecord ("run-end": Status settled|aborted, Failed, Halted, Finished)
+// mirror the shape. appendHeader owns the Format stamp; Load refuses any
+// other stamp (fail closed, no auto-migration).
 ```
 
 ```go

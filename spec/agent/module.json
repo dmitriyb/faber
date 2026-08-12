@@ -7,7 +7,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Fixed box phase order",
-      "description": "Every agent step executes the same internal sequence: environment setup (an agent-specific skills-link phase when the template declares one, delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent, then the optional postlude hook, then result emission and verification. The order is engine-owned and not configurable; there is no in-container DAG."
+      "description": "Every agent step executes the same internal sequence: environment setup (an agent-specific skills-link phase when the template declares one, delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent, then the optional postlude hook, then result emission and verification. After each user-filled phase that exits 0 the sequencer honors a halt request (halt.json in the result directory), emitting a halted attempt record and running no later phase. The order is engine-owned and not configurable; there is no in-container DAG."
     },
     {
       "id": "b880aa49b3b9",
@@ -28,7 +28,7 @@
       "preq_id": "84225a4ae7ed",
       "type": "functional",
       "title": "Structured result extraction",
-      "description": "The step's result is a typed record read from a well-known result file in the mounted result directory, schema-validated against the template's declared output before it is threaded to any downstream step. A missing result file after an otherwise-successful agent phase yields a minimal engine-written fallback record; verification hooks (e.g. confirming a declared side-effect exists) run after extraction."
+      "description": "The step's result is a typed record read from a well-known result file in the mounted result directory, schema-validated against the template's declared output before it is threaded to any downstream step. A missing result file after an otherwise-successful agent phase yields a minimal engine-written fallback record; verification hooks (e.g. confirming a declared side-effect exists) run after extraction. A halted record bypasses extraction and verification (nothing threads; the halt arm must carry a reason or the record fails halt-invalid)."
     },
     {
       "id": "f1ce19e94daa",
@@ -49,7 +49,7 @@
     {
       "id": "7290820d380e",
       "name": "PhaseSequencer",
-      "description": "The in-container entry program that owns the fixed phase order: chowns the writable mounts (including the /run/secrets tmpfs when present) and drops to the run user, validates the step's env contract, materializes file-mode secrets from the stdin payload into /run/secrets and exports them to env, applies host-key policy, clones from the gateway remote, configures commit signing from the forwarded agent, then drives context -> prelude -> agent -> postlude -> result with fail-stop between phases.",
+      "description": "The in-container entry program that owns the fixed phase order: chowns the writable mounts (including the /run/secrets tmpfs when present) and drops to the run user, validates the step's env contract, materializes file-mode secrets from the stdin payload into /run/secrets and exports them to env, applies host-key policy, clones from the gateway remote, configures commit signing from the forwarded agent, then drives context -> prelude -> agent -> postlude -> result with fail-stop between phases and a post-phase halt-request check (halt.json -> a halted attempt record) after each user-filled phase.",
       "content": "arch_phase_sequencer.md",
       "implements": ["93ba0858d75f"],
       "uses": ["c7c205f95b84", "53965d3ef136", "17c51bae5f80"]
@@ -57,7 +57,7 @@
     {
       "id": "c7c205f95b84",
       "name": "PreludeHooks",
-      "description": "The context/prelude/postlude hook contract: input environment, the context-bundle output convention, exit-code semantics, and the structured handoff record written when a hook fails. Owns the deferred context-resolver seam.",
+      "description": "The context/prelude/postlude hook contract: input environment, the context-bundle output convention, exit-code semantics, the halt.json operator-stop request, and the structured handoff record written when a hook fails. Owns the deferred context-resolver seam.",
       "content": "arch_prelude_hooks.md",
       "implements": ["b880aa49b3b9", "db9815889696"]
     },
@@ -71,7 +71,7 @@
     {
       "id": "17c51bae5f80",
       "name": "ResultExtractor",
-      "description": "Reads the result file from the result directory, validates it against the template's output schema, writes the fallback record when absent, and runs post-result verification. Owns the deferred non-JSON artifact seam. Owns the faber↔faber-box result-contract schema version (contract: 1), stamped into the box env and into result.json and asserted host-side on extract — a mismatch detects a stale or foreign box binary (host-config `box_bin`), never a migration path.",
+      "description": "Reads the result file from the result directory, validates it against the template's output schema, writes the fallback record when absent, runs post-result verification, and passes a halted record through unextracted (payload dropped, halt reason asserted host-side). Owns the deferred non-JSON artifact seam. Owns the faber↔faber-box result-contract schema version (contract: 1), stamped into the box env and into result.json and asserted host-side on extract — a mismatch detects a stale or foreign box binary (host-config `box_bin`), never a migration path.",
       "content": "arch_result_extractor.md",
       "implements": ["ff8e85704b0a", "f1ce19e94daa"]
     }

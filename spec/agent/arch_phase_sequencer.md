@@ -172,6 +172,30 @@ with two engine-owned pieces and nothing agent-specific baked into faber:
 Absent a `skills` leg, no mount and no `FABER_SKILLS_LINK` are emitted and the
 symlink phase is a no-op, so hook-only and skill-less templates are unchanged.
 
+## The halt request
+
+A user phase may ask the run to stop for an operator without failing: a hook
+(context, prelude, postlude) or the agent's skill writes `halt.json`
+(`{"reason": "<machine word>", "detail": "<human text>"}`) into
+`$FABER_RESULT_DIR`. After each user-filled phase that exits 0, the sequencer
+checks for the file; when present it stops the phase order there and emits a
+`halted` attempt record (the failure module's third status) carrying the
+halter's reason, detail, and the phase that requested it — later phases never
+run: a prelude halt skips the agent and the postlude, an agent halt skips the
+postlude, and result extraction is skipped in every case (a halting step
+threads nothing, so its output contract is moot; dependents are skipped by
+the host). A halting prelude is likewise exempt from the bundle
+postcondition — no agent will run, so no prompt bundle is owed.
+
+Deliberately not an exit code: exit status keeps meaning pass/fail (`set -e`
+hooks would mis-handle a third meaning), so the halt is honored only from an
+orderly exit — a phase that exits nonzero after writing `halt.json` is a
+failure through the ordinary fail-stop funnel, and the halt file is ignored.
+A `halt.json` that exists but does not parse, or carries no reason, fails the
+step loudly (reason `halt-invalid`) rather than guessing. The engine never
+interprets the halt reason; it is the user's vocabulary, surfaced verbatim in
+the run report.
+
 ## Fail-stop and the handoff record
 
 A failed phase converges on one path: the sequencer writes a structured

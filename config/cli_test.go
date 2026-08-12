@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -196,6 +197,21 @@ func TestCLIRunEntry(t *testing.T) {
 		}
 		if exec.called {
 			t.Fatal("executor must not run on a param violation")
+		}
+	})
+
+	t.Run("halted run exits 3 through the generic ExitCode mapping", func(t *testing.T) {
+		// The executor's typed halt error carries ExitCode() 3; the CLI's
+		// error→exit mapping must surface it as the process exit code,
+		// distinct from success (0) and failure (1).
+		exec := &fakeExecutor{err: &cliError{code: 3, err: errors.New("pipeline: run r-1 halted: task/merge (needs-triage)")}}
+		code, _, stderr := runCLI(t, Deps{Executor: exec}, "run", "task",
+			"--config", "testdata/reference.yaml", "--param", "repo=sandbox", "--param", "item=I-1")
+		if code != 3 {
+			t.Fatalf("halted run must exit 3, got %d: %s", code, stderr)
+		}
+		if !strings.Contains(stderr, "halted") {
+			t.Fatalf("halt error must reach stderr: %s", stderr)
 		}
 	})
 

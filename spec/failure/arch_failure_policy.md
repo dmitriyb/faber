@@ -19,6 +19,18 @@ vocabulary the Scheduler applies. There is no continue-on-error mode: a step
 whose contract was not met must not feed dependents, because the type system
 promised them a schema-valid payload.
 
+## Halt is not failure
+
+A `halted` result (see ResultContract) is terminal for the step and for its
+dependency chain, but it travels outside the failure path: the attempt loop
+returns it immediately — no retry (re-running would reproduce the very state
+that asked for an operator) and no `on_failure` cleanup (a halt is a decision,
+not debris; nothing external is half-done). Dependents are skipped with the
+halt named as the cause (`skipped-halt`, the Scheduler's marking), never as a
+dependency failure, and the run's exit code distinguishes halted from failed
+so a supervising script can branch without scraping text. Independent branches
+continue exactly as under fail-stop.
+
 ## on_failure cleanup hooks
 
 A template or step may declare `on_failure`: an opaque user script faber runs

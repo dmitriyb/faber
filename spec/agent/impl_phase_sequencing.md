@@ -53,20 +53,21 @@ owned sequence" is literally this slice:
 type Phase struct {
     Name string
     Run  func(*Box, context.Context) error
+    User bool // user-filled phase: a halt request is honored after it
 }
 
 var phases = []Phase{
-    {"skills", (*Box).linkSkills},    // $HOME/<link> -> /faber/skills, no-op when unset
-    {"env", (*Box).checkEnv},         // required slots present, dirs writable
-    {"secrets", (*Box).loadSecrets},  // stdin payload -> /run/secrets/* (file mode); then /run/secrets/* -> process env
-    {"hostkey", (*Box).applyHostKeyPolicy},
-    {"clone", (*Box).clone},          // no-op when Repo == ""
-    {"signing", (*Box).configureSigning},
-    {"context", (*Box).runContextHook},
-    {"prelude", (*Box).runPreludeHook},
-    {"agent", (*Box).runAgent},
-    {"postlude", (*Box).runPostludeHook},
-    {"result", (*Box).emitResult},
+    {"skills", (*Box).linkSkills, false},    // $HOME/<link> -> /faber/skills, no-op when unset
+    {"env", (*Box).checkEnv, false},         // required slots present, dirs writable
+    {"secrets", (*Box).loadSecrets, false},  // stdin payload -> /run/secrets/* (file mode); then /run/secrets/* -> process env
+    {"hostkey", (*Box).applyHostKeyPolicy, false},
+    {"clone", (*Box).clone, false},          // no-op when Repo == ""
+    {"signing", (*Box).configureSigning, false},
+    {"context", (*Box).runContextHook, true},
+    {"prelude", (*Box).runPreludeHook, true},
+    {"agent", (*Box).runAgent, true},
+    {"postlude", (*Box).runPostludeHook, true},
+    {"result", (*Box).emitResult, false},
 }
 
 func Main(ctx context.Context, box *Box) int {
@@ -82,10 +83,27 @@ func Main(ctx context.Context, box *Box) int {
             box.failStop(p.Name, err) // handoff.json + failed result.json
             return 1
         }
+        if p.User { // context|prelude|agent|postlude: honor a halt request
+            switch halted, herr := box.checkHalt(ctx, p.Name); {
+            case herr != nil: // halt.json present but malformed: fail loudly
+                box.failStop(p.Name, herr) // reason halt-invalid
+                return 1
+            case halted: // halted result.json written; later phases never run
+                return 0
+            }
+        }
     }
     return 0
 }
 ```
+
+`checkHalt` reads `$FABER_RESULT_DIR/halt.json` (size-bounded like every
+container-boundary record): absent ⇒ `(false, nil)`; unparseable or missing
+its `reason` ⇒ a `halt-invalid` boxError; else it writes the `halted` attempt
+record — `{status: halted, halt: {reason, detail, phase}, timing, attempt}` —
+and returns `(true, nil)`. The check runs only after a phase that exited 0
+(a failing phase takes the fail-stop funnel regardless of any halt file), and
+only for the user-filled phases — engine phases never halt.
 
 `enterRunUser` is the privileged preamble (arch phase 0). When the box is root
 and a run uid is set, it chowns exactly the writable mounts and drops:
