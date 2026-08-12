@@ -43,8 +43,16 @@ time the prelude exits, it must contain:
 - `CONTEXT.md` — the prompt body handed verbatim to the agent. Mandatory.
 - `bundle.env` — optional machine-readable sidecar: line-oriented
   `KEY=VALUE`, no quoting or expansion. Values here are opaque to the engine
-  with one convention: a `BRANCH=<name>` entry is a *declared side-effect* —
-  a postcondition the ResultExtractor verifies against the gateway.
+  with two conventions: a `BRANCH=<name>` entry is a *declared side-effect* —
+  a postcondition the ResultExtractor verifies against the gateway — and a
+  `FABER_SKIP_AGENT=1` entry is the *agent-skip request* on an
+  agent-skippable template (see AgentInvoker). The skip key is consumed by
+  the engine when the bundle is read — popped before the reserved-name check
+  and never exported to any child environment (every other `FABER_*` name in
+  the sidecar stays a contract violation); a value other than `1` is a
+  bundle contract error, mirroring the TOFU discipline. Deliberately not an
+  exit code: exit status already means pass/fail and is consumed by `set -e`
+  in shell hooks.
 - Any further files (resolved document lists, per-item context directories),
   referenced from `CONTEXT.md` by path.
 

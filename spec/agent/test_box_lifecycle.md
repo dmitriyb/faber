@@ -105,7 +105,19 @@ mounts, and the env contract is set directly.)
     is ignored on a failing phase. `ExtractResult` over the halted directory
     returns the halted record with its payload nil; over a hand-edited
     `{status: halted}` with no halt body it returns a `halt-invalid` failure.
-16. **Skills leg links a read-only tree, under the box `HOME` not the process
+16. **Prelude skips the agent on an opted-in template.** With
+    `FABER_AGENT_OPTIONAL=1` and a prelude writing `FABER_SKIP_AGENT=1` into
+    `bundle.env` plus `output.json` satisfying the schema: the agent stub
+    never ran (no argv recording), the postlude ran, `result.json` is ok with
+    `agent_skipped: true`, and no child environment ever carried
+    `FABER_SKIP_AGENT`. Without the opt-in env, the same prelude gets a
+    logged "ignoring" warning, the agent runs, and the record carries no
+    skip marker — the signal is inert, and still never exported. A skip
+    value other than `1` fails the prelude phase `bundle-malformed`. A skip
+    with required outputs unsatisfied fails `missing-output` with the detail
+    naming the skipped agent. `ExtractResult` preserves the marker across
+    the host boundary.
+17. **Skills leg links a read-only tree, under the box `HOME` not the process
     `HOME`.** The phase resolves `HOME` from the box environment (`b.Environ`),
     never `os.Getenv` — the preamble sets `HOME=/home/box` only in `b.Environ`,
     so on the drop path the process `HOME` diverges. The test makes them diverge

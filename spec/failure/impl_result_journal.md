@@ -21,6 +21,10 @@ type Result struct {
     Timing   Timing          `json:"timing"`
     Attempt  int             `json:"attempt"`            // 1-based, the attempt this record describes
     Attempts []AttemptInfo   `json:"attempts,omitempty"` // prior attempts, oldest first
+    // AgentSkipped marks an attempt whose agent phase was skipped by the
+    // prelude (an opted-in template): annotation metadata, valid on any
+    // status, additive within the journal format.
+    AgentSkipped bool `json:"agent_skipped,omitempty"`
 }
 
 type HaltRecord struct {

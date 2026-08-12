@@ -100,6 +100,13 @@ code; these are the module-level behaviors that must hold.)
     whether the toolset arrives via `image:` (a library entry with a pin) or inline
     `build:` (with the same pin) desugar to byte-identical `ResolvedTemplate.Pin`.
 
+10. **agent_optional resolves and stays byte-stable when absent.** A template
+    with `agent_optional: true` desugars to
+    `ResolvedTemplate.AgentOptional == true` and the flag round-trips through
+    the emitted IR; the same template without the field resolves to `false`
+    and its IR bytes are unchanged from before the field existed (`omitempty`
+    carrier), so existing golden IRs and journal keys are untouched.
+
 ## Edge cases
 
 - Empty `steps:` — Loader error, not a desugar panic.

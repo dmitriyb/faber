@@ -99,6 +99,14 @@ const (
 	// absent means the template declares no skills leg and the phase is a no-op.
 	EnvSkillsLink = "FABER_SKILLS_LINK"
 
+	// EnvAgentOptional carries the template's agent-skippable opt-in
+	// (agent_optional: true) into the box: set to "1" by the host exactly
+	// when the resolved template declares it. Only with this opt-in does the
+	// prelude's skip request (SkipAgentKey in bundle.env) take effect;
+	// without it the request is ignored with a warning. Absent or any other
+	// value means the agent always runs.
+	EnvAgentOptional = "FABER_AGENT_OPTIONAL"
+
 	// EnvSecretsStdin signals that file-mode credential tokens ride the
 	// container's stdin: set to "1" by the host-side RunSpec assembler exactly
 	// when a SecretsStdin payload is attached, and the secrets phase gates its
@@ -162,9 +170,19 @@ const (
 	// (line-oriented KEY=VALUE, opaque values).
 	BundleEnvFile = "bundle.env"
 
-	// BranchKey is the one first-pass bundle.env convention: a declared
-	// side-effect verified against the gateway after extraction.
+	// BranchKey is a bundle.env convention: a declared side-effect verified
+	// against the gateway after extraction.
 	BranchKey = "BRANCH"
+
+	// SkipAgentKey is the bundle.env agent-skip request: a prelude on an
+	// agent-skippable template (EnvAgentOptional) writes SkipAgentKey=1 and
+	// the agent phase becomes a logged no-op. The key is engine-consumed —
+	// popped when the bundle is read, never exported to any child
+	// environment (every other FABER_* sidecar key stays a contract
+	// violation) — and only the exact value "1" is a request; anything else
+	// is a bundle contract error. Deliberately not an exit code: hook exit
+	// status keeps meaning pass/fail.
+	SkipAgentKey = "FABER_SKIP_AGENT"
 
 	// OutputFile is the skill-written typed output in the result directory.
 	OutputFile = "output.json"

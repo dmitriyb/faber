@@ -8,6 +8,24 @@ everything after it is deterministic extraction; this is the only
 nondeterministic phase, and it is atomic — there is no resuming into an
 agent's chain of thought, only re-running the whole step.
 
+## The prelude may skip it
+
+On a template that declares itself agent-skippable (`agent_optional: true`,
+carried into the box as `FABER_AGENT_OPTIONAL=1`), a prelude that has already
+made the step's decision can skip the invocation entirely: it writes
+`FABER_SKIP_AGENT=1` into `bundle.env`, and this phase becomes a logged no-op
+— no process, no prompt, no model call. The phase order is otherwise
+unchanged: the postlude still runs, and the result phase still enforces the
+declared output contract (the prelude or the postlude must have written
+`output.json`, or the step fails `missing-output` with the skip named in the
+detail). The attempt record carries `agent_skipped: true` so journal, cost
+accounting, and report all show that no agent ran. On a template that did
+NOT opt in, the signal is ignored with a logged warning and the agent runs —
+skipping is a reviewable property of the template, never emergent behavior.
+The sidecar key is consumed by the engine (it is FABER-namespaced and never
+exported into any child environment); any value other than `1` is a bundle
+contract error.
+
 ## Prompt assembly
 
 The prompt is three parts, concatenated with blank-line separators:

@@ -541,22 +541,23 @@ func (d *desugarer) resolveTemplate(name, sp string) *ResolvedTemplate {
 	}
 	build, _ := ResolveBuild(d.cfg, t)
 	rt := &ResolvedTemplate{
-		Name:      name,
-		Packages:  append([]string(nil), build.Packages...),
-		Overlay:   build.Overlay,
-		Pin:       build.Pin, // flat *PinDef, json "pin,omitempty"; nil ⇒ omitted ⇒ byte-identical IR
-		Identity:  resolveIdentity(t),
-		Resources: t.Run.Resources,
-		Runtime:   t.Run.Runtime,
-		Env:       t.Run.Env,
-		Volumes:   t.Run.Volumes,
-		Skill:     t.Skill,
-		Model:     t.Model,
-		Effort:    t.Effort,
-		Hooks:     resolveHooks(d.cfg, t.Hooks),
-		Skills:    resolveSkills(d.cfg, t),
-		Inputs:    d.normalizeDefs(t.Inputs, sp),
-		Output:    d.normalizeDefs(t.Output, sp),
+		Name:          name,
+		Packages:      append([]string(nil), build.Packages...),
+		Overlay:       build.Overlay,
+		Pin:           build.Pin, // flat *PinDef, json "pin,omitempty"; nil ⇒ omitted ⇒ byte-identical IR
+		Identity:      resolveIdentity(t),
+		Resources:     t.Run.Resources,
+		Runtime:       t.Run.Runtime,
+		Env:           t.Run.Env,
+		Volumes:       t.Run.Volumes,
+		Skill:         t.Skill,
+		Model:         t.Model,
+		Effort:        t.Effort,
+		AgentOptional: t.AgentOptional,
+		Hooks:         resolveHooks(d.cfg, t.Hooks),
+		Skills:        resolveSkills(d.cfg, t),
+		Inputs:        d.normalizeDefs(t.Inputs, sp),
+		Output:        d.normalizeDefs(t.Output, sp),
 	}
 	return rt
 }

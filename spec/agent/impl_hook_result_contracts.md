@@ -41,6 +41,16 @@ When no hook was declared, `synthesizeBundle(inputs)` writes a minimal
 `CONTEXT.md` from the sorted input names and values, so the agent phase sees
 one shape regardless of template.
 
+After the bundle loads, the prelude phase pops the one engine-consumed
+sidecar key, `FABER_SKIP_AGENT`, BEFORE the reserved-name check (every other
+`FABER_*` sidecar key remains a bundle-malformed violation): value `1` on an
+`AgentOptional` template sets `Box.skipAgent`; value `1` on a template that
+did not opt in logs "prelude requested an agent skip but the template does
+not declare agent_optional; ignoring the request" and runs the agent; any
+other value is `bundle-malformed` naming the key only — the value is
+hook-authored bytes and never enters the record. The key is never merged
+into the agent or hook environment.
+
 ## The handoff record
 
 Written by `failStop` to `$FABER_RESULT_DIR/handoff.json`, with the bundle

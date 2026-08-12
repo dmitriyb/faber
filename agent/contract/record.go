@@ -75,6 +75,12 @@ type Result struct {
 	// succeeded but wrote no output file.
 	Fallback bool `json:"fallback,omitempty"`
 
+	// AgentSkipped marks an attempt whose agent phase was skipped by the
+	// prelude (SkipAgentKey on an agent-skippable template): honesty
+	// metadata beside any status, so journal, cost accounting, and report
+	// show that no agent ran.
+	AgentSkipped bool `json:"agent_skipped,omitempty"`
+
 	// Error describes a failed attempt.
 	Error *ResultError `json:"error,omitempty"`
 

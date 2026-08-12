@@ -94,12 +94,20 @@ type BoxEnv struct {
 	// means the phase never touches stdin.
 	SecretsStdin bool
 
-	// rawSchema, rawAttempt, rawTOFU and rawContract hold the undecoded
-	// values for the env phase.
-	rawSchema   string
-	rawAttempt  string
-	rawTOFU     string
-	rawContract string
+	// AgentOptional reports FABER_AGENT_OPTIONAL=1: the template declares
+	// itself agent-skippable, so a prelude's skip request in the bundle
+	// sidecar takes effect. Set by the env phase only for the exact contract
+	// value "1" — anything else is an env-contract violation, never a silent
+	// opt-in.
+	AgentOptional bool
+
+	// rawSchema, rawAttempt, rawTOFU, rawContract and rawAgentOptional hold
+	// the undecoded values for the env phase.
+	rawSchema        string
+	rawAttempt       string
+	rawTOFU          string
+	rawContract      string
+	rawAgentOptional string
 }
 
 // ParseEnv decodes the box environment. It never fails: the env phase
@@ -139,6 +147,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		rawAttempt:       get(contract.EnvAttempt),
 		rawTOFU:          get(security.EnvHostKeyTOFU),
 		rawContract:      get(contract.EnvContractVersion),
+		rawAgentOptional: get(contract.EnvAgentOptional),
 	}
 	if raw := strings.TrimSpace(get(contract.EnvInputSlots)); raw != "" {
 		for _, name := range strings.Split(raw, ",") {
@@ -212,6 +221,14 @@ func (e *BoxEnv) validate() error {
 		e.TOFU = true
 	default:
 		errs = append(errs, fmt.Errorf("%s: %q is not the contract value \"1\" — refusing to guess a trust policy", security.EnvHostKeyTOFU, e.rawTOFU))
+	}
+	switch e.rawAgentOptional {
+	case "":
+		// No opt-in: the agent always runs.
+	case "1":
+		e.AgentOptional = true
+	default:
+		errs = append(errs, fmt.Errorf("%s: %q is not the contract value \"1\" — refusing to guess whether the agent is skippable", contract.EnvAgentOptional, e.rawAgentOptional))
 	}
 	if e.HostKey != "" && e.TOFU {
 		errs = append(errs, fmt.Errorf("%s and %s are mutually exclusive", security.EnvHostKey, security.EnvHostKeyTOFU))

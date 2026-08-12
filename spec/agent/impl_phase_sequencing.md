@@ -36,6 +36,7 @@ type BoxEnv struct {
     GitCache             string            // FABER_GIT_CACHE; ro object cache for clone --reference-if-able, empty = none
     SkillsLink           string            // FABER_SKILLS_LINK; $HOME-relative path to symlink at /faber/skills, empty = no skills leg
     SecretsStdin         bool              // FABER_SECRETS_STDIN=1; file-mode tokens arrive on stdin for phase 3 to materialize
+    AgentOptional        bool              // FABER_AGENT_OPTIONAL=1; the template declares itself agent-skippable (exact "1", like TOFU)
     Slots                []string          // FABER_INPUT_SLOTS; declared slot names, for the slot-keyed handoff
     // FABER_CONTRACT_VERSION is validated by the env phase (see the contract
     // version handshake in impl_hook_result_contracts.md)
@@ -275,6 +276,13 @@ bundle sidecar values into the child environment, and calls `Runner.Stream`
 parser). A nonzero exit code returns an error carrying the code and the
 stderr tail for the handoff; exit 0 falls through to `emitResult`. No output
 of this phase is interpreted: the result file is the only channel.
+
+When the prelude requested the skip (`Box.skipAgent`, set by the bundle read
+on an opted-in template), `runAgent` logs "agent skipped by prelude" and
+returns nil without invoking anything; `emitResult` stamps
+`agent_skipped: true` into the record and, when the fallback path then finds
+required outputs unsatisfied, prefixes the `missing-output` detail with the
+skip so the diagnosis names the prelude, not a silent agent.
 
 No global state anywhere: `Box` is constructed in `main` from `os.Environ()`,
 the runner and logger are injected, and every phase is a method taking the

@@ -202,6 +202,9 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	setIf(contract.EnvGitEmail, spec.GitEmail)
 	setIf(contract.EnvGitCache, spec.GitCache)
 	setIf(contract.EnvSkillsLink, spec.SkillsLink)
+	if tpl.AgentOptional {
+		env[contract.EnvAgentOptional] = "1"
+	}
 	// The box starts as root and drops to the host user: its uid:gid so the
 	// files the box writes to the result bind stay host-owned.
 	env[contract.EnvRunUID] = strconv.Itoa(os.Getuid())

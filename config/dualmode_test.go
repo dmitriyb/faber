@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -111,6 +112,76 @@ func resolvedBox(t *testing.T, cfg *Config) *ResolvedTemplate {
 	}
 	t.Fatal("no agent node")
 	return nil
+}
+
+// Verifies spec/proposals/2026-08-12-prelude-agent-skip.md: agent_optional
+// resolves into the template and, absent, leaves the IR byte-identical to a
+// config that never heard of the field (the omitempty carrier) — golden IRs
+// and journal keys stay untouched, while flipping the flag changes the IR
+// bytes (and so the hash resume guards on).
+func TestAgentOptionalResolution(t *testing.T) {
+	base := `
+version: 1
+identities:
+  worker: {key: ./keys/worker}
+templates:
+  box:
+    build: {packages: [git]}
+    run: {identity: worker, env: {FABER_AGENT_CLI: agent-cli}}
+    skill: act
+    model: agent-model
+    effort: high
+    %s
+    inputs: {input: {type: string, required: true}}
+    output: {result: {type: string, required: true}}
+workflows:
+  flow:
+    params: {subject: {type: string, required: true}}
+    steps:
+      - id: first
+        use: box
+        with: {input: "${params.subject}"}
+`
+	load := func(t *testing.T, line string) *Config {
+		t.Helper()
+		cfg, err := loadStr(t, fmt.Sprintf(base, line))
+		if err != nil {
+			t.Fatalf("must validate: %v", err)
+		}
+		return cfg
+	}
+	with := load(t, "agent_optional: true")
+	without := load(t, "hooks: {}")
+
+	if !resolvedBox(t, with).AgentOptional {
+		t.Fatal("agent_optional: true must resolve into the template")
+	}
+	if resolvedBox(t, without).AgentOptional {
+		t.Fatal("an undeclared agent_optional must resolve false")
+	}
+
+	wir, err := Desugar(with, "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oir, err := Desugar(without, "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wb, err := EncodeIR(wir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ob, err := EncodeIR(oir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wb), `"agent_optional": true`) {
+		t.Fatal("the opt-in must be carried in the IR (resume must see it in the hash)")
+	}
+	if strings.Contains(string(ob), "agent_optional") {
+		t.Fatalf("an absent opt-in must serialize to nothing:\n%s", ob)
+	}
 }
 
 // Verifies spec/proposals/2026-08-04-postlude-phase.md: hooks.postlude follows

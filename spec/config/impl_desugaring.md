@@ -52,6 +52,13 @@ what makes a pin-less template's IR byte-identical to today. The
 `omitempty`→nil ⇒ byte-identical-IR-when-absent property only closes because the
 carrier is this single flat, omitempty field.
 
+`AgentOptional` rides the same discipline: `agent_optional: true` copies into
+`ResolvedTemplate.AgentOptional` (json `agent_optional,omitempty`), so a
+template without the opt-in serializes to byte-identical IR. Because the flag
+is part of the resolved template, flipping it changes the IR hash — resume
+then refuses with the standard drift message rather than silently changing
+whether a resumed step's agent runs.
+
 The one field that widens is the skills leg, from a single `{dir, link}` to the
 resolved delivery set:
 

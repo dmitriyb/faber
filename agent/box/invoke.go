@@ -54,7 +54,15 @@ func (i Invocation) Argv() []string {
 // bundle's sidecar values, so anything the prelude derived is visible to the
 // skill. stdout and stderr stream to the container log and are never parsed:
 // the result file is the only machine-readable channel out of this phase.
+// When the prelude's skip request was honored (an agent-skippable template),
+// the phase is a logged no-op: no process, no prompt, no model call — the
+// postlude and result phases run unchanged, and the result phase enforces
+// the output contract exactly as if a quiet agent had run.
 func (b *Box) runAgent(ctx context.Context) error {
+	if b.skipAgent {
+		b.Log.InfoContext(ctx, "agent skipped by prelude", "skill", b.Env.Skill)
+		return nil
+	}
 	inv := Invocation{
 		CLI:       b.Env.AgentCLI,
 		Skill:     b.Env.Skill,

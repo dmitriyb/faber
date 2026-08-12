@@ -57,6 +57,11 @@ type Result struct {
 	// final record of a retry sequence so journal and report show the whole
 	// story in one record.
 	Attempts []AttemptInfo `json:"attempts,omitempty"`
+	// AgentSkipped marks an attempt whose agent phase was skipped by the
+	// prelude of an agent-skippable template: honesty metadata beside any
+	// status (never part of the union Validate enforces), journaled and
+	// reported so cost accounting shows that no agent ran.
+	AgentSkipped bool `json:"agent_skipped,omitempty"`
 }
 
 // ErrorRecord is the structured failure description inside a failed Result.

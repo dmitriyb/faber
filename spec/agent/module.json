@@ -7,7 +7,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Fixed box phase order",
-      "description": "Every agent step executes the same internal sequence: environment setup (an agent-specific skills-link phase when the template declares one, delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent, then the optional postlude hook, then result emission and verification. After each user-filled phase that exits 0 the sequencer honors a halt request (halt.json in the result directory), emitting a halted attempt record and running no later phase. The order is engine-owned and not configurable; there is no in-container DAG."
+      "description": "Every agent step executes the same internal sequence: environment setup (an agent-specific skills-link phase when the template declares one, delegated credentials, remote host-key policy, repo clone from the gateway when a repo param is present, signing config derived from the forwarded agent socket), then the context and prelude hooks, then the agent (skippable by the prelude on a template that declares agent_optional — the phase stays in the order as a logged no-op), then the optional postlude hook, then result emission and verification. After each user-filled phase that exits 0 the sequencer honors a halt request (halt.json in the result directory), emitting a halted attempt record and running no later phase. The order is engine-owned and not configurable; there is no in-container DAG."
     },
     {
       "id": "b880aa49b3b9",
@@ -21,7 +21,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Unrestricted agent invocation",
-      "description": "The agent phase invokes the configured agent skill headlessly with full permission bypass inside the box; the sealed environment (pinned toolset, egress lock, single-role key, gateway-only remote) is the restriction — there is no second in-container permission gate. The invocation passes the skill name, the context bundle as prompt body, the model and effort level (mandatory per-template config, passed through opaquely), optional extra instruction, and optional budget bound from config."
+      "description": "The agent phase invokes the configured agent skill headlessly with full permission bypass inside the box; the sealed environment (pinned toolset, egress lock, single-role key, gateway-only remote) is the restriction — there is no second in-container permission gate. The invocation passes the skill name, the context bundle as prompt body, the model and effort level (mandatory per-template config, passed through opaquely), optional extra instruction, and optional budget bound from config. On a template declaring agent_optional, a prelude that wrote FABER_SKIP_AGENT=1 into bundle.env skips the invocation entirely (logged no-op; the record marks agent_skipped; the output contract still holds); a template without the opt-in ignores the signal with a warning."
     },
     {
       "id": "ff8e85704b0a",
@@ -64,7 +64,7 @@
     {
       "id": "53965d3ef136",
       "name": "AgentInvoker",
-      "description": "The agent phase: assembles the headless invocation (skill, context bundle, model, effort, extra instruction, budget bound) with permission bypass, executes it, and maps its exit status into the phase flow.",
+      "description": "The agent phase: assembles the headless invocation (skill, context bundle, model, effort, extra instruction, budget bound) with permission bypass, executes it, and maps its exit status into the phase flow. Owns the prelude-driven skip: FABER_SKIP_AGENT=1 in bundle.env on an agent_optional template makes the phase a logged no-op with the record marked agent_skipped.",
       "content": "arch_agent_invoker.md",
       "implements": ["ae434449cac9"]
     },

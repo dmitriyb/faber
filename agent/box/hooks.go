@@ -55,6 +55,31 @@ func (b *Box) runPreludeHook(ctx context.Context) error {
 			Detail: contract.BranchKey + " declared as a side-effect but the step binds no repo",
 		}
 	}
+	// The agent-skip request is the one engine-consumed sidecar key: popped
+	// here, before the reserved-name check below (it is FABER-namespaced by
+	// design, so leaving it in place would trip that check), and never
+	// exported to any child environment. Only the exact value "1" is a
+	// request; the opt-in decides whether it takes effect.
+	if v, ok := bundle.Env[contract.SkipAgentKey]; ok {
+		delete(bundle.Env, contract.SkipAgentKey)
+		if v != "1" {
+			// The offending value is hook-authored bytes and never enters the
+			// record (a buggy prelude could interpolate a secret); the key
+			// alone names the violation.
+			return &boxError{
+				Reason: contract.ReasonBundleMalformed,
+				Detail: contract.SkipAgentKey + ": value is not the contract \"1\" — refusing to guess an agent-skip request",
+			}
+		}
+		if b.Env.AgentOptional {
+			b.skipAgent = true
+		} else {
+			// The signal is inert without the template opt-in — and says so:
+			// skipping must be a reviewable property of the template, never
+			// emergent behavior of a hook.
+			b.Log.WarnContext(ctx, "prelude requested an agent skip but the template does not declare agent_optional; ignoring the request")
+		}
+	}
 	// Sidecar values are merged into the agent's environment last, so a
 	// reserved name would silently override the engine contract (result dir,
 	// forwarded socket, ssh policy, PATH). Reject them here — the agent never

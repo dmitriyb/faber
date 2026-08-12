@@ -41,8 +41,9 @@ func ExtractResult(dir string, schema OutputSchema) (Result, error) {
 				Reason: contract.ReasonContractVersion,
 				Detail: fmt.Sprintf("result record carries contract v%d, host speaks v%d — check the host config's box_bin (a mismatched faber-box binary)", rec.Contract, contract.ContractVersion),
 			},
-			Timing:  rec.Timing,
-			Attempt: rec.Attempt,
+			AgentSkipped: rec.AgentSkipped,
+			Timing:       rec.Timing,
+			Attempt:      rec.Attempt,
 		}, nil
 	}
 	if rec.Status == StatusHalted {
@@ -77,8 +78,9 @@ func ExtractResult(dir string, schema OutputSchema) (Result, error) {
 				Reason: contract.ReasonOutputSchema,
 				Detail: "host re-validation: " + contract.JoinViolations(violations),
 			},
-			Timing:  rec.Timing,
-			Attempt: rec.Attempt,
+			AgentSkipped: rec.AgentSkipped,
+			Timing:       rec.Timing,
+			Attempt:      rec.Attempt,
 		}, nil
 	}
 	// Recompute the unthreaded set host-side rather than trusting the box's.
