@@ -25,7 +25,9 @@ func (p *Policy) RunStep(ctx context.Context, st StepSpec, run StepRunner) Resul
             res = failedResult("launch", err, attempt)
         }
         res.Attempt, res.Attempts = attempt, history
-        if res.Status == StatusOK || attempt == max {
+        if res.Status != StatusFailed || attempt == max {
+            // ok and halted are both terminal here: a halt bypasses retry and
+            // cleanup — the step settled decisively, nothing broke.
             return res // final record: journaled + propagated by the caller
         }
         history = append(history, attemptInfoOf(res))
@@ -96,7 +98,7 @@ func (s *RunSeed) Lookup(stepID string, inputs map[string]any, tmpl, image strin
     k := Key{stepID, mustHash(inputs, tmpl, image)}
     r, ok := s.Prior[k]
     if !ok || r.Result.Status != StatusOK {
-        return Result{}, false // failed or absent => run it
+        return Result{}, false // failed, halted, or absent => run it
     }
     return r.Result, true // skip: reuse payload for threading
 }

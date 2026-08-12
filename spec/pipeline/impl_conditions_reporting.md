@@ -62,14 +62,15 @@ type RunReport struct {
 
 type StepLine struct {
     ID       string         // task/review-cycle@2/fix
-    Status   string         // ok|failed|skipped-condition|skipped-dependency|absent
+    Status   string         // ok|failed|halted|skipped-condition|skipped-dependency|skipped-halt|absent
     Cached   bool           // journal hit
     Duration time.Duration
     Attempts int
     Deferred int            // count; DeferredFor total wait
     Outputs  map[string]any // key payload fields
     Error    *failure.ErrorRecord `json:",omitempty"` // reason, detail, handoff path
-    Ancestor string         `json:",omitempty"`       // skipped-dependency root cause
+    Halt     *failure.HaltRecord  `json:",omitempty"` // halted step's reason/detail/phase
+    Ancestor string         `json:",omitempty"`       // skipped-dependency / skipped-halt root cause
     Chose    string         `json:",omitempty"`       // selector's resolved candidate
 }
 
@@ -86,11 +87,14 @@ Rendering is two thin functions over the same struct:
 
 - `Text(w io.Writer)` — aligned per-step lines, generate rollups with nested
   instance lines, failure blocks (reason, detail, handoff pointer, attempts,
-  `faber resume --interactive <id>` hint), run footer with per-state totals.
+  `faber resume --interactive <id>` hint), halt blocks (halting step, halt
+  reason, detail — named without the reader parsing JSON), run footer with
+  per-state totals.
 - `JSON(w io.Writer)` — `json.Encoder` with `SetEscapeHTML(false)` over the
   struct; field order fixed, slices pre-sorted, so output is diff-stable.
 
-Exit-code mapping lives with the CLI, reading `report.Run.Totals.Failed > 0`.
+Exit-code mapping lives with the executor's own counters: failed > 0 ⇒ the
+failure error (exit 1); else halted > 0 ⇒ the typed halt error (exit 3).
 The reporter performs no I/O beyond the journal reader and the writer it is
 handed, holds no state, and never inspects scheduler memory — reporting a
 crashed run and a settled run is the same code path.

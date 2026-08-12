@@ -39,15 +39,17 @@ type RunHeader struct {
 type Totals struct {
 	OK                int `json:"ok"`
 	Failed            int `json:"failed"`
+	Halted            int `json:"halted,omitempty"`
 	SkippedCondition  int `json:"skipped_condition"`
 	SkippedDependency int `json:"skipped_dependency"`
+	SkippedHalt       int `json:"skipped_halt,omitempty"`
 	Absent            int `json:"absent"`
 }
 
 // StepLine is one node's report line.
 type StepLine struct {
 	ID          string               `json:"id"`
-	Status      string               `json:"status"` // ok|failed|skipped-condition|skipped-dependency|absent
+	Status      string               `json:"status"` // ok|failed|halted|skipped-condition|skipped-dependency|skipped-halt|absent
 	Cached      bool                 `json:"cached,omitempty"`
 	Duration    string               `json:"duration,omitempty"`
 	Attempts    int                  `json:"attempts,omitempty"`
@@ -55,7 +57,8 @@ type StepLine struct {
 	DeferredFor string               `json:"deferred_for,omitempty"`
 	Outputs     map[string]any       `json:"outputs,omitempty"`
 	Error       *failure.ErrorRecord `json:"error,omitempty"`
-	Ancestor    string               `json:"ancestor,omitempty"` // skipped-dependency root cause
+	Halt        *failure.HaltRecord  `json:"halt,omitempty"`     // halted step's reason/detail/phase
+	Ancestor    string               `json:"ancestor,omitempty"` // skipped-dependency / skipped-halt root cause
 	Chose       string               `json:"chose,omitempty"`    // selector's resolved candidate
 }
 
@@ -73,6 +76,7 @@ type GenItem struct {
 	Duration string     `json:"duration,omitempty"`
 	OK       int        `json:"ok"`
 	Failed   int        `json:"failed"`
+	Halted   int        `json:"halted,omitempty"`
 	Skipped  int        `json:"skipped"`
 	Steps    []StepLine `json:"steps"`
 }
@@ -184,7 +188,7 @@ func (RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string)
 		rollup := GenRollup{Node: gen}
 		for _, itemID := range sortedKeys(items) {
 			gi := GenItem{ID: itemID}
-			depSkipped := 0
+			depSkipped, haltSkipped := 0, 0
 			var start, finish time.Time
 			for _, stepID := range sortedKeys(items[itemID]) {
 				line := lineFromRecord(stepID, items[itemID][stepID])
@@ -195,9 +199,14 @@ func (RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string)
 					gi.OK++
 				case StateFailed:
 					gi.Failed++
+				case StateHalted:
+					gi.Halted++
 				case StateSkippedDependency:
 					gi.Skipped++
 					depSkipped++
+				case StateSkippedHalt:
+					gi.Skipped++
+					haltSkipped++
 				default:
 					gi.Skipped++
 				}
@@ -211,10 +220,17 @@ func (RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string)
 				}
 			}
 			// Condition skips are the workflow working as declared; only a
-			// failure or a dependency skip degrades the item's aggregate.
+			// failure, halt, or non-condition skip degrades the item's
+			// aggregate. Failure outranks halt, mirroring the run exit; an
+			// instance degraded only by an outside halt reads skipped-halt,
+			// never as a failure cascade.
 			switch {
 			case gi.Failed > 0:
 				gi.Status = StateFailed
+			case gi.Halted > 0:
+				gi.Status = StateHalted
+			case haltSkipped > 0 && depSkipped == 0:
+				gi.Status = StateSkippedHalt
 			case depSkipped > 0:
 				gi.Status = StateSkippedDependency
 			default:
@@ -250,10 +266,14 @@ func (r *RunReport) tally(status string) {
 		r.Run.Totals.OK++
 	case StateFailed:
 		r.Run.Totals.Failed++
+	case StateHalted:
+		r.Run.Totals.Halted++
 	case StateSkippedCondition:
 		r.Run.Totals.SkippedCondition++
 	case StateSkippedDependency:
 		r.Run.Totals.SkippedDependency++
+	case StateSkippedHalt:
+		r.Run.Totals.SkippedHalt++
 	default:
 		r.Run.Totals.Absent++
 	}
@@ -300,11 +320,19 @@ func lineFromRecord(id string, rec failure.ResultRecord) StepLine {
 		if err := json.Unmarshal(res.Payload, &outputs); err == nil && len(outputs) > 0 {
 			line.Outputs = outputs
 		}
+	case res.Status == failure.StatusHalted:
+		line.Status = StateHalted
+		line.Attempts = res.Attempt
+		line.Halt = res.Halt
 	case isSkipRecord(rec, reasonSkippedCondition):
 		line.Status = StateSkippedCondition
 		line.Duration = ""
 	case isSkipRecord(rec, reasonSkippedDependency):
 		line.Status = StateSkippedDependency
+		line.Ancestor = res.Error.Detail
+		line.Duration = ""
+	case isSkipRecord(rec, reasonSkippedHalt):
+		line.Status = StateSkippedHalt
 		line.Ancestor = res.Error.Detail
 		line.Duration = ""
 	default:
@@ -386,13 +414,15 @@ func chooseCandidate(sel *config.SelSpec, rp *failure.Replay) string {
 }
 
 func genSummary(items []GenItem) string {
-	ok, failed, skipped := 0, 0, 0
+	ok, failed, halted, skipped := 0, 0, 0, 0
 	for _, it := range items {
 		switch it.Status {
 		case StateOK:
 			ok++
 		case StateFailed:
 			failed++
+		case StateHalted:
+			halted++
 		default:
 			skipped++
 		}
@@ -400,6 +430,9 @@ func genSummary(items []GenItem) string {
 	parts := []string{fmt.Sprintf("%d ok", ok)}
 	if failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	}
+	if halted > 0 {
+		parts = append(parts, fmt.Sprintf("%d halted", halted))
 	}
 	if skipped > 0 {
 		parts = append(parts, fmt.Sprintf("%d skipped", skipped))
@@ -437,9 +470,22 @@ func (r *RunReport) Text(w io.Writer) error {
 			}
 		}
 	}
+	halts := r.haltBlocks()
+	if len(halts) > 0 {
+		p("halted:")
+		for _, l := range halts {
+			p("  %s", l)
+		}
+	}
 	t := r.Run.Totals
 	footer := fmt.Sprintf("totals: %d ok, %d failed, %d skipped (condition), %d skipped (dependency)",
 		t.OK, t.Failed, t.SkippedCondition, t.SkippedDependency)
+	if t.Halted > 0 {
+		footer += fmt.Sprintf(", %d halted", t.Halted)
+	}
+	if t.SkippedHalt > 0 {
+		footer += fmt.Sprintf(", %d skipped (halt)", t.SkippedHalt)
+	}
 	if t.Absent > 0 {
 		footer += fmt.Sprintf(", %d absent", t.Absent)
 	}
@@ -472,7 +518,16 @@ func stepText(line StepLine) string {
 		fmt.Fprintf(&sb, "  chose=%s", line.Chose)
 	}
 	if line.Ancestor != "" {
-		fmt.Fprintf(&sb, "  after-failure-of=%s", line.Ancestor)
+		// The ancestor is a scheduler-authored node id in both skip flavors.
+		if line.Status == StateSkippedHalt {
+			fmt.Fprintf(&sb, "  after-halt-of=%s", line.Ancestor)
+		} else {
+			fmt.Fprintf(&sb, "  after-failure-of=%s", line.Ancestor)
+		}
+	}
+	if line.Halt != nil {
+		// The halt reason is box-authored text; sanitize like any other.
+		fmt.Fprintf(&sb, "  halt=%s", sanitizeTerm(line.Halt.Reason))
 	}
 	for _, k := range sortedKeys(line.Outputs) {
 		fmt.Fprintf(&sb, "  %s=%v", sanitizeTerm(k), sanitizeTerm(fmt.Sprintf("%v", line.Outputs[k])))
@@ -553,6 +608,39 @@ func (r *RunReport) failureBlocks() [][]string {
 		}
 	}
 	return blocks
+}
+
+// haltBlocks builds the halted-step lines across top-level and instance
+// lines, in report order: the halting step, its reason, its detail, and the
+// phase that requested the stop — named without the reader parsing JSON.
+// Halt fields are box-authored text and are terminal-sanitized like every
+// other box-derived string on the Text path.
+func (r *RunReport) haltBlocks() []string {
+	var lines []string
+	add := func(line StepLine) {
+		if line.Status != StateHalted || line.Halt == nil {
+			return
+		}
+		l := fmt.Sprintf("%s: %s", line.ID, sanitizeTerm(line.Halt.Reason))
+		if line.Halt.Detail != "" {
+			l += ": " + sanitizeTerm(line.Halt.Detail)
+		}
+		if line.Halt.Phase != "" {
+			l += fmt.Sprintf("  (requested by the %s phase)", sanitizeTerm(line.Halt.Phase))
+		}
+		lines = append(lines, l)
+	}
+	for _, line := range r.Steps {
+		add(line)
+	}
+	for _, g := range r.Generate {
+		for _, it := range g.Items {
+			for _, line := range it.Steps {
+				add(line)
+			}
+		}
+	}
+	return lines
 }
 
 // JSON renders the machine report: one stably ordered document (struct field

@@ -86,28 +86,37 @@ func New(env *BoxEnv, runner CmdRunner, environ []string, logger *slog.Logger) *
 type phase struct {
 	name string
 	run  func(*Box, context.Context) error
+	// user marks a user-filled phase (hook or agent): the one class of phase
+	// after which a halt request (the halt file) is honored.
+	user bool
 }
 
 // phases is the engine-owned sequence — the spec's fixed box phase order is
 // literally this slice. It is package data, not configuration: no template,
 // env value, or flag reorders it.
 var phases = []phase{
-	{"skills", (*Box).linkSkills},
-	{"env", (*Box).checkEnv},
-	{"secrets", (*Box).loadSecrets},
-	{"hostkey", (*Box).applyHostKeyPolicy},
-	{"clone", (*Box).clone},
-	{"signing", (*Box).configureSigning},
-	{"context", (*Box).runContextHook},
-	{"prelude", (*Box).runPreludeHook},
-	{"agent", (*Box).runAgent},
-	{"postlude", (*Box).runPostludeHook},
-	{"result", (*Box).emitResult},
+	{"skills", (*Box).linkSkills, false},
+	{"env", (*Box).checkEnv, false},
+	{"secrets", (*Box).loadSecrets, false},
+	{"hostkey", (*Box).applyHostKeyPolicy, false},
+	{"clone", (*Box).clone, false},
+	{"signing", (*Box).configureSigning, false},
+	{"context", (*Box).runContextHook, true},
+	{"prelude", (*Box).runPreludeHook, true},
+	{"agent", (*Box).runAgent, true},
+	{"postlude", (*Box).runPostludeHook, true},
+	{"result", (*Box).emitResult, false},
 }
 
 // Main drives the fixed order with fail-stop between phases: no phase ever
 // runs after a failed one, and every failure converges on the handoff funnel.
-// The return value is the process exit code.
+// After each user-filled phase that exited 0, a halt request (halt.json in
+// the result directory) is honored: the halted attempt record is written and
+// no later phase runs — a prelude halt skips the agent, an agent halt skips
+// the postlude. The check runs only on an orderly exit; a phase that fails
+// after writing the halt file is a failure, never a halt. The return value
+// is the process exit code (the mounted record, not the code, is what the
+// host trusts).
 func Main(ctx context.Context, b *Box) int {
 	if err := b.enterRunUser(ctx); err != nil {
 		b.failStop(ctx, "preamble", err)
@@ -123,6 +132,16 @@ func Main(ctx context.Context, b *Box) int {
 			return 1
 		}
 		b.Log.DebugContext(ctx, "phase done", "phase", p.name, "duration", b.Timing[p.name])
+		if p.user {
+			halted, herr := b.checkHalt(ctx, p.name)
+			if herr != nil {
+				b.failStop(ctx, p.name, herr)
+				return 1
+			}
+			if halted {
+				return 0
+			}
+		}
 	}
 	return 0
 }

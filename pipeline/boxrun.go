@@ -260,6 +260,14 @@ func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult, log *
 		out.Payload = raw
 		return out
 	}
+	if rec.Status == agent.StatusHalted {
+		// ExtractResult already guaranteed a halt arm with a reason and
+		// dropped the payload. The halt fields are the halter's vocabulary,
+		// carried verbatim (the report sanitizes at render).
+		out.Status = failure.StatusHalted
+		out.Halt = &failure.HaltRecord{Reason: rec.Halt.Reason, Detail: rec.Halt.Detail, Phase: rec.Halt.Phase}
+		return out
+	}
 	out.Status = failure.StatusFailed
 	errRec := &failure.ErrorRecord{Reason: contract.ReasonBoxVanished, Detail: "failed record without an error body"}
 	if rec.Error != nil {
@@ -304,7 +312,7 @@ func pathWithin(p, base string) bool {
 // collision is visible as exactly what it is.
 func sanitizeBoxReason(reason string) string {
 	switch reason {
-	case reasonSkippedCondition, reasonSkippedDependency, reasonDeferred, reasonCached:
+	case reasonSkippedCondition, reasonSkippedDependency, reasonSkippedHalt, reasonDeferred, reasonCached:
 		return "box:" + reason
 	}
 	return reason

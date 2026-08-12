@@ -112,8 +112,18 @@ type scheduler struct {
 	// re-reading the journal at report time (a report-load failure must not
 	// turn a failed run into exit 0).
 	failed int
+	// halts records nodes settled halted by this execution, in settle order —
+	// the executor's exit-code and run-end input, owned like failed.
+	halts []HaltedStep
 
 	fatal error
+}
+
+// HaltedStep is one halted settlement: the step and the halter's reason, as
+// the executor's typed halt error surfaces them.
+type HaltedStep struct {
+	Step   string
+	Reason string
 }
 
 // run executes the graph to quiescence. It returns non-nil only for
@@ -606,7 +616,9 @@ func (s *scheduler) boxWorker(ctx context.Context, job boxJob) {
 		s.send(evSettled{id: job.id, res: res, costs: costs, executed: true, slot: true})
 		return
 	}
-	if res.Status == failure.StatusOK {
+	if res.Status != failure.StatusFailed {
+		// ok and halted both settle decisively: neither leaves a consecutive
+		// rate-limit streak for the defer floor to keep counting.
 		s.rld.Reset(job.id)
 	}
 	s.send(evSettled{id: job.id, res: res, costs: costs, executed: true, slot: true})
@@ -832,11 +844,11 @@ func (s *scheduler) settleFailed(n *execNode, reason, detail string) {
 	}, false, nil)
 }
 
-// settleSkip settles a node into one of the two skip states. The journal
+// settleSkip settles a node into one of the skip states. The journal
 // encoding is a failed-status record carrying the skip reason (the failure
 // module's record union has no third status) and a null input hash, so it is
 // never a resume hit; the reporter decodes it back to the skip state. For
-// dependency skips the failed ancestor's id travels in the detail.
+// dependency and halt skips the root ancestor's id travels in the detail.
 func (s *scheduler) settleSkip(n *execNode, state, ancestor string) {
 	now := s.clock.Now()
 	res := failure.Result{
@@ -857,8 +869,11 @@ func (s *scheduler) settleSkip(n *execNode, state, ancestor string) {
 // cost record (cached adoptions and cheap settlements do not).
 func (s *scheduler) settleResult(n *execNode, res failure.Result, executed bool, costs []metering.Cost) {
 	status := StateOK
-	if res.Status == failure.StatusFailed {
+	switch res.Status {
+	case failure.StatusFailed:
 		status = StateFailed
+	case failure.StatusHalted:
+		status = StateHalted
 	}
 	if status == StateOK {
 		payload, err := decodePayload(res.Payload)
@@ -903,12 +918,19 @@ func (s *scheduler) settleResult(n *execNode, res failure.Result, executed bool,
 	if status == StateFailed && res.Error != nil {
 		s.log.Info("step failed", "step", n.n.ID, "reason", res.Error.Reason, "attempts", res.Attempt)
 	}
+	if status == StateHalted && res.Halt != nil {
+		// The halt tally is recorded at the single settle point so the
+		// executor's exit decision and the run-end record cannot disagree
+		// with what was journaled.
+		s.halts = append(s.halts, HaltedStep{Step: n.n.ID, Reason: res.Halt.Reason})
+		s.log.Info("step halted", "step", n.n.ID, "reason", res.Halt.Reason)
+	}
 	s.finish(n, status)
 }
 
 // finish marks a node terminal, applies scope-skip for non-ok sub-workflow
-// entries, propagates failure to transitive dependents, decrements dependents
-// (readiness), and wakes zero-until deferred nodes.
+// entries, propagates failure or halt to transitive dependents, decrements
+// dependents (readiness), and wakes zero-until deferred nodes.
 func (s *scheduler) finish(n *execNode, status string) {
 	id := n.n.ID
 	n.life = nsDone
@@ -921,11 +943,16 @@ func (s *scheduler) finish(n *execNode, status string) {
 
 	if members := s.g.members[id]; len(members) > 0 && status != StateOK {
 		// A sub-workflow entry that skipped or failed takes its whole inlined
-		// graph with it: condition skips cascade as condition skips, anything
-		// else as dependency skips naming the entry.
+		// graph with it: condition skips cascade as condition skips, halt
+		// skips cascade as halt skips (a triage stop must not read as a
+		// failure cascade inside the sub graph either), anything else as
+		// dependency skips — the non-condition flavors naming the entry.
 		memberState, ancestor := StateSkippedDependency, id
-		if status == StateSkippedCondition {
+		switch status {
+		case StateSkippedCondition:
 			memberState, ancestor = StateSkippedCondition, ""
+		case StateSkippedHalt:
+			memberState = StateSkippedHalt
 		}
 		for _, m := range members {
 			mn := s.g.nodes[m]
@@ -934,8 +961,11 @@ func (s *scheduler) finish(n *execNode, status string) {
 			}
 		}
 	}
-	if status == StateFailed {
-		s.propagate(id)
+	switch status {
+	case StateFailed:
+		s.propagate(id, StateSkippedDependency)
+	case StateHalted:
+		s.propagate(id, StateSkippedHalt)
 	}
 	for _, d := range s.g.succ[id] {
 		s.g.indeg[d]--
@@ -963,14 +993,15 @@ func (s *scheduler) wakeParked() {
 	}
 }
 
-// propagate walks the failed node's dependents breadth-first and settles
-// every not-yet-settled transitive dependent skipped-dependency with the
-// failed ancestor recorded. Settled nodes stop the walk — their own
-// settlement already handled their dependents — so independent branches and
-// join points with healthy inputs are untouched.
-func (s *scheduler) propagate(failed string) {
+// propagate walks a failed or halted node's dependents breadth-first and
+// settles every not-yet-settled transitive dependent into state (the skip
+// flavor matching the root: skipped-dependency after a failure, skipped-halt
+// after a halt) with the root ancestor recorded. Settled nodes stop the
+// walk — their own settlement already handled their dependents — so
+// independent branches and join points with healthy inputs are untouched.
+func (s *scheduler) propagate(root, state string) {
 	visited := map[string]bool{}
-	queue := append([]string(nil), s.g.succ[failed]...)
+	queue := append([]string(nil), s.g.succ[root]...)
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
@@ -987,7 +1018,7 @@ func (s *scheduler) propagate(failed string) {
 			// before launch; their own result settles them.
 			continue
 		}
-		s.settleSkip(n, StateSkippedDependency, failed)
+		s.settleSkip(n, state, root)
 		queue = append(queue, s.g.succ[id]...)
 	}
 }

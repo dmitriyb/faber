@@ -185,7 +185,7 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 	// absence is the signature of an interrupted run (what the pre-upgrade
 	// guard looks for). Best-effort — an unappendable journal already
 	// surfaced as the run error.
-	end := failure.RunEndRecord{Status: failure.RunEndSettled, Failed: s.failed}
+	end := failure.RunEndRecord{Status: failure.RunEndSettled, Failed: s.failed, Halted: len(s.halts)}
 	if runErr != nil {
 		end.Status = failure.RunEndAborted
 		end.Detail = runErr.Error()
@@ -199,14 +199,44 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 	if runErr != nil {
 		return runErr
 	}
-	// Exit accounting comes from the scheduler's own counter, not from
+	// Exit accounting comes from the scheduler's own counters, not from
 	// re-reading the journal: a report-load failure must never turn a run
-	// with failed steps into exit 0.
+	// with failed steps into exit 0. Failure outranks halt — a run with
+	// genuine failures is a failure even when steps also halted.
 	if s.failed > 0 {
+		if n := len(s.halts); n > 0 {
+			return fmt.Errorf("pipeline: run %s: %d step(s) failed, %d halted", runID, s.failed, n)
+		}
 		return fmt.Errorf("pipeline: run %s: %d step(s) failed", runID, s.failed)
+	}
+	if len(s.halts) > 0 {
+		return &RunHalted{RunID: runID, Steps: s.halts}
 	}
 	return nil
 }
+
+// RunHalted is the run-level operator-stop signal: no step failed, but at
+// least one settled halted, so the run must not read as success (dependents
+// were skipped) nor as failure (nothing broke; resume re-enters at the
+// halted step). It maps to its own process exit code so a supervising
+// script can branch without scraping text.
+type RunHalted struct {
+	RunID string
+	Steps []HaltedStep // halting steps with their reasons, in settle order
+}
+
+// Error names every halting step and its reason.
+func (e *RunHalted) Error() string {
+	parts := make([]string, 0, len(e.Steps))
+	for _, h := range e.Steps {
+		parts = append(parts, fmt.Sprintf("%s (%s)", h.Step, h.Reason))
+	}
+	return fmt.Sprintf("pipeline: run %s halted: %s", e.RunID, strings.Join(parts, ", "))
+}
+
+// ExitCode maps a halted run to exit 3 through the CLI's generic
+// error→exit-code contract (0 success, 1 failure, 2 usage, 3 halted).
+func (e *RunHalted) ExitCode() int { return 3 }
 
 // openRun seeds the scheduler per recovery mode: a fresh journal (with the
 // caller's run id, or a minted one), a forced-fresh journal (--fresh:
@@ -458,14 +488,14 @@ func templateNames(ir *config.IR, workflows map[string]*config.IR) []string {
 // restoreDeferCounts re-seeds the rate-limit defer floor's consecutive
 // counters from the prior journal, so the Max bound survives a process
 // restart. Only failed records count — a step that deferred and then settled
-// ok had its counter reset — and only the trailing run of consecutive
-// scheduler-authored defer annotations counts, mirroring the floor's own
-// consecutive semantics; box-authored failure reasons never masquerade as
-// annotations (the Attempt == 0 marker).
+// ok or halted had its counter reset (both settle decisively) — and only the
+// trailing run of consecutive scheduler-authored defer annotations counts,
+// mirroring the floor's own consecutive semantics; box-authored failure
+// reasons never masquerade as annotations (the Attempt == 0 marker).
 func restoreDeferCounts(rld *metering.RateLimitDefer, seed *failure.RunSeed) {
 	counts := map[string]int{}
 	for key, rec := range seed.Prior {
-		if rec.Result.Status == failure.StatusOK {
+		if rec.Result.Status != failure.StatusFailed {
 			continue
 		}
 		n := 0

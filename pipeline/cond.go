@@ -70,7 +70,7 @@ func (c *condEval) eval(prog cel.Program, spec *config.CondSpec, dep func(id str
 		if !d.terminal() {
 			return false, fmt.Errorf("pipeline: condition %q reads unsettled node %q", spec.CEL, id)
 		}
-		if d.status == StateSkippedCondition || d.status == StateSkippedDependency {
+		if d.status == StateSkippedCondition || d.status == StateSkippedDependency || d.status == StateSkippedHalt {
 			return false, nil // skip propagates; no evaluation
 		}
 		steps[id] = d.payload

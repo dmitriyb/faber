@@ -42,10 +42,13 @@ absent from the sidecar is a logged warning (a renamed vendor field must not
 silently read as zero).
 
 The record itself (owned by failure's ResultContract) is
-`{status: ok|failed, payload | error {reason, detail, handoff}, timing,
-attempt}`; `attempt` comes from `FABER_ATTEMPT`, timing from the sequencer's
-phase clocks, and the handoff pointer references the fail-stop record when one
-exists.
+`{status: ok|failed|halted, payload | error {reason, detail, handoff} |
+halt {reason, detail, phase}, timing, attempt}`; `attempt` comes from
+`FABER_ATTEMPT`, timing from the sequencer's phase clocks, and the handoff
+pointer references the fail-stop record when one exists. A `halted` record
+(the sequencer's halt-request path) reaches this phase only as a bypass:
+extraction and side-effect verification never run for it — the step threads
+nothing and its declared outputs are moot.
 
 ## Declared side-effect verification
 
@@ -80,6 +83,11 @@ field:
 - **The payload is re-validated** against the declared output schema and the
   unthreaded set recomputed host-side; mis-shaped data becomes a failed
   record and never threads.
+- **A halted record is checked, not trusted.** Its halt arm must carry a
+  reason (a box claiming `halted` with no halt body fails `halt-invalid`),
+  its payload is discarded before anything threads, and the halt reason and
+  detail are box-authored text like any other — terminal-sanitized at
+  render, never branched on by the engine.
 - **The handoff pointer is containment-checked.** The box-authored pointer
   must resolve strictly under the attempt's result directory (the same
   discipline the skill stager applies to names); an escaping pointer is

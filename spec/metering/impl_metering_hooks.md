@@ -93,7 +93,10 @@ type ProbeRunner interface { // structured I/O only
 - **exactMeter**: `Estimate` streams the assembled prompt to the configured
   tokenizer command, decodes `{"tokens": n}`, returns `n + maxOutput` in the
   tier's unit. Decode or nonzero-exit error ⇒ error (admission failure).
-  `Actual` prefers `Usage`, falls back to the bound.
+  `Actual` prefers `Usage`, falls back to the bound — for settled attempts
+  (ok or halted; a halted attempt may have run the agent to completion, and
+  zero would under-count into a circuit-breaker budget); a failed attempt
+  without usage records zero, never the pessimistic bound per attempt.
 - **reportedMeter**: `Estimate` returns `[]Cost{{unit, 0}}`. `Actual` maps
   configured sidecar fields to costs (`fields: {input_tokens: tokens, ...}`);
   a missing or malformed sidecar is a logged warning and zero cost —

@@ -60,7 +60,16 @@ docker anywhere in this section.
     text and `--json` reports matching golden files byte-for-byte; the JSON
     report of a run reconstructed from the journal alone (fresh reporter, no
     scheduler state) is identical to the one produced at settle time.
-11. **Skills staging in run-prep.** The `steps` closure's `stageSkills` produces
+11. **Halt stops the chain, not the run.** Diamond with b scripted `halted`
+    (reason `needs-triage`): d settles `skipped-halt` naming b, c completes
+    ok, the run's error is the typed halt error (exit 3, not the failure
+    error), the run-end record counts one halted step, and the report shows
+    a halt block with b's reason plus `halted`/`skipped-halt` totals. With
+    another node also scripted to fail, the run error is the failure error
+    (exit 1) — failures outrank halts — while the halt block still renders.
+    On resume with the identical config, b re-runs (a halted record is not a
+    reuse hit); scripted ok, the whole graph settles and exits 0.
+12. **Skills staging in run-prep.** The `steps` closure's `stageSkills` produces
     the single `/faber/skills` mount for each `ResolvedSkills` shape (see
     impl_scheduling.md "Skills staging"): a named-form template with
     `Sources: [(a,→dirA),(b,→dirB)]` yields one read-only mount whose host tree is

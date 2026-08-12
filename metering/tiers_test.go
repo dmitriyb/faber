@@ -86,6 +86,27 @@ func TestExactTierWithoutFieldsIgnoresUsage(t *testing.T) {
 	wantCosts(t, got, Cost{Unit: "tokens", Amount: 150})
 }
 
+// Verifies 58879b841ed4: a halted attempt without usable usage settles the
+// estimated bound like an ok one — the step settled decisively and may have
+// run the agent to completion, so recording zero would under-count into a
+// circuit-breaker budget.
+func TestExactTierHaltedAttemptSettlesBound(t *testing.T) {
+	runner := &fakeRunner{fn: func(int, []string, string) ([]byte, error) {
+		return []byte(`{"tokens": 100}`), nil
+	}}
+	m := newExactMeter("tokens", []string{"./hooks/tokenize"}, 50, []string{"input"}, runner, discard())
+	ctx := context.Background()
+
+	if _, err := m.Estimate(ctx, Step{NodeID: "task/a", Prompt: TextPrompt("p")}); err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	got, err := m.Actual(ctx, ResultView{NodeID: "task/a", Status: StatusHalted})
+	if err != nil {
+		t.Fatalf("Actual: %v", err)
+	}
+	wantCosts(t, got, Cost{Unit: "tokens", Amount: 150})
+}
+
 // Verifies 58879b841ed4: a failed attempt without usable usage records
 // nothing — charging the full pessimistic bound per failed attempt would
 // drain the non-replenishing budget the rate-limit defer floor exists to

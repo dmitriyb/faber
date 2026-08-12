@@ -45,6 +45,14 @@ command (`faber resume … --interactive <node-id>`). Each `skipped-dependency`
 line names its failed ancestor, so a cascade reads as one root cause, not
 thirty mysteries.
 
+## Halt diagnostics
+
+A `halted` step gets the same first-class treatment: a dedicated block naming
+the halting step, its halt reason, and detail — the operator reads why the
+run stopped without parsing JSON — and each `skipped-halt` line names the
+halting ancestor. Halted and halt-skipped steps have their own totals in the
+footer.
+
 ## Output modes
 
 - **Human text** to stdout: the ordered lines above, a run footer (totals per
@@ -54,9 +62,12 @@ thirty mysteries.
   generate: [...]}` — stably ordered and suitable for diffing or piping into
   the user's own tooling.
 
-The process exit code follows the report: nonzero iff any step settled
-`failed`. A run whose only non-ok states are condition-skips is a success — a
-skipped `fix` step is the workflow working as declared.
+The process exit code follows the run's terminal states: exit 1 when any step
+settled `failed`; exit 3 when no step failed but at least one settled `halted`
+(the run stopped for an operator — resumable, not broken); exit 0 otherwise.
+A run whose only non-ok states are condition-skips is a success — a skipped
+`fix` step is the workflow working as declared. The mapping comes from the
+scheduler's own counters, never from re-reading the journal at report time.
 
 ## Deferred seam
 

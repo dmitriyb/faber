@@ -11,27 +11,35 @@ import (
 	"github.com/google/cel-go/cel"
 )
 
-// Terminal step states. Exactly four; deferral is a waiting state, never one
-// of these, and settles into one of the four with its record annotated.
+// Terminal step states. Exactly six; deferral is a waiting state, never one
+// of these, and settles into one of them with its record annotated.
 const (
-	StateOK                = "ok"
-	StateFailed            = "failed"
+	StateOK     = "ok"
+	StateFailed = "failed"
+	// StateHalted is the operator-stop settlement: the step settled
+	// decisively (not an error) but the run must not continue past it.
+	StateHalted            = "halted"
 	StateSkippedCondition  = "skipped-condition"
 	StateSkippedDependency = "skipped-dependency"
+	// StateSkippedHalt marks a dependent of a halted step: skipped because
+	// an ancestor halted, distinct from a dependency failure so a triage
+	// stop never reads as a failure cascade.
+	StateSkippedHalt = "skipped-halt"
 	// StateAbsent is a report-only status for IR nodes with no journal record
 	// (a run that died mid-flight). It is never a scheduler state.
 	StateAbsent = "absent"
 )
 
 // Pipeline-produced failure reasons (the failure module's per-producer
-// vocabulary). The two skip reasons are the journal encoding of the skip
-// terminal states: the failure module's record union has only ok|failed, so a
-// skip journals as a failed-status record carrying one of these reasons and a
-// null input hash — never a resume hit, decoded back to its skip state by the
-// reporter.
+// vocabulary). The skip reasons are the journal encoding of the skip
+// terminal states: the failure module's record union has no skip status, so
+// a skip journals as a failed-status record carrying one of these reasons
+// and a null input hash — never a resume hit, decoded back to its skip state
+// by the reporter.
 const (
 	reasonSkippedCondition  = StateSkippedCondition
 	reasonSkippedDependency = StateSkippedDependency
+	reasonSkippedHalt       = StateSkippedHalt
 	reasonBudget            = "budget"    // metering admission reject
 	reasonAdmission         = "admission" // admission machinery error
 	reasonCondition         = "condition" // condition evaluation error

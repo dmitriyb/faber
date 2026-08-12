@@ -31,6 +31,57 @@ func TestExtractResultOK(t *testing.T) {
 	}
 }
 
+// Verifies ff8e85704b0a: a halted record passes the host boundary with its
+// halt arm intact and its payload dropped — nothing threads from a halted
+// step, and output validation never runs for it (declared outputs are moot).
+func TestExtractResultHaltedPassThrough(t *testing.T) {
+	dir := t.TempDir()
+	rec := Result{
+		Status: StatusHalted,
+		// A hostile payload rides along; the boundary must drop it.
+		Payload: map[string]any{"verdict": "ok"},
+		Halt:    &ResultHalt{Reason: "needs-triage", Detail: "ci stuck", Phase: "prelude"},
+		Attempt: 2,
+	}
+	if err := contract.WriteResultFile(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ExtractResult(dir, reviewSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusHalted || got.Attempt != 2 {
+		t.Fatalf("extract = %+v", got)
+	}
+	if got.Payload != nil {
+		t.Fatalf("halted payload must never thread: %+v", got.Payload)
+	}
+	if got.Halt == nil || got.Halt.Reason != "needs-triage" || got.Halt.Phase != "prelude" {
+		t.Fatalf("halt arm lost at the boundary: %+v", got.Halt)
+	}
+}
+
+// Verifies ff8e85704b0a: a box claiming halted without saying why is an
+// invalid record, not an operator-stop — the boundary converts it into a
+// halt-invalid failure.
+func TestExtractResultHaltedWithoutReason(t *testing.T) {
+	for name, halt := range map[string]*ResultHalt{"nil halt": nil, "empty reason": {Detail: "x"}} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := contract.WriteResultFile(dir, Result{Status: StatusHalted, Halt: halt, Attempt: 1}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := ExtractResult(dir, reviewSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != StatusFailed || got.Error == nil || got.Error.Reason != contract.ReasonHaltInvalid {
+				t.Fatalf("extract = %+v, want a halt-invalid failure", got)
+			}
+		})
+	}
+}
+
 // Verifies ff8e85704b0a: a missing or truncated record is synthesized as a
 // box-vanished failure — no path yields zero records.
 func TestExtractResultBoxVanished(t *testing.T) {

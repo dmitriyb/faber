@@ -45,6 +45,25 @@ func ExtractResult(dir string, schema OutputSchema) (Result, error) {
 			Attempt: rec.Attempt,
 		}, nil
 	}
+	if rec.Status == StatusHalted {
+		// A halted record threads nothing and skips output validation (the
+		// step's declared outputs are moot — dependents will be skipped).
+		// The halt arm is checked, not trusted: a box claiming halted
+		// without saying why is an invalid record, not an operator-stop.
+		rec.Payload = nil
+		if rec.Halt == nil || rec.Halt.Reason == "" {
+			return Result{
+				Status: StatusFailed,
+				Error: &ResultError{
+					Reason: contract.ReasonHaltInvalid,
+					Detail: "halted record without a halt reason",
+				},
+				Timing:  rec.Timing,
+				Attempt: rec.Attempt,
+			}, nil
+		}
+		return rec, nil
+	}
 	if rec.Status != StatusOK {
 		// Already a failure record; never thread its payload.
 		rec.Payload = nil

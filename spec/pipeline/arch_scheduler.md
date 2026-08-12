@@ -36,7 +36,7 @@ exists:
 4. **Box run** via the agent module, wrapped in the failure module's retry
    orchestration; the scheduler sees only the final result record.
 5. **Result record → journal append → decrement dependents.** Every terminal
-   state — including both skip flavors — appends a journal record, because the
+   state — every skip flavor included — appends a journal record, because the
    report is derived from the journal alone.
 
 **Selector nodes** execute as pure wiring: no container, no meter. When all
@@ -51,7 +51,7 @@ the failure record the failure module defined for bounded loops.
 floor converting a rate-limit failure — is not a terminal state. The node
 re-enters the ready queue at its wake time and repeats admission; a deferred
 attempt consumes no retry budget. Its eventual record notes it was
-deferred-then-resolved, but it settles as exactly one of the four terminal
+deferred-then-resolved, but it settles as exactly one of the terminal
 states.
 
 Two defer shapes exist, with distinct wake protocols:
@@ -84,14 +84,25 @@ dead daemon or an unbuilt image. The preflight applies to every execute mode,
 resume included: uniform fail-fast, at the cost of requiring images present
 even for a fully-cached replay.
 
-## Failure propagation
+## Failure and halt propagation
 
 When a node settles `failed` (final, after retries), the scheduler walks its
 dependents breadth-first and marks every not-yet-settled transitive dependent
 `skipped-dependency`, recording the failed ancestor's ID in each record.
 Independent branches are untouched and run to completion — fail-stop is
-per-chain, never per-run. Terminal states are exactly:
-`ok | failed | skipped-condition | skipped-dependency`.
+per-chain, never per-run.
+
+A node settling `halted` (the box requested an operator stop; see the failure
+module's result contract) propagates the same walk with a distinct marking:
+dependents settle `skipped-halt` naming the halting step, so a triage stop
+never reads as a failure cascade. The halt reaches the run's outcome as its
+own signal — the run-end record counts halted steps beside failed ones, and
+the executor maps "no failures, at least one halt" to its own exit code (3)
+via a typed error, distinct from success (0) and failure (1) — while a run
+with genuine failures stays a failure (exit 1) even when steps also halted.
+
+Terminal states are exactly:
+`ok | failed | halted | skipped-condition | skipped-dependency | skipped-halt`.
 
 ## Reference workflows, concretely
 

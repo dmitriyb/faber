@@ -28,6 +28,9 @@ final Result {status, attempt, attempts[]}
                 ok      → payload threads to dependents
                 failed  → transitive dependents marked skipped (dependency
                           failed); independent branches keep running
+                halted  → bypasses the retry/cleanup branch above entirely;
+                          transitive dependents marked skipped-halt naming
+                          the halting step; independent branches keep running
 ```
 
 ## Re-entry path (across runs)
@@ -41,7 +44,7 @@ Scheduler (normal execution) ── step becomes ready ──► compute input-h
         │                                                      │
         │                            ┌─────────────────────────┤
         │                            ▼                         ▼
-        │                    hit, status ok            miss / status failed
+        │                    hit, status ok         miss / status failed|halted
         │                    skip; reuse payload       run the step normally
         ▼
 faber resume <run> --fresh   → new run dir + journal, empty prior map, no lookups
@@ -54,7 +57,7 @@ faber resume --interactive <run> <step>
 
 | Boundary | Shape | Contract |
 |----------|-------|----------|
-| ResultExtractor → FailurePolicy | `Result` | validated union: ok+payload xor failed+error; payload already schema-checked |
+| ResultExtractor → FailurePolicy | `Result` | validated union: ok+payload xor failed+error xor halted+halt; payload already schema-checked |
 | FailurePolicy → on_failure script | env + stdin JSON | resolved inputs as `FABER_INPUT_*`; `ErrorRecord` on stdin; exit code is the only return |
 | FailurePolicy → Journal | `ResultRecord`, `CleanupRecord` | one result record per step per run (attempt history inside); cleanup records additive |
 | Metering → Journal | `CostRecord` | keyed like the result record; skipped steps on resume emit none |

@@ -8,11 +8,12 @@ a clean result, the agent crashed, a hook refused to start it, or the container
 never launched, the engine holds exactly one record of the same shape.
 
 ```
-{status: ok|failed, payload (schema-typed) | error {reason, detail, handoff},
+{status: ok|failed|halted,
+ payload (schema-typed) | error {reason, detail, handoff} | halt {reason, detail, phase},
  timing, attempt}
 ```
 
-Exactly one of `payload`/`error` is present, discriminated by `status`. The
+Exactly one of `payload`/`error`/`halt` is present, discriminated by `status`. The
 record is written by the box to the mounted result directory as `result.json`;
 the engine writes a minimal fallback if the agent succeeded but wrote none
 (the proven harness does the same). The payload is schema-validated against
@@ -46,7 +47,18 @@ payload. An unfavorable-but-valid output is `ok`: a review step emitting
 `until:`) react to the verdict; failure semantics do not. `failed` is reserved
 for the step not producing what its contract promises: hook failure, agent
 crash, schema violation, gateway rejection of the push, loop exhaustion (the
-selector's bound reached without settling).
+selector's bound reached without settling). `halted` is the third outcome —
+"operator must triage": the step settled decisively but the run must not
+continue past it. A halt is not an error (nothing broke; there is nothing to
+retry or clean up) and not `ok` (no payload threads; dependents must not run).
+It is requested from inside the box — by a hook or by the agent's skill — via
+the `halt.json` convention the agent module's PhaseSequencer defines, and it
+carries its own record arm instead of an error: `halt {reason, detail, phase}`
+— `reason` a stable machine word chosen by the halter (faber never interprets
+it), `detail` human elaboration, `phase` the box phase that requested the
+halt. A halted record threads nothing, is journaled like any settlement, and
+is never a resume reuse hit — `faber resume` re-enters the run at the halted
+step.
 
 ## The error record and the handoff pointer
 

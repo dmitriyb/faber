@@ -34,8 +34,10 @@ with `--fresh` as the escape:
 On a match, execution proceeds normally except that when a step becomes
 ready, its input-hash is computed and looked up: a journaled `ok` record with a matching
 `(step-id, input-hash)` is skipped, its payload reused for downstream
-threading exactly as if the step had just run. A failed or absent record means
-the step runs. Execution therefore restarts at the first failed or absent
+threading exactly as if the step had just run. A failed, halted, or absent
+record means the step runs — a halted run is resumable at the halted step
+exactly the way a failed run re-enters at the failed one. Execution therefore
+restarts at the first non-ok or absent
 step — not by finding it upfront, but as the natural consequence of
 readiness-time lookup: everything before it hits, everything after it was
 never journaled.
@@ -56,7 +58,8 @@ after config edits.
 ## interactive
 
 Manual diagnosis: reconstruct the failed step's box and put the operator
-inside it. Faber rebuilds exactly what the step ran with — the journaled
+inside it. Failed-only: a halted step is refused (naming its actual state)
+like any non-failed step — a halt preserves no handoff state to re-enter. Faber rebuilds exactly what the step ran with — the journaled
 image tag (preferred over the current derivation, so an engine or pin upgrade
 still reconstructs the box the step actually ran),
 the same network, remote, and identity bindings (network attachment and

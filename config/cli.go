@@ -226,7 +226,10 @@ func NewRootCmd(deps Deps) *cobra.Command {
 
 // Run is the faber CLI: subcommand dispatch, exit-code contract, and logging
 // initialization, testable in-process. Exit codes: 0 success; 1 validation or
-// run failure (details already reported on stderr); 2 usage error.
+// run failure (details already reported on stderr); 2 usage error; 3 halted
+// (run/resume only: no step failed but at least one settled halted — the
+// executor's typed halt error carries the code through the generic
+// ExitCode() mapping below).
 func Run(args []string, stdout, stderr io.Writer) int {
 	return RunWithDeps(args, stdout, stderr, Deps{})
 }

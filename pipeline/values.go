@@ -55,7 +55,7 @@ func resolveInputs(g *graph, n *execNode) (inputs map[string]any, skipped string
 				return nil, "", fmt.Errorf("input %q: source %s settled without field %q", e.ToPort, e.From, e.FromPort)
 			}
 			inputs[e.ToPort] = v
-		case StateSkippedCondition, StateSkippedDependency:
+		case StateSkippedCondition, StateSkippedDependency, StateSkippedHalt:
 			return nil, e.From, nil
 		default:
 			// A failed source never releases this node: propagation settles it

@@ -10,10 +10,13 @@ import (
 )
 
 // Attempt record statuses. Failure is a record, not an absence: every exit
-// path of the box lands in exactly one Result with one of these.
+// path of the box lands in exactly one Result with one of these. Halted is
+// the operator-stop outcome a user phase requests via the halt file — the
+// step settled decisively, but the run must not continue past it.
 const (
 	StatusOK     = "ok"
 	StatusFailed = "failed"
+	StatusHalted = "halted"
 )
 
 // Failure reasons carried in ResultError.Reason and Handoff.Reason. Hook
@@ -35,6 +38,11 @@ const (
 	ReasonResultWrite          = "result-write"
 	ReasonBoxVanished          = "box-vanished"
 	ReasonContractVersion      = "contract-version"
+	// ReasonHaltInvalid marks a halt request that could not be honored: a
+	// halt file that exists but does not parse or names no reason, or a
+	// halted record whose halt arm is missing its reason. Fail loudly, never
+	// guess an operator-stop.
+	ReasonHaltInvalid = "halt-invalid"
 )
 
 // HandoffKeyingSlot marks a handoff record whose Inputs map is keyed by
@@ -70,11 +78,30 @@ type Result struct {
 	// Error describes a failed attempt.
 	Error *ResultError `json:"error,omitempty"`
 
+	// Halt describes a halted attempt: the operator-stop request a user
+	// phase made via the halt file, surfaced verbatim.
+	Halt *ResultHalt `json:"halt,omitempty"`
+
 	// Timing holds the sequencer's per-phase clocks (nanoseconds).
 	Timing map[string]time.Duration `json:"timing,omitempty"`
 
 	// Attempt echoes FABER_ATTEMPT.
 	Attempt int `json:"attempt"`
+}
+
+// ResultHalt is the halt arm of a halted attempt record — the shape of the
+// halt file plus the phase the sequencer stamps.
+type ResultHalt struct {
+	// Reason is the halter's stable machine word; required, never
+	// interpreted by the engine.
+	Reason string `json:"reason"`
+
+	// Detail is optional human elaboration.
+	Detail string `json:"detail,omitempty"`
+
+	// Phase is the user phase after which the sequencer honored the request
+	// (context, prelude, agent, postlude).
+	Phase string `json:"phase,omitempty"`
 }
 
 // ResultError is the error half of a failed attempt record.
@@ -156,7 +183,7 @@ func ReadResultFile(dir string) (Result, error) {
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return Result{}, fmt.Errorf("contract: parse %s: %w", ResultFile, err)
 	}
-	if rec.Status != StatusOK && rec.Status != StatusFailed {
+	if rec.Status != StatusOK && rec.Status != StatusFailed && rec.Status != StatusHalted {
 		return Result{}, fmt.Errorf("contract: %s: unknown status %q", ResultFile, rec.Status)
 	}
 	return rec, nil

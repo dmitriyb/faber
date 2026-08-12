@@ -233,6 +233,7 @@ func TestInteractiveReentry(t *testing.T) {
 	store := journaledRun(t, "run-1", params,
 		ResultRecord{StepID: "task/a", InputHash: "hash-a", Result: okResult(`{"field":1}`)},
 		ResultRecord{StepID: "task/b", InputHash: "hash-b", Result: failed},
+		ResultRecord{StepID: "task/h", InputHash: "hash-h", Result: haltedResult("needs-triage", "")},
 	)
 	journalPath := filepath.Join(store.RunDir("run-1"), "journal.jsonl")
 	before, err := os.ReadFile(journalPath)
@@ -244,6 +245,12 @@ func TestInteractiveReentry(t *testing.T) {
 	err = store.Interactive(t.Context(), "run-1", "task/a", &fakeReentry{})
 	if err == nil || !strings.Contains(err.Error(), `settled "ok"`) {
 		t.Fatalf("want refusal naming the ok state, got %v", err)
+	}
+	// Refused: settled halted — interactive is failed-only (a halt preserves
+	// no handoff state), and the refusal names the actual state.
+	err = store.Interactive(t.Context(), "run-1", "task/h", &fakeReentry{})
+	if err == nil || !strings.Contains(err.Error(), `settled "halted"`) {
+		t.Fatalf("want refusal naming the halted state, got %v", err)
 	}
 	// Refused: never settled.
 	err = store.Interactive(t.Context(), "run-1", "task/z", &fakeReentry{})
