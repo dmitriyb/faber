@@ -107,6 +107,25 @@ code; these are the module-level behaviors that must hold.)
     and its IR bytes are unchanged from before the field existed (`omitempty`
     carrier), so existing golden IRs and journal keys are untouched.
 
+11. **Invocation profile resolves layered and stays byte-stable when absent.**
+    A template with `invoke: {profile: <name>, <inline overrides>}` desugars to
+    a fully concrete `ResolvedTemplate.Invoke`: fields the inline block sets
+    win, fields only the named profile sets come next, everything else is the
+    built-in default — including the pointer/slice sentinels (`prompt_flag: ""`
+    resolves to an empty prompt flag, i.e. positional; `effort_flag: ""` to a
+    dropped pair; `fixed_flags: []` to an empty tail; the *absent* fields to
+    `-p` / `--effort` / the bypass tail). A template with no `invoke:` resolves
+    to `Invoke == nil` and emits IR bytes unchanged from before the field
+    existed (the reference goldens are the guard). An unknown `profile:` name
+    is a field-pathed error at `templates.<t>.invoke.profile`; the effective-
+    profile rule violations (missing `{body}`, bad `skill_mode`, flag mode
+    without `skill_flag`, prefix mode without `{skill}` or with `skill_flag`,
+    flag mode with `{skill}` still in the template) each produce their expected
+    field-path error, both per template and standalone per
+    `invoke_profiles.<name>`. Duplicate `invoke_profiles` keys across included
+    files are an assembly violation like any other library; profile names ride
+    the name discipline.
+
 ## Edge cases
 
 - Empty `steps:` — Loader error, not a desugar panic.

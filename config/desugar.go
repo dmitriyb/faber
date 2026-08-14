@@ -554,6 +554,7 @@ func (d *desugarer) resolveTemplate(name, sp string) *ResolvedTemplate {
 		Model:         t.Model,
 		Effort:        t.Effort,
 		AgentOptional: t.AgentOptional,
+		Invoke:        resolveInvoke(d.cfg, t),
 		Hooks:         resolveHooks(d.cfg, t.Hooks),
 		Skills:        resolveSkills(d.cfg, t),
 		Inputs:        d.normalizeDefs(t.Inputs, sp),
@@ -579,6 +580,59 @@ func ResolveBuild(cfg *Config, t TemplateDef) (BuildDef, bool) {
 		}
 	}
 	return BuildDef{}, false
+}
+
+// resolveInvoke collapses a template's invoke: block into the concrete
+// dialect the box expands: the built-in default, overlaid with the named
+// profile's set fields, overlaid with the inline overrides' set fields. "Set"
+// is non-nil for the pointer/slice carriers (so an explicit empty value —
+// prompt_flag: "", fixed_flags: [] — overrides, while absence inherits) and
+// non-empty for the plain strings. A template without invoke: resolves to nil,
+// which keeps its IR byte-identical to before the field existed. The Loader
+// has already proven the profile reference resolves and the effective rules
+// hold; a dangling name here contributes nothing (the default survives).
+func resolveInvoke(cfg *Config, t TemplateDef) *ResolvedInvoke {
+	if t.Invoke == nil {
+		return nil
+	}
+	ri := DefaultInvoke()
+	if p, ok := cfg.InvokeProfiles[t.Invoke.Profile]; ok {
+		overlayInvoke(&ri, p)
+	}
+	overlayInvoke(&ri, t.Invoke.InvokeProfileDef)
+	return &ri
+}
+
+// overlayInvoke copies the set fields of one profile layer onto the resolved
+// value; slices are copied so no layer aliases config-owned backing arrays.
+func overlayInvoke(ri *ResolvedInvoke, p InvokeProfileDef) {
+	if p.Subcommand != nil {
+		ri.Subcommand = append([]string(nil), p.Subcommand...)
+	}
+	if p.PromptFlag != nil {
+		ri.PromptFlag = *p.PromptFlag
+	}
+	if p.SkillMode != "" {
+		ri.SkillMode = p.SkillMode
+	}
+	if p.SkillFlag != nil {
+		ri.SkillFlag = *p.SkillFlag
+	}
+	if p.PromptTemplate != "" {
+		ri.PromptTemplate = p.PromptTemplate
+	}
+	if p.FixedFlags != nil {
+		ri.FixedFlags = append([]string(nil), p.FixedFlags...)
+	}
+	if p.ModelFlag != nil {
+		ri.ModelFlag = *p.ModelFlag
+	}
+	if p.EffortFlag != nil {
+		ri.EffortFlag = *p.EffortFlag
+	}
+	if p.BudgetFlag != nil {
+		ri.BudgetFlag = *p.BudgetFlag
+	}
 }
 
 // resolveIdentity picks the identity name from the top-level alias or run.identity.

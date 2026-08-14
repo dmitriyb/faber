@@ -70,6 +70,14 @@ const (
 	EnvExtraInstruction = "FABER_EXTRA_INSTRUCTION"
 	EnvMaxBudget        = "FABER_MAX_BUDGET"
 
+	// EnvInvokeProfile carries the template's concrete invocation dialect as
+	// JSON (the config.ResolvedInvoke shape, fully defaulted at desugar — the
+	// box never re-derives a field default). Absent or empty means the
+	// anonymous built-in default (config.DefaultInvoke), so direct sequencer
+	// invocations keep working; per the additive rule above, that tolerated
+	// absence is exactly why this variable does not bump ContractVersion.
+	EnvInvokeProfile = "FABER_INVOKE_PROFILE"
+
 	// EnvGitName and EnvGitEmail carry the role's committer identity into
 	// the signing phase (injected per container from the role registry; the
 	// name falls back to faber-<identity>, the email never falls back).

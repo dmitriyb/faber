@@ -32,8 +32,12 @@ type Config struct {
 	Images      map[string]ImageDef    `yaml:"images,omitempty"`      // library: union-merged
 	Skills      map[string]SkillDef    `yaml:"skills,omitempty"`      // library: union-merged
 	Hooks       map[string]HookDef     `yaml:"hooks,omitempty"`       // library: union-merged
-	Templates   map[string]TemplateDef `yaml:"templates,omitempty"`   // library: union-merged
-	Workflows   map[string]WorkflowDef `yaml:"workflows,omitempty"`   // library: union-merged
+	// InvokeProfiles are named agent-CLI invocation dialects (library:
+	// union-merged). The engine ships no vendor entry — only the anonymous
+	// built-in default a template without invoke: resolves to.
+	InvokeProfiles map[string]InvokeProfileDef `yaml:"invoke_profiles,omitempty"`
+	Templates      map[string]TemplateDef      `yaml:"templates,omitempty"` // library: union-merged
+	Workflows      map[string]WorkflowDef      `yaml:"workflows,omitempty"` // library: union-merged
 }
 
 // ImageDef is a named pure Nix toolset — structurally today's BuildDef. A
@@ -132,6 +136,36 @@ type IdentityDef struct {
 	Key string `yaml:"key,omitempty"`
 }
 
+// InvokeProfileDef is a named agent-CLI invocation dialect: where the prompt
+// rides, how the skill is activated, and which flags carry the model/effort/
+// budget pass-throughs. All values are opaque argv/prompt material faber never
+// interprets. Pointer and slice carriers make field-level ABSENCE first-class,
+// because absence is what layers (inline overrides ← named profile ← built-in
+// default) while an EXPLICIT empty value is itself meaningful: prompt_flag: ""
+// makes the prompt a bare positional argument, model_flag/effort_flag/
+// budget_flag: "" omit the pair entirely (a harness without that knob), and
+// fixed_flags: [] appends no fixed tail.
+type InvokeProfileDef struct {
+	Subcommand     []string `yaml:"subcommand,omitempty"`      // argv tokens between the CLI and the prompt
+	PromptFlag     *string  `yaml:"prompt_flag,omitempty"`     // nil ⇒ "-p"
+	SkillMode      string   `yaml:"skill_mode,omitempty"`      // prefix | flag; "" ⇒ prefix
+	SkillFlag      *string  `yaml:"skill_flag,omitempty"`      // required (and only legal) in flag mode; explicit "" clears an inherited flag when overriding to prefix mode
+	PromptTemplate string   `yaml:"prompt_template,omitempty"` // over {skill} {body} {extra}; "" ⇒ the default template
+	FixedFlags     []string `yaml:"fixed_flags,omitempty"`     // nil ⇒ ["--permission-mode", "bypassPermissions"]
+	ModelFlag      *string  `yaml:"model_flag,omitempty"`      // nil ⇒ "--model"
+	EffortFlag     *string  `yaml:"effort_flag,omitempty"`     // nil ⇒ "--effort"
+	BudgetFlag     *string  `yaml:"budget_flag,omitempty"`     // nil ⇒ "--max-budget-usd"
+}
+
+// InvokeDef is a template's invoke: block: an optional named-profile reference
+// plus inline overrides. Deliberately composable rather than dual-mode
+// exclusive — a dialect tweak ("same harness, no budget flag") is an override
+// of a profile, not a second form; inline set fields win field-by-field.
+type InvokeDef struct {
+	Profile          string `yaml:"profile,omitempty"` // ref -> InvokeProfiles; "" ⇒ overrides apply to the default
+	InvokeProfileDef `yaml:",inline"`
+}
+
 // TemplateDef is a composition node, dual-mode: an aspect (image/hooks/skills/
 // identity) is expressed EITHER by named reference into a library OR by the
 // current inline form. The Loader enforces per-aspect exclusivity and reference
@@ -157,11 +191,15 @@ type TemplateDef struct {
 	// skip the agent phase via the bundle sidecar (FABER_SKIP_AGENT=1).
 	// Default false — the agent always runs; a skip request on a template
 	// without the opt-in is ignored with a warning.
-	AgentOptional bool                `yaml:"agent_optional,omitempty"`
-	Hooks         HookSet             `yaml:"hooks,omitempty"` // each value: a hook NAME (bare) or a PATH (has separator / begins ./~//)
-	Skills        SkillsRef           `yaml:"-"`               // sequence of names OR inline {dir,link}; set by UnmarshalYAML
-	Inputs        map[string]ParamDef `yaml:"inputs,omitempty"`
-	Output        map[string]FieldDef `yaml:"output,omitempty"`
+	AgentOptional bool `yaml:"agent_optional,omitempty"`
+	// Invoke selects the agent-CLI invocation dialect: an optional named
+	// profile plus inline field overrides. nil ⇒ the built-in default, which
+	// keeps the emitted IR byte-identical to before the field existed.
+	Invoke *InvokeDef          `yaml:"invoke,omitempty"`
+	Hooks  HookSet             `yaml:"hooks,omitempty"` // each value: a hook NAME (bare) or a PATH (has separator / begins ./~//)
+	Skills SkillsRef           `yaml:"-"`               // sequence of names OR inline {dir,link}; set by UnmarshalYAML
+	Inputs map[string]ParamDef `yaml:"inputs,omitempty"`
+	Output map[string]FieldDef `yaml:"output,omitempty"`
 }
 
 // SkillsRef captures the two skills: node kinds without ambiguity: a YAML

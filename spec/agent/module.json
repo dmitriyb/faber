@@ -21,7 +21,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Unrestricted agent invocation",
-      "description": "The agent phase invokes the configured agent skill headlessly with full permission bypass inside the box; the sealed environment (pinned toolset, egress lock, single-role key, gateway-only remote) is the restriction — there is no second in-container permission gate. The invocation passes the skill name, the context bundle as prompt body, the model and effort level (mandatory per-template config, passed through opaquely), optional extra instruction, and optional budget bound from config. On a template declaring agent_optional, a prelude that wrote FABER_SKIP_AGENT=1 into bundle.env skips the invocation entirely (logged no-op; the record marks agent_skipped; the output contract still holds); a template without the opt-in ignores the signal with a warning."
+      "description": "The agent phase invokes the configured agent skill headlessly with full permission bypass inside the box; the sealed environment (pinned toolset, egress lock, single-role key, gateway-only remote) is the restriction — there is no second in-container permission gate. The invocation's shape is data: a concrete invocation profile (FABER_INVOKE_PROFILE, compiled by config; absent ⇒ the anonymous built-in default reproducing the historical dialect byte-for-byte) drives a pure expander over subcommand, prompt/skill placement, fixed flags, and the model/effort/budget flag names — no vendor literal in the engine. The invocation passes the skill name, the context bundle as prompt body, the model and effort level (mandatory per-template config, passed through opaquely), optional extra instruction, and optional budget bound from config. On a template declaring agent_optional, a prelude that wrote FABER_SKIP_AGENT=1 into bundle.env skips the invocation entirely (logged no-op; the record marks agent_skipped; the output contract still holds); a template without the opt-in ignores the signal with a warning."
     },
     {
       "id": "ff8e85704b0a",
@@ -64,7 +64,7 @@
     {
       "id": "53965d3ef136",
       "name": "AgentInvoker",
-      "description": "The agent phase: assembles the headless invocation (skill, context bundle, model, effort, extra instruction, budget bound) with permission bypass, executes it, and maps its exit status into the phase flow. Owns the prelude-driven skip: FABER_SKIP_AGENT=1 in bundle.env on an agent_optional template makes the phase a logged no-op with the record marked agent_skipped.",
+      "description": "The agent phase: a pure expander over the concrete invocation profile (FABER_INVOKE_PROFILE; absent ⇒ built-in default) that assembles the headless invocation (skill, context bundle, model, effort, extra instruction, budget bound — placed per the profile's dialect), executes it, and maps its exit status into the phase flow. Owns the prelude-driven skip: FABER_SKIP_AGENT=1 in bundle.env on an agent_optional template makes the phase a logged no-op with the record marked agent_skipped.",
       "content": "arch_agent_invoker.md",
       "implements": ["ae434449cac9"]
     },

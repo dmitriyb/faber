@@ -59,6 +59,52 @@ is part of the resolved template, flipping it changes the IR hash — resume
 then refuses with the standard drift message rather than silently changing
 whether a resumed step's agent runs.
 
+The invocation profile rides it too: a template with an `invoke:` block
+resolves to a fully **concrete** `ResolvedInvoke` on
+`ResolvedTemplate.Invoke` (json `invoke,omitempty`); a template without one
+resolves to nil and serializes to byte-identical IR. The layering happens
+here, at desugar — built-in default ⊕ the named profile's set fields ⊕ the
+inline overrides' set fields, where "set" is non-nil for the pointer/slice
+carriers and non-empty for the plain strings — so downstream (runspec, box)
+never re-derives a field default; the box's only fallback is *whole-profile*
+absence. Changing a profile changes the IR hash, and resume refuses as drift
+instead of silently re-dialecting a resumed step's agent.
+
+```go
+// ResolvedInvoke is the concrete, fully-defaulted invocation dialect the box
+// expands — every field final, no layering left.
+type ResolvedInvoke struct {
+    Subcommand     []string `json:"subcommand,omitempty"`
+    PromptFlag     string   `json:"prompt_flag,omitempty"` // "" ⇒ positional prompt
+    SkillMode      string   `json:"skill_mode"`            // prefix | flag
+    SkillFlag      string   `json:"skill_flag,omitempty"`
+    PromptTemplate string   `json:"prompt_template"`
+    FixedFlags     []string `json:"fixed_flags,omitempty"`
+    ModelFlag      string   `json:"model_flag,omitempty"`  // "" ⇒ pair never emitted
+    EffortFlag     string   `json:"effort_flag,omitempty"`
+    BudgetFlag     string   `json:"budget_flag,omitempty"`
+}
+
+// DefaultInvoke is the anonymous built-in dialect — field values reproduce the
+// previously hardcoded invocation byte-for-byte; no vendor name appears.
+func DefaultInvoke() ResolvedInvoke {
+    return ResolvedInvoke{
+        PromptFlag:     "-p",
+        SkillMode:      "prefix",
+        PromptTemplate: "/{skill}\n\n{body}{extra}",
+        FixedFlags:     []string{"--permission-mode", "bypassPermissions"},
+        ModelFlag:      "--model",
+        EffortFlag:     "--effort",
+        BudgetFlag:     "--max-budget-usd",
+    }
+}
+```
+
+`DefaultInvoke` lives in config because both altitudes consume it: desugar
+seeds the layering with it, and the box (via the agent contract's config
+import) falls back to it when `FABER_INVOKE_PROFILE` is absent — one source,
+no drift between the compiled profile and the direct-invocation fallback.
+
 The one field that widens is the skills leg, from a single `{dir, link}` to the
 resolved delivery set:
 
@@ -171,10 +217,18 @@ resolveTemplate(cfg, name):
                  ? ResolvedSkills{Root: t.Skills.Inline.Dir,           # inline: a skills-root mounted DIRECTLY
                                   Primary: t.Skill, Link: t.Skills.Inline.Link}
                  : nil                                                  # no skills leg
+  invoke  := t.Invoke == nil ? nil                  # absent ⇒ omitted ⇒ byte-identical IR
+             : overlay(overlay(DefaultInvoke(),     # built-in default
+                               cfg.InvokeProfiles[t.Invoke.Profile]),  # named profile ("" ⇒ skip)
+                       t.Invoke.InvokeProfileDef)   # inline overrides win
+                                                    # overlay copies only SET fields: non-nil
+                                                    # pointers/slices, non-empty plain strings
+
   return ResolvedTemplate{Packages: build.Packages, Overlay: build.Overlay,
                           Pin: build.Pin,          # flat *PinDef, json "pin,omitempty";
                                                    # nil ⇒ omitted ⇒ byte-identical IR
                           Identity: ident, Skill: t.Skill,
+                          Invoke: invoke,          # *ResolvedInvoke, json "invoke,omitempty"
                           Hooks: hooks, Skills: skills, Run: t.Run,
                           Inputs: t.Inputs, Output: t.Output}
 ```
