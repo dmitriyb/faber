@@ -94,8 +94,13 @@ Rendering is two thin functions over the same struct:
 - `JSON(w io.Writer)` — `json.Encoder` with `SetEscapeHTML(false)` over the
   struct; field order fixed, slices pre-sorted, so output is diff-stable.
 
+The `RunHeader` carries the header's optional run name and a `paused` flag
+read from the replayed run-end record; `Text` renders the name on the run
+line and, for a paused run, a footer line naming the resume command.
+
 Exit-code mapping lives with the executor's own counters: failed > 0 ⇒ the
-failure error (exit 1); else halted > 0 ⇒ the typed halt error (exit 3).
+failure error (exit 1); else halted > 0 ⇒ the typed halt error (exit 3);
+else a pause-ended run ⇒ the typed pause error (exit 4).
 The reporter performs no I/O beyond the journal reader and the writer it is
 handed, holds no state, and never inspects scheduler memory — reporting a
 crashed run and a settled run is the same code path.

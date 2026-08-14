@@ -176,19 +176,29 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 		log:     log,
 		runID:   runID,
 		runDir:  runDir,
+		pause:   func() bool { return failure.PauseRequested(runDir) },
 	}
 	s.registerScopes(ir)
 
 	runErr := s.run(ctx)
+
+	// The pause drain ended the run only when undispatched nodes actually
+	// remain: a request that arrived after the last settlement changed
+	// nothing, and the run settled. A fatal abort outranks the pause.
+	pausedEnd := runErr == nil && s.paused && s.g.done < len(s.g.nodes)
 
 	// The run-end marker is this execution's durable terminal state: its
 	// absence is the signature of an interrupted run (what the pre-upgrade
 	// guard looks for). Best-effort — an unappendable journal already
 	// surfaced as the run error.
 	end := failure.RunEndRecord{Status: failure.RunEndSettled, Failed: s.failed, Halted: len(s.halts)}
-	if runErr != nil {
+	switch {
+	case runErr != nil:
 		end.Status = failure.RunEndAborted
 		end.Detail = runErr.Error()
+	case pausedEnd:
+		end.Status = failure.RunEndPaused
+		end.Detail = "pause requested; in-flight steps settled, nothing further dispatched"
 	}
 	endRun(end)
 
@@ -211,6 +221,9 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 	}
 	if len(s.halts) > 0 {
 		return &RunHalted{RunID: runID, Steps: s.halts}
+	}
+	if pausedEnd {
+		return &RunPaused{RunID: runID}
 	}
 	return nil
 }
@@ -235,8 +248,28 @@ func (e *RunHalted) Error() string {
 }
 
 // ExitCode maps a halted run to exit 3 through the CLI's generic
-// error→exit-code contract (0 success, 1 failure, 2 usage, 3 halted).
+// error→exit-code contract (0 success, 1 failure, 2 usage, 3 halted,
+// 4 paused).
 func (e *RunHalted) ExitCode() int { return 3 }
+
+// RunPaused is the run-level cooperative-pause signal: an operator's pause
+// request drained the run — in-flight steps settled and journaled, nothing
+// further dispatched — so it must not read as success (steps remain) nor as
+// failure or halt (nothing broke, no step decided to stop). It maps to its
+// own process exit code so a supervising script branches on the code, never
+// on report text; failure (1) and halt (3) outrank it.
+type RunPaused struct {
+	RunID string
+}
+
+// Error names the paused run and the way back in.
+func (e *RunPaused) Error() string {
+	return fmt.Sprintf("pipeline: run %s paused on request; resume with `faber resume %s`", e.RunID, e.RunID)
+}
+
+// ExitCode maps a paused run to exit 4 through the CLI's generic
+// error→exit-code contract.
+func (e *RunPaused) ExitCode() int { return 4 }
 
 // openRun seeds the scheduler per recovery mode: a fresh journal (with the
 // caller's run id, or a minted one), a forced-fresh journal (--fresh:
@@ -271,6 +304,7 @@ func (e *Executor) openRun(ir *config.IR, opts config.RunOptions, clock Clock) (
 		}
 		return e.Store.Fresh(failure.Header{
 			RunID:      runID,
+			Name:       opts.Name,
 			ConfigPath: e.Meta.ConfigPath,
 			ConfigHash: e.Meta.ConfigHash,
 			Workflow:   ir.Workflow,

@@ -25,6 +25,7 @@ type RunReport struct {
 // RunHeader is the report's run-level frame.
 type RunHeader struct {
 	RunID      string            `json:"run_id"`
+	Name       string            `json:"name,omitempty"`
 	Workflow   string            `json:"workflow"`
 	ConfigHash string            `json:"config_hash,omitempty"`
 	IRHash     string            `json:"ir_hash,omitempty"`
@@ -32,6 +33,10 @@ type RunHeader struct {
 	Totals     Totals            `json:"totals"`
 	Wall       string            `json:"wall,omitempty"`
 	Journal    string            `json:"journal,omitempty"`
+	// Paused marks a run whose last run-end record says the cooperative
+	// pause drain ended it — deliberately incomplete and resumable, not a
+	// crash (undispatched steps still read absent).
+	Paused bool `json:"paused,omitempty"`
 }
 
 // Totals counts terminal states across the whole run, generate instances
@@ -149,11 +154,13 @@ func (RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string)
 	report := &RunReport{
 		Run: RunHeader{
 			RunID:      rp.Header.RunID,
+			Name:       rp.Header.Name,
 			Workflow:   rp.Header.Workflow,
 			ConfigHash: rp.Header.ConfigHash,
 			IRHash:     rp.Header.IRHash,
 			Params:     rp.Header.Params,
 			Journal:    journalPath,
+			Paused:     rp.End != nil && rp.End.Status == failure.RunEndPaused,
 		},
 	}
 
@@ -451,7 +458,13 @@ func (r *RunReport) Text(w io.Writer) error {
 	p := func(format string, args ...any) {
 		fmt.Fprintf(w, format+"\n", args...)
 	}
-	p("run %s  workflow %s", r.Run.RunID, r.Run.Workflow)
+	if r.Run.Name != "" {
+		// The name is operator-authored but journal-carried; sanitize like
+		// any other journal-derived text on the Text path.
+		p("run %s (%s)  workflow %s", r.Run.RunID, sanitizeTerm(r.Run.Name), r.Run.Workflow)
+	} else {
+		p("run %s  workflow %s", r.Run.RunID, r.Run.Workflow)
+	}
 	for _, line := range r.Steps {
 		p("  %s", stepText(line))
 	}
@@ -497,6 +510,9 @@ func (r *RunReport) Text(w io.Writer) error {
 		footer += "; wall " + r.Run.Wall
 	}
 	p("%s", footer)
+	if r.Run.Paused {
+		p("paused: the run stopped on request; resume with: faber resume %s", r.Run.RunID)
+	}
 	if r.Run.Journal != "" {
 		p("journal: %s", r.Run.Journal)
 	}

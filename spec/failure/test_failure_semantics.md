@@ -82,6 +82,23 @@ StepRunner and a recording HookRunner unless a real container is stated;
     never a lookup hit) and, when b then settles ok, its dependents run;
     interactive re-entry on the halted step is refused naming its state.
 
+16. **Pause marker mechanics.** `RequestPause` on a non-live run errors
+    naming the liveness rule; against a run whose lock is held it writes the
+    marker and `PauseRequested(runDir)` turns true. `Resume` on a run whose
+    directory carries a stale marker clears it before returning a seed (the
+    resumed run must not immediately re-pause) — asserted by probing the
+    marker after `Resume` returns.
+17. **Run names resolve, ids win.** Headers written with a name round-trip
+    through `LoadHeader`. `ResolveRunRef`: a name held by exactly one run
+    resolves to its id; a name held by two runs errors naming both ids; a
+    ref equal to an existing run id resolves to that id even when another
+    run's name equals it; an unknown ref errors.
+18. **Prune keeps what is resumable.** Over a store holding a settled run,
+    an aborted run, a paused run, an incomplete (no run-end) run, and a live
+    run: default prune removes exactly the settled and aborted runs;
+    `--all` prune additionally removes the paused and incomplete runs; the
+    live run survives both, and the removed ids are reported.
+
 ## Edge cases
 
 - Agent succeeded but wrote no `result.json`: the engine's fallback record is

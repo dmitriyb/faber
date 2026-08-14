@@ -108,6 +108,20 @@ param checking.
     behavior — is proven by the committed fake-server harness
     (`config/install_upgrade_test.go`; see also `spec/delivery/test_delivery.md`).
 
+15. **The runs group is thin dispatch.** Against an injected `RunAuditor` and
+    `RunController`: `faber runs` prints one aligned row per audit entry with
+    the derived state (`live` beats everything; no run-end reads
+    `incomplete`; else the run-end status verbatim) and `--json` emits the
+    same rows machine-readably; `faber runs pause <ref>` resolves the
+    reference and calls `RequestPause` with the resolved id (a resolver or
+    pause error surfaces as exit 1; a missing ref is usage, exit 2);
+    `faber runs prune` reports the controller's removed ids and `--all`
+    propagates the flag. `faber run --name n` threads the name into
+    `RunOptions.Name`, and `faber resume <name>` resolves the name to an id
+    before `LoadHeader` — with an unwired `RunController` the positional is
+    used as an id unchanged. An executor error with `ExitCode() 4` maps to
+    process exit 4 through the generic contract.
+
 ## Edge cases
 
 - Unknown `--param name=v` (not in params interface): rejected, listing declared
