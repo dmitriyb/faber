@@ -150,6 +150,16 @@ mounts, and the env contract is set directly.)
     (or a profile violating the template rules) the env phase fails the step
     before any phase below runs.
 
+19. **Sessions bind ownership.** With `FABER_SESSIONS_DIR` set to a path
+    under the box `HOME`, the preamble chowns each intermediate component
+    from `HOME` down to the bind to the run user (the harness must be able to
+    write its own files beside the daemon-created, root-owned scaffolding);
+    unset, no such chown happens and the chown set is byte-identical to
+    before the variable existed. A `FABER_SESSIONS_DIR` outside `HOME`
+    contributes nothing — including a traversal (`/home/box/../../etc`) or a
+    trailing-slash spelling of `HOME` itself: the value is cleaned before the
+    containment walk, since the walk runs as root.
+
 ## Edge cases
 
 - Empty (zero-byte) `CONTEXT.md` counts as missing.

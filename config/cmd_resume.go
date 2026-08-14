@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const resumeUsageText = "usage: faber resume <run-id|name> [--fresh] [--interactive <step-id>] [flags]"
+const resumeUsageText = "usage: faber resume <run-id|name> [--fresh] [--sessions] [--interactive <step-id>] [--shell] [flags]"
 
 func newResumeCmd(deps Deps) *cobra.Command {
 	cmd := &cobra.Command{
@@ -23,7 +23,9 @@ func newResumeCmd(deps Deps) *cobra.Command {
 	}
 	addCommonFlags(cmd)
 	cmd.Flags().Bool("fresh", false, "restart from the journal's config without reusing step results")
+	cmd.Flags().Bool("sessions", false, "capture harness session transcripts for the remainder of the run (a run started with --sessions keeps capturing regardless)")
 	cmd.Flags().String("interactive", "", "re-enter interactively at this step id")
+	cmd.Flags().Bool("shell", false, "with --interactive: force the bare shell even when a saved session and a profile resume_argv exist")
 	cmd.Flags().String("report-json", "", "write the machine-readable run report to this path (- = stdout)")
 	return cmd
 }
@@ -49,8 +51,13 @@ func runResumeE(cmd *cobra.Command, args []string, deps Deps) error {
 
 	common := readCommonFlags(cmd)
 	fresh, _ := cmd.Flags().GetBool("fresh")
+	sessions, _ := cmd.Flags().GetBool("sessions")
 	interactive, _ := cmd.Flags().GetString("interactive")
+	shell, _ := cmd.Flags().GetBool("shell")
 	reportJSON, _ := cmd.Flags().GetString("report-json")
+	if shell && interactive == "" {
+		return usageErr(errors.New("faber resume: --shell is meaningful only with --interactive <step-id>"))
+	}
 
 	logger, err := common.logger(cmd.ErrOrStderr())
 	if err != nil {
@@ -102,7 +109,12 @@ func runResumeE(cmd *cobra.Command, args []string, deps Deps) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	opts := RunOptions{
-		RunID: runID, Mode: mode, InteractiveStep: interactive,
+		RunID: runID, Mode: mode, InteractiveStep: interactive, InteractiveShell: shell,
+		// The flag ORed with the journaled header: a capturing run keeps
+		// capturing across resume AND --fresh (the fresh path writes a new
+		// header from opts, and losing the flag on restart would silently
+		// stop the transcripts), exactly like Name inheritance below.
+		Sessions: sessions || header.Sessions,
 		// Only the fresh path reads Name (it writes a brand-new header);
 		// inheriting it keeps a named run named across --fresh restarts.
 		Name:       header.Name,

@@ -57,7 +57,12 @@ type Header struct {
 	// Name is the optional operator-given run name (faber run --name):
 	// identification for humans and for name-form run references, never a
 	// key, never unique. Additive within format 1.
-	Name       string            `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Sessions records that the run captures harness session transcripts
+	// (faber run --sessions), so a plain resume inherits capture. Additive
+	// within format 1; the header is immutable, so resume --sessions widens a
+	// run for its own invocation without rewriting this field.
+	Sessions   bool              `json:"sessions,omitempty"`
 	ConfigPath string            `json:"config_path"`
 	ConfigHash string            `json:"config_hash"`
 	Workflow   string            `json:"workflow"`

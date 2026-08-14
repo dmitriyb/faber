@@ -78,6 +78,15 @@ const (
 	// absence is exactly why this variable does not bump ContractVersion.
 	EnvInvokeProfile = "FABER_INVOKE_PROFILE"
 
+	// EnvSessionsDir is the container path (under ContainerHome) of the live
+	// per-attempt sessions bind capturing the harness's native session
+	// transcripts. The host sets it exactly when it also mounted the bind —
+	// the same pair-set discipline as EnvSecretsStdin — and the preamble then
+	// chowns the daemon-created intermediate path components under HOME so
+	// the dropped harness can write beside them. Absent means capture is off;
+	// per the additive rule, no ContractVersion bump.
+	EnvSessionsDir = "FABER_SESSIONS_DIR"
+
 	// EnvGitName and EnvGitEmail carry the role's committer identity into
 	// the signing phase (injected per container from the role registry; the
 	// name falls back to faber-<identity>, the email never falls back).

@@ -126,6 +126,15 @@ code; these are the module-level behaviors that must hold.)
     files are an assembly violation like any other library; profile names ride
     the name discipline.
 
+12. **Session fields resolve, validate, and stay byte-stable when absent.**
+    A profile's `session_dir`/`resume_argv` resolve onto the concrete
+    `ResolvedInvoke` through the same layering (explicit `""`/`[]` clears an
+    inherited value; absence inherits); a profile without them serializes to
+    JSON byte-identical to before the fields existed. Rule violations are
+    field-pathed: an absolute or `..`-carrying or `.`-cleaning `session_dir`;
+    `resume_argv` without an effective `session_dir`; an empty `resume_argv`
+    token.
+
 ## Edge cases
 
 - Empty `steps:` — Loader error, not a desugar panic.

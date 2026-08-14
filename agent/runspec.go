@@ -92,6 +92,15 @@ type BoxSpec struct {
 	// (a pre-warmed volume) the box clones with --reference-if-able. Empty means
 	// a plain full clone.
 	GitCache string
+
+	// SessionsDir is the host directory mounted read-write at
+	// $HOME/<profile session_dir> to capture the harness's native session
+	// transcripts live (crash-safe: on the host the moment they are written).
+	// Set by the pipeline only when the per-run sessions toggle is on AND the
+	// template's resolved profile names a session_dir; setting it against a
+	// template whose profile names none is a refusal (the pair-set guard).
+	// Empty means no capture — no mount, no env, byte-identical run specs.
+	SessionsDir string
 }
 
 // BuildRunSpec assembles the engine half of the box run contract: container
@@ -127,6 +136,25 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	// validation already pairs them upstream; this guards direct BoxSpec callers.
 	check((spec.SkillsDir == "") == (spec.SkillsLink == ""),
 		"skills: dir and link must be set together")
+	// The sessions bind needs its container target from the profile; a
+	// SessionsDir against a template whose profile names no session_dir has
+	// nowhere to land. The container path must stay strictly inside HOME —
+	// config validation guarantees it for engine callers, re-checked here for
+	// direct BoxSpec callers (a bind over or outside the HOME tmpfs would
+	// shadow engine mounts or escape the box's writable scratch).
+	sessionsContainer := ""
+	if spec.SessionsDir != "" {
+		switch {
+		case tpl.Invoke == nil || tpl.Invoke.SessionDir == "":
+			errs = append(errs, errors.New("sessions: dir set but the template's invocation profile names no session_dir"))
+		default:
+			sessionsContainer = path.Join(contract.ContainerHome, tpl.Invoke.SessionDir)
+			if !pathUnder(sessionsContainer, contract.ContainerHome) || sessionsContainer == contract.ContainerHome {
+				errs = append(errs, fmt.Errorf("sessions: profile session_dir %q does not resolve to a proper subpath of %s", tpl.Invoke.SessionDir, contract.ContainerHome))
+				sessionsContainer = ""
+			}
+		}
+	}
 
 	// Template env is opaque user config for the box's own toolchain — it may
 	// never set engine- or security-owned names (the FABER_ namespace, the
@@ -213,6 +241,7 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	setIf(contract.EnvGitEmail, spec.GitEmail)
 	setIf(contract.EnvGitCache, spec.GitCache)
 	setIf(contract.EnvSkillsLink, spec.SkillsLink)
+	setIf(contract.EnvSessionsDir, sessionsContainer)
 	if tpl.AgentOptional {
 		env[contract.EnvAgentOptional] = "1"
 	}
@@ -260,6 +289,12 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 		infra.Mount{Kind: infra.KindTmpfs, Container: "/tmp"},
 		infra.Mount{Kind: infra.KindTmpfs, Container: contract.ContainerHome},
 	)
+	// The live sessions bind nests inside the HOME tmpfs (the daemon orders
+	// nested mounts by target depth); listed after it for the same reason.
+	// Read-write and host-pre-owned by the run user, like the result dir.
+	if sessionsContainer != "" {
+		mounts = append(mounts, infra.Mount{Host: spec.SessionsDir, Container: sessionsContainer})
+	}
 	for _, host := range slices.Sorted(maps.Keys(tpl.Volumes)) {
 		mounts = append(mounts, infra.Mount{Host: host, Container: tpl.Volumes[host]})
 	}

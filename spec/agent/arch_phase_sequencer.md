@@ -38,7 +38,18 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    binding's `--tmpfs` flag) is a **gated add to the chown set**: chowned only
    when it exists, so the dropped run user can write its `0600` secret files in
    phase 3. Absent file mode there is no such mount and the chown set is
-   unchanged. File-mode secrets therefore presume the root-entry-then-drop path
+   unchanged. The sessions bind (present only when the host enabled session
+   capture, named by `FABER_SESSIONS_DIR` as a container path under `HOME`) is
+   another gated add: the bind itself arrives host-owned by the run user (the
+   host pre-created it, like the result dir), but the daemon creates its
+   *intermediate* path components inside the `HOME` tmpfs root-owned — so the
+   preamble chowns each component between the bind and `HOME` (exclusive,
+   walked bottom-up over the CLEANED value: this walk runs as root, and a raw
+   prefix check would let a hand-authored traversal chown outside `HOME`), or
+   the dropped harness could not write siblings (its own config files) next
+   to them; unset, or a value that cleans to anywhere outside `HOME`,
+   contributes nothing and the chown set is unchanged.
+   File-mode secrets therefore presume the root-entry-then-drop path
    (or the box-lifecycle harness's writable `/run/secrets` override): the gated
    chown is what makes the root-owned tmpfs writable by the run user, so a
    genuinely non-root / no-drop box — where the preamble is a no-op and chowns

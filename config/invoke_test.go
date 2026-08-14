@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -176,6 +177,36 @@ func TestInvokeProfileValidation(t *testing.T) {
 			wantPath: "invoke_profiles.broken.skill_flag",
 			wantMsg:  "required with skill_mode",
 		},
+		{
+			name:     "absolute session dir",
+			invoke:   "invoke: {session_dir: /var/sessions}",
+			wantPath: "templates.box.invoke.session_dir",
+			wantMsg:  "must be relative to $HOME",
+		},
+		{
+			name:     "session dir climbing out of HOME",
+			invoke:   "invoke: {session_dir: ../sessions}",
+			wantPath: "templates.box.invoke.session_dir",
+			wantMsg:  `must not contain a ".." path segment`,
+		},
+		{
+			name:     "session dir naming HOME itself",
+			invoke:   "invoke: {session_dir: ./}",
+			wantPath: "templates.box.invoke.session_dir",
+			wantMsg:  "must name a proper subpath of $HOME",
+		},
+		{
+			name:     "resume argv without a session dir",
+			invoke:   "invoke: {resume_argv: [harness, resume]}",
+			wantPath: "templates.box.invoke.resume_argv",
+			wantMsg:  "requires a session_dir",
+		},
+		{
+			name:     "empty resume argv token",
+			invoke:   `invoke: {session_dir: .h/sessions, resume_argv: [harness, ""]}`,
+			wantPath: "templates.box.invoke.resume_argv[1]",
+			wantMsg:  "empty argv token",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -188,6 +219,47 @@ func TestInvokeProfileValidation(t *testing.T) {
 				t.Fatalf("error = %q, want path %q with %q", err, want, tt.wantMsg)
 			}
 		})
+	}
+}
+
+// Verifies spec/proposals/2026-08-14-session-transcripts.md scenario 12: the
+// session fields layer like every other profile field (explicit ""/[] clears
+// an inherited value, absence inherits) and stay out of the JSON when absent.
+func TestInvokeProfileSessionFields(t *testing.T) {
+	profiles := `
+invoke_profiles:
+  harness:
+    session_dir: .h/sessions
+    resume_argv: [harness, resume, --latest]
+`
+	cfg, err := loadStr(t, fmt.Sprintf(invokeBase, profiles, "invoke: {profile: harness}"))
+	if err != nil {
+		t.Fatalf("must validate: %v", err)
+	}
+	got := resolvedBox(t, cfg).Invoke
+	if got.SessionDir != ".h/sessions" || fmt.Sprint(got.ResumeArgv) != "[harness resume --latest]" {
+		t.Fatalf("resolved invoke = %+v, want the profile's session dialect", *got)
+	}
+
+	cleared, err := loadStr(t, fmt.Sprintf(invokeBase, profiles,
+		`invoke: {profile: harness, session_dir: "", resume_argv: []}`))
+	if err != nil {
+		t.Fatalf("cleared form must validate: %v", err)
+	}
+	if ri := resolvedBox(t, cleared).Invoke; ri.SessionDir != "" || len(ri.ResumeArgv) != 0 {
+		t.Fatalf("resolved invoke = %+v, want the inherited session dialect cleared", *ri)
+	}
+
+	plain, err := loadStr(t, fmt.Sprintf(invokeBase, "", "invoke: {subcommand: [run]}"))
+	if err != nil {
+		t.Fatalf("must validate: %v", err)
+	}
+	raw, err := json.Marshal(resolvedBox(t, plain).Invoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "session") || strings.Contains(string(raw), "resume_argv") {
+		t.Fatalf("absent session fields must serialize to nothing: %s", raw)
 	}
 }
 

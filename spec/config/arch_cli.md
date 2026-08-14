@@ -73,8 +73,8 @@ subcommand.
 |---------|-------------|--------------|
 | `faber validate [--config path] [--emit-ir] [--workflow name]` | Load -> Validate -> Desugar -> WiringChecker -> infra package-resolution proof | the named (or every) workflow would start |
 | `faber build [--config path] [--template name]` | Load -> Validate -> ImageBuilder per template | images built and tagged |
-| `faber run <workflow> [--name n] [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
-| `faber resume <run-id\|name> [--fresh] [--interactive <step-id>] [--report-json path\|-]` | run-ref resolution -> journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
+| `faber run <workflow> [--name n] [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--sessions] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
+| `faber resume <run-id\|name> [--fresh] [--sessions] [--interactive <step-id>] [--shell] [--report-json path\|-]` | run-ref resolution -> journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
 | `faber runs [--json]` | RunController listing (audit scan + header reads) | the run store was enumerated and printed |
 | `faber runs pause <run-id\|name>` | run-ref resolution -> pause-marker write (live runs only) | the pause request is durably recorded |
 | `faber runs prune [--all]` | RunController prune (finished + non-live; `--all` widens to paused and incomplete) | the eligible run directories were removed |

@@ -29,14 +29,14 @@
       "preq_id": "0186891639d3",
       "type": "functional",
       "title": "Run journal",
-      "description": "Every completed step's result is journaled under the key (step-id, input-hash), where input-hash covers the step's resolved inputs, template identity, and image tag. The journal is the run's durable state: append-only records sufficient to reconstruct scheduler state and reuse prior outputs. The header may carry an optional operator-given run name (identification, never a key), the run-end marker's status vocabulary is settled|aborted|paused, and the run directory additionally holds the durable pause marker — the cooperative stop request the scheduler re-derives from the store at its scheduling points."
+      "description": "Every completed step's result is journaled under the key (step-id, input-hash), where input-hash covers the step's resolved inputs, template identity, and image tag. The journal is the run's durable state: append-only records sufficient to reconstruct scheduler state and reuse prior outputs. The header may carry an optional operator-given run name (identification, never a key) and an optional sessions flag (the per-run transcript-capture toggle resume inherits), the run-end marker's status vocabulary is settled|aborted|paused, and the run directory additionally holds the durable pause marker — the cooperative stop request the scheduler re-derives from the store at its scheduling points."
     },
     {
       "id": "87f006277d2c",
       "preq_id": "0186891639d3",
       "type": "functional",
       "title": "Recovery modes",
-      "description": "Three ways to re-enter a stopped run: resume (journal hits with matching input-hash are skipped, execution restarts at the first failed, halted, or absent step — after a clean pause that is exactly the next undispatched step; resume also clears a stale pause marker on start), fresh (--fresh: ignore the journal, run everything), and interactive (drop the operator into the failed step's box — same image, bindings, and inputs — for manual diagnosis). A failed generate item is a normal failure plus journal entry, not a special partial-run state. The runs operator surface rides the same artifacts: name-or-id reference resolution over headers (no cross-run index; id wins over an equal name), the enriched tolerant listing scan, the live-only pause request, and prune with the run-lock liveness guard (paused runs kept by default — resumable state).",
+      "description": "Three ways to re-enter a stopped run: resume (journal hits with matching input-hash are skipped, execution restarts at the first failed, halted, or absent step — after a clean pause that is exactly the next undispatched step; resume also clears a stale pause marker on start), fresh (--fresh: ignore the journal, run everything), and interactive (drop the operator into the failed step's box — same image, bindings, and inputs — for manual diagnosis; when the failed attempt saved a harness session and the invocation profile defines resume_argv, entry is the resumed session over a throwaway copy of the saved transcript, with --shell forcing the bare shell). A failed generate item is a normal failure plus journal entry, not a special partial-run state. The runs operator surface rides the same artifacts: name-or-id reference resolution over headers (no cross-run index; id wins over an equal name), the enriched tolerant listing scan, the live-only pause request, and prune with the run-lock liveness guard (paused runs kept by default — resumable state).",
       "depends_on": ["bff0f92afc29"]
     },
     {
@@ -73,7 +73,7 @@
     {
       "id": "ec44f9c7b403",
       "name": "Journal",
-      "description": "The append-only run journal: (step-id, input-hash) keying, input-hash computation, record encoding, lookup for resume decisions, per-step actual-cost records, the run-end marker (settled|aborted|paused), the optional operator-given run name in the header, the durable pause marker (write for a live run, scheduling-point probe, clear on resume), and same-run process exclusivity (the advisory run lock). Owns the on-disk journal schema version (format: 1) — bumped only when record shapes change; replay fails closed on any other stamp, no auto-migration. Owns the deferred store-location/cross-run-concurrency seam.",
+      "description": "The append-only run journal: (step-id, input-hash) keying, input-hash computation, record encoding, lookup for resume decisions, per-step actual-cost records, the run-end marker (settled|aborted|paused), the optional operator-given run name and the optional per-run sessions flag in the header, the durable pause marker (write for a live run, scheduling-point probe, clear on resume), and same-run process exclusivity (the advisory run lock). Owns the on-disk journal schema version (format: 1) — bumped only when record shapes change; replay fails closed on any other stamp, no auto-migration. Owns the deferred store-location/cross-run-concurrency seam.",
       "content": "arch_journal.md",
       "implements": ["bff0f92afc29", "fca4912f1bbe"],
       "uses": ["dcfa188fa679"]
@@ -81,7 +81,7 @@
     {
       "id": "351e41becee4",
       "name": "RecoveryModes",
-      "description": "The resume/fresh/interactive entry points: journal replay into scheduler state, fail-closed version and drift guards (journal format, IR version, IR hash, params, recorded image tags), cache-bypass, pause-marker clearing on resume, the interactive re-entry that reconstructs the failed step's box (journaled image tag, bindings, slot-keyed handoff inputs) for an operator shell, the read-only active-runs audit behind faber upgrade (which refuses mid-run) and faber upgrade --check (which only warns), and the runs operator surface: name-or-id reference resolution, the enriched run listing, the live-only pause request, and prune with the run-lock liveness guard.",
+      "description": "The resume/fresh/interactive entry points: journal replay into scheduler state, fail-closed version and drift guards (journal format, IR version, IR hash, params, recorded image tags), cache-bypass, pause-marker clearing on resume, the interactive re-entry that reconstructs the failed step's box (journaled image tag, bindings, slot-keyed handoff inputs) for the operator — the profile's session-resuming resume_argv over a copy of the saved session when one exists, a bare shell on --shell or as fallback, the read-only active-runs audit behind faber upgrade (which refuses mid-run) and faber upgrade --check (which only warns), and the runs operator surface: name-or-id reference resolution, the enriched run listing, the live-only pause request, and prune with the run-lock liveness guard.",
       "content": "arch_recovery_modes.md",
       "implements": ["87f006277d2c"],
       "uses": ["ec44f9c7b403"]

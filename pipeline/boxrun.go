@@ -32,6 +32,11 @@ type BoxAttempt struct {
 	Template *config.ResolvedTemplate
 	Image    string
 	Inputs   map[string]any // resolved input slot values
+
+	// Sessions is the per-run transcript-capture toggle (--sessions, ORed
+	// with the journal header on resume). Capture happens only when it is on
+	// AND the template's resolved profile names a session_dir.
+	Sessions bool
 }
 
 // BoxResult is one finished attempt: the record adapted to the failure
@@ -120,7 +125,13 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	// A reused attempt dir (a resumed run's attempt numbering restarts; a
 	// crashed launch may have deposited files) can hold a stale result.json
 	// that ExtractResult would adopt as this attempt's outcome. Clear it so
-	// whatever the extractor reads was written by this attempt's container.
+	// whatever the extractor reads was written by this attempt's container —
+	// but preserve any captured session transcript first: it is the durable
+	// record of the failed execution the resume is retrying, and the routine
+	// fail→resume flow must not silently destroy the feature's core artifact.
+	if err := preserveSessions(attemptDir); err != nil {
+		return BoxResult{}, fmt.Errorf("pipeline: box %s: preserve prior sessions: %w", box.NodeID, err)
+	}
 	if err := os.RemoveAll(attemptDir); err != nil {
 		return BoxResult{}, fmt.Errorf("pipeline: box %s: clear stale attempt dir: %w", box.NodeID, err)
 	}
@@ -143,6 +154,18 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		return BoxResult{}, fmt.Errorf("pipeline: box %s: stage skills: %w", box.NodeID, err)
 	}
 	defer skillsCleanup()
+	// The live sessions bind: a fresh empty per-attempt dir (the scrub above
+	// cleared only THIS attempt's dir, so earlier attempts' transcripts
+	// persist), host-owned by the run user like the result dir, mounted by
+	// the run-spec assembler at $HOME/<profile session_dir>. Both gates —
+	// the per-run toggle and the profile's session_dir — must be on.
+	sessionsDir := ""
+	if box.Sessions && box.Template.Invoke != nil && box.Template.Invoke.SessionDir != "" {
+		sessionsDir = filepath.Join(attemptDir, "sessions")
+		if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+			return BoxResult{}, fmt.Errorf("pipeline: box %s: %w", box.NodeID, err)
+		}
+	}
 	spec, err := agent.BuildRunSpec(agent.BoxSpec{
 		RunID:        box.RunID,
 		NodeID:       box.NodeID,
@@ -161,6 +184,7 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		Effort:       box.Template.Effort,
 		GitName:      b.GitIdentities[box.Template.Identity].Name,
 		GitEmail:     b.GitIdentities[box.Template.Identity].Email,
+		SessionsDir:  sessionsDir,
 	})
 	if err != nil {
 		return BoxResult{}, err
@@ -352,6 +376,31 @@ func readUsage(resultDir string, log *slog.Logger) map[string]int64 {
 		}
 	}
 	return usage
+}
+
+// preserveSessions moves a reused attempt dir's non-empty captured-session
+// directory aside — to the sibling `<attemptDir>.sessions.<k>`, first free k —
+// before the pre-attempt scrub deletes the dir. A resumed run restarts
+// attempt numbering, so without this the re-run of a failed step would erase
+// the very transcript that explains the failure. Preservation is
+// unconditional on the current toggle: whatever a prior execution captured is
+// a record, whether or not this one captures. An absent or empty sessions dir
+// moves nothing.
+func preserveSessions(attemptDir string) error {
+	src := filepath.Join(attemptDir, "sessions")
+	entries, err := os.ReadDir(src)
+	if err != nil || len(entries) == 0 {
+		return nil // absent or empty: nothing worth preserving
+	}
+	for k := 1; ; k++ {
+		dst := fmt.Sprintf("%s.sessions.%d", attemptDir, k)
+		if _, err := os.Stat(dst); err == nil {
+			continue // taken by an earlier preservation
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		return os.Rename(src, dst)
+	}
 }
 
 // stringifyInputs renders resolved input values for the box env contract.

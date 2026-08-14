@@ -205,13 +205,19 @@ func TestBoxRun_VanishedAndHandoff(t *testing.T) {
 	}
 }
 
-// fakeInteractive captures the interactive run spec.
+// fakeInteractive captures the interactive run spec. onRun, when set, runs
+// DURING the session — the window in which per-session state (the salted
+// dir, the session copy) still exists.
 type fakeInteractive struct {
-	spec *infra.RunSpec
+	spec  *infra.RunSpec
+	onRun func()
 }
 
 func (f *fakeInteractive) RunInteractive(ctx context.Context, spec infra.RunSpec) (err error) {
 	f.spec = &spec
+	if f.onRun != nil {
+		f.onRun()
+	}
 	return nil
 }
 
@@ -270,7 +276,7 @@ func TestBoxRun_InteractiveReentry(t *testing.T) {
 		EntryBinary: "/usr/local/bin/faber-box",
 	}
 
-	if err := store.Interactive(context.Background(), "run-i", "w/x", re); err != nil {
+	if err := store.Interactive(context.Background(), "run-i", "w/x", false, re); err != nil {
 		t.Fatalf("interactive: %v", err)
 	}
 	spec := interactive.spec
@@ -297,7 +303,7 @@ func TestBoxRun_InteractiveReentry(t *testing.T) {
 	}
 
 	// A step that settled ok refuses re-entry (the failure store's guard).
-	if err := store.Interactive(context.Background(), "run-i", "w/y", re); err == nil {
+	if err := store.Interactive(context.Background(), "run-i", "w/y", false, re); err == nil {
 		t.Errorf("interactive re-entry accepted an ok step")
 	}
 
@@ -437,11 +443,11 @@ func TestBoxRun_InteractiveSessionsIsolated(t *testing.T) {
 	re := &Reentry{IR: ir, Images: fakeTags{}, Bindings: &fakeBindings{},
 		Interactive: interactive, EntryBinary: "/usr/local/bin/faber-box"}
 
-	if err := store.Interactive(context.Background(), "run-s", "w/x", re); err != nil {
+	if err := store.Interactive(context.Background(), "run-s", "w/x", false, re); err != nil {
 		t.Fatal(err)
 	}
 	first := interactive.spec.Name
-	if err := store.Interactive(context.Background(), "run-s", "w/x", re); err != nil {
+	if err := store.Interactive(context.Background(), "run-s", "w/x", false, re); err != nil {
 		t.Fatal(err)
 	}
 	second := interactive.spec.Name
@@ -536,7 +542,7 @@ func TestBoxRun_InteractivePrefersJournaledTag(t *testing.T) {
 	interactive := &fakeInteractive{}
 	re := &Reentry{IR: ir, Images: fakeTags{}, Bindings: &fakeBindings{},
 		Interactive: interactive, EntryBinary: "/usr/local/bin/faber-box"}
-	if err := store.Interactive(context.Background(), "run-t", "w/x", re); err != nil {
+	if err := store.Interactive(context.Background(), "run-t", "w/x", false, re); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := interactive.spec.Image, "img/"+tplName+":journaled"; got != want {

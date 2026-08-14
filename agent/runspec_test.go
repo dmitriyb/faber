@@ -173,6 +173,75 @@ func TestBuildRunSpecInvokeProfile(t *testing.T) {
 	}
 }
 
+// Verifies ae434449cac9 (session transcripts): the sessions bind and
+// FABER_SESSIONS_DIR are pair-set from the profile's session_dir — mount and
+// variable together, read-write, inside HOME; absent SessionsDir emits
+// neither; a SessionsDir against a profile without session_dir, or with an
+// escaping session_dir, is a refusal.
+func TestBuildRunSpecSessionsBind(t *testing.T) {
+	sessionDir := func(dir string) *config.ResolvedInvoke {
+		ri := config.DefaultInvoke()
+		ri.SessionDir = dir
+		return &ri
+	}
+
+	spec := validSpec()
+	spec.Template.Invoke = sessionDir(".h/sessions")
+	spec.SessionsDir = "/host/run/boxes/x/attempt-1/sessions"
+	rs, err := BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContainer := contract.ContainerHome + "/.h/sessions"
+	if got := rs.Env[contract.EnvSessionsDir]; got != wantContainer {
+		t.Errorf("env[%s] = %q, want %q", contract.EnvSessionsDir, got, wantContainer)
+	}
+	var found *infra.Mount
+	for i, m := range rs.Mounts {
+		if m.Container == wantContainer {
+			found = &rs.Mounts[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("sessions bind missing from mounts: %v", rs.Mounts)
+	}
+	if found.Host != spec.SessionsDir || found.ReadOnly {
+		t.Errorf("sessions mount = %+v, want the host dir bound read-write", *found)
+	}
+
+	// No SessionsDir: no mount, no variable — even with a session_dir profile.
+	spec = validSpec()
+	spec.Template.Invoke = sessionDir(".h/sessions")
+	rs, err = BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := rs.Env[contract.EnvSessionsDir]; ok {
+		t.Errorf("env[%s] = %q, want absent without a SessionsDir", contract.EnvSessionsDir, v)
+	}
+	for _, m := range rs.Mounts {
+		if strings.HasPrefix(m.Container, contract.ContainerHome+"/") {
+			t.Errorf("unexpected mount inside HOME: %+v", m)
+		}
+	}
+
+	// A SessionsDir with nowhere to land refuses.
+	spec = validSpec()
+	spec.SessionsDir = "/host/sessions"
+	if _, err := BuildRunSpec(spec); err == nil || !strings.Contains(err.Error(), "session_dir") {
+		t.Fatalf("want a refusal naming the missing profile session_dir, got %v", err)
+	}
+
+	// A hand-built escaping session_dir refuses (config validation is the
+	// authoritative gate; this is the direct-caller re-check).
+	spec = validSpec()
+	spec.Template.Invoke = sessionDir("../../etc")
+	spec.SessionsDir = "/host/sessions"
+	if _, err := BuildRunSpec(spec); err == nil || !strings.Contains(err.Error(), "proper subpath") {
+		t.Fatalf("want a refusal for the escaping session_dir, got %v", err)
+	}
+}
+
 // Verifies 93ba0858d75f: the agent-skippable opt-in reaches the box env as
 // the exact contract value, and only when the template declares it — no
 // opt-in, no variable, so a stray value can never read as a silent opt-in.

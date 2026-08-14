@@ -94,7 +94,7 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 		if opts.InteractiveStep == "" {
 			return errors.New("pipeline: interactive recovery requires --interactive <step-id>")
 		}
-		return e.Store.Interactive(ctx, opts.RunID, opts.InteractiveStep, e.Reentry)
+		return e.Store.Interactive(ctx, opts.RunID, opts.InteractiveStep, opts.InteractiveShell, e.Reentry)
 	}
 
 	// Preflight before any run state is minted: a dead daemon or an unbuilt
@@ -176,7 +176,11 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 		log:     log,
 		runID:   runID,
 		runDir:  runDir,
-		pause:   func() bool { return failure.PauseRequested(runDir) },
+		// Capture is on when the run began with --sessions (the journaled
+		// header) or this invocation asked for it (resume --sessions widens a
+		// run that started without; the header itself stays immutable).
+		sessions: seed.Header.Sessions || opts.Sessions,
+		pause:    func() bool { return failure.PauseRequested(runDir) },
 	}
 	s.registerScopes(ir)
 
@@ -305,6 +309,7 @@ func (e *Executor) openRun(ir *config.IR, opts config.RunOptions, clock Clock) (
 		return e.Store.Fresh(failure.Header{
 			RunID:      runID,
 			Name:       opts.Name,
+			Sessions:   opts.Sessions,
 			ConfigPath: e.Meta.ConfigPath,
 			ConfigHash: e.Meta.ConfigHash,
 			Workflow:   ir.Workflow,

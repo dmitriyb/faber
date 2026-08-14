@@ -59,7 +59,9 @@ InvokeProfileDef              # an agent-CLI invocation dialect (all fields opti
 ├── FixedFlags     []string   literal argv tail always appended (default ["--permission-mode", "bypassPermissions"]; explicit [] ⇒ none)
 ├── ModelFlag      *string    flag for FABER_MODEL (default "--model"; explicit "" ⇒ the pair is never emitted)
 ├── EffortFlag     *string    flag for FABER_EFFORT (default "--effort"; explicit "" ⇒ never emitted)
-└── BudgetFlag     *string    flag for FABER_MAX_BUDGET (default "--max-budget-usd"; explicit "" ⇒ never emitted)
+├── BudgetFlag     *string    flag for FABER_MAX_BUDGET (default "--max-budget-usd"; explicit "" ⇒ never emitted)
+├── SessionDir     *string    $HOME-relative path where the harness writes session transcripts (default none: no capture; explicit "" clears an inherited value)
+└── ResumeArgv     []string   argv resuming the harness's most recent session in SessionDir (default none; explicit [] clears)
 ```
 
 ### Optional per-image nixpkgs pin
@@ -172,6 +174,31 @@ resolved profile is compiled into the IR (`ResolvedTemplate.Invoke`) and rides
 to the box as the engine-owned `FABER_INVOKE_PROFILE` JSON — engine-owned like
 every `FABER_*` name, so template env may never set it (only
 `FABER_AGENT_CLI` is excepted there).
+
+Two profile fields describe the harness's *session state* rather than its
+argv — where the harness keeps native session transcripts and how it resumes
+one are vendor dialect too, so they are profile data, never engine code:
+
+- `session_dir` — the `$HOME`-relative path where the harness writes session
+  transcripts. When the operator enables session capture (`faber run
+  --sessions`, a per-run toggle — see the pipeline module), each attempt gets
+  a live host bind at exactly this path. Validation: relative to `$HOME`
+  (never absolute), no `..` segment, and not `.`/empty-after-clean (the bind
+  must land strictly inside the box's `$HOME` tmpfs, never over it or outside
+  it). Config guidance, not enforcement: point it at the narrow transcript
+  subpath, not the harness's whole state directory — wider paths can carry
+  checkpoint copies of the workspace and drag repo-class I/O through the
+  host bind.
+- `resume_argv` — the argv that resumes the harness's most recent session in
+  `session_dir`; interactive re-entry launches it instead of the fallback
+  shell when a saved session exists. Validation: `resume_argv` without a
+  `session_dir` in the same effective profile is an error (there is nothing
+  it could resume), and its tokens must be non-empty.
+
+Both default to none — the anonymous built-in default profile knows no
+session layout, so capture and session re-entry activate only through user
+profile data. Absent fields keep the resolved profile's JSON byte-identical
+to before the fields existed.
 
 ### TemplateDef — a composition node
 

@@ -22,6 +22,13 @@ invoke_profiles:
     model_flag: ""                  # model/provider come from the box env below;
     effort_flag: ""                 # no effort knob either — the pairs are dropped
     budget_flag: ""
+    # The session dialect: where this harness keeps session transcripts and
+    # how it resumes the latest one. `faber run task --sessions` then captures
+    # each attempt's transcripts under the run directory, and
+    # `faber resume <run> --interactive <step>` reopens a failed step inside
+    # its saved session instead of a bare shell.
+    session_dir: .local/share/goose/sessions
+    resume_argv: [goose, session, resume, --last]
 
 templates:
   implement:

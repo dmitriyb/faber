@@ -181,6 +181,16 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 			return fail("chown "+b.Env.SecretsDir, err)
 		}
 	}
+	// The sessions bind itself arrives host-owned by the run user (the host
+	// pre-created it, like the result dir), but the daemon creates its
+	// INTERMEDIATE path components inside the HOME tmpfs as root — chown each
+	// component from the bind up to (not including) HOME, or the dropped
+	// harness could not write its own files beside them.
+	for _, p := range sessionChownPaths(b.Env.SessionsDir) {
+		if err := os.Chown(p, b.Env.RunUID, b.Env.RunGID); err != nil {
+			return fail("chown "+p, err)
+		}
+	}
 	b.setEnv("HOME", contract.ContainerHome)
 	if err := syscall.Setgroups(runUserGroups(b.Env.RunGID, b.Env.AgentSocketGID)); err != nil {
 		return fail("setgroups", err)
@@ -209,6 +219,25 @@ func runUserGroups(runGID, agentSocketGID int) []int {
 		groups = append(groups, agentSocketGID)
 	}
 	return groups
+}
+
+// sessionChownPaths lists what the preamble chowns for the sessions bind: the
+// bind and every daemon-created intermediate component, bottom-up, strictly
+// inside HOME — never HOME itself (the general chown set covers it). Empty
+// when capture is off ("") or the path does not sit under HOME, so a stray
+// value contributes nothing. The value is CLEANED first: this walk runs as
+// root, and a raw prefix check would let a hand-authored
+// "/home/box/../../etc" (direct sequencer invocations take env verbatim)
+// walk the chown outside HOME.
+func sessionChownPaths(sessionsDir string) []string {
+	if sessionsDir == "" {
+		return nil
+	}
+	var out []string
+	for p := filepath.Clean(sessionsDir); strings.HasPrefix(p, contract.ContainerHome+"/"); p = filepath.Dir(p) {
+		out = append(out, p)
+	}
+	return out
 }
 
 // boxError is a phase failure carrying the record fields the fail-stop funnel

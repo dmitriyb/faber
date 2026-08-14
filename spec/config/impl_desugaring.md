@@ -83,6 +83,8 @@ type ResolvedInvoke struct {
     ModelFlag      string   `json:"model_flag,omitempty"`  // "" ⇒ pair never emitted
     EffortFlag     string   `json:"effort_flag,omitempty"`
     BudgetFlag     string   `json:"budget_flag,omitempty"`
+    SessionDir     string   `json:"session_dir,omitempty"` // $HOME-relative transcript dir; "" ⇒ no session capture
+    ResumeArgv     []string `json:"resume_argv,omitempty"` // session-resuming argv; empty ⇒ shell-only re-entry
 }
 
 // DefaultInvoke is the anonymous built-in dialect — field values reproduce the

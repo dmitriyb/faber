@@ -155,6 +155,14 @@ type InvokeProfileDef struct {
 	ModelFlag      *string  `yaml:"model_flag,omitempty"`      // nil ⇒ "--model"
 	EffortFlag     *string  `yaml:"effort_flag,omitempty"`     // nil ⇒ "--effort"
 	BudgetFlag     *string  `yaml:"budget_flag,omitempty"`     // nil ⇒ "--max-budget-usd"
+	// SessionDir and ResumeArgv are the harness's session dialect: the
+	// $HOME-relative path where it writes session transcripts (the target of
+	// the per-attempt capture bind when `faber run --sessions` is on) and the
+	// argv that resumes its most recent session there (interactive re-entry's
+	// entry program when a saved session exists). Defaults: none — the
+	// built-in default profile knows no session layout.
+	SessionDir *string  `yaml:"session_dir,omitempty"` // nil ⇒ none; explicit "" clears an inherited value
+	ResumeArgv []string `yaml:"resume_argv,omitempty"` // nil ⇒ none; explicit [] clears
 }
 
 // InvokeDef is a template's invoke: block: an optional named-profile reference

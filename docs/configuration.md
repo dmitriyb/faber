@@ -36,6 +36,8 @@ invoke_profiles:                    # named agent-CLI invocation dialects (all f
     model_flag: ""                  # "" drops the pair (harness without the knob); defaults --model/--effort/--max-budget-usd
     effort_flag: ""
     budget_flag: ""
+    session_dir: .local/share/goose/sessions  # $HOME-relative transcript dir; captured per attempt under the run dir with `faber run --sessions`
+    resume_argv: [goose, session, resume, --last]  # entry for `resume --interactive`: lands the operator inside the failed attempt's session
 
 templates:
   implement:
@@ -93,7 +95,8 @@ An `invoke_profiles:` entry describes one agent CLI's headless dialect; a templa
 Because a template is a role's box, this is the harness↔role seam: one template's package set + `FABER_AGENT_CLI` pick the binary, its `invoke:` picks the dialect, and its opaque `run.env` carries provider/endpoint knobs — so different roles in one workflow can run different harnesses against different endpoints (see `examples/mixed-harness/`).
 A template with no `invoke:` gets the anonymous built-in default, byte-identical to the invocation faber always emitted; faber ships no vendor profile.
 Explicit emptiness is meaningful: `prompt_flag: ""` makes the prompt positional, `model_flag`/`effort_flag`/`budget_flag: ""` drop the pair, `fixed_flags: []` drops the tail; an *absent* field inherits instead.
-The resolved profile lands in the IR and reaches the box as `FABER_INVOKE_PROFILE`; `faber validate` checks profile rules (a `{body}`-carrying prompt template, skill injected exactly once) at compile time, never mid-run.
+The resolved profile lands in the IR and reaches the box as `FABER_INVOKE_PROFILE`; `faber validate` checks profile rules (a `{body}`-carrying prompt template, skill injected exactly once, a `$HOME`-contained `session_dir`) at compile time, never mid-run.
+The optional session dialect — `session_dir` (where the harness writes session transcripts) and `resume_argv` (how it resumes the latest one) — powers per-attempt transcript capture (`faber run --sessions`) and session-resuming interactive re-entry (`faber resume --interactive`); see `docs/commands.md`.
 
 ## Typed params
 

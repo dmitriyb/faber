@@ -4,8 +4,8 @@
 |---|---|
 | `faber validate` | Load, desugar, wiring-check every workflow; prove package resolution; `--emit-ir` prints the canonical IR; `--workflow name` narrows |
 | `faber build` | Build template images via Nix `dockerTools.buildLayeredImage`; `--template` narrows |
-| `faber run <workflow>` | Execute with `--name n` (a human name for the run, stored in the journal header), `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--report-json path\|-` |
-| `faber resume <run-id\|name>` | Re-enter a journaled run; `--fresh` ignores the journal, `--interactive <step>` reopens the failed box with a shell |
+| `faber run <workflow>` | Execute with `--name n` (a human name for the run, stored in the journal header), `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--sessions` (capture each attempt's harness session transcripts under the run dir), `--report-json path\|-` |
+| `faber resume <run-id\|name>` | Re-enter a journaled run; `--fresh` ignores the journal, `--sessions` turns capture on for the remainder, `--interactive <step>` reopens the failed box inside its saved session (when one exists and the profile defines `resume_argv`) or a shell, `--shell` forces the shell |
 | `faber runs` | List journaled runs: id, name, workflow, state (`live`/`paused`/`settled`/`aborted`/`incomplete`), started; `--json` for the same rows machine-readably |
 | `faber runs pause <run-id\|name>` | Ask a live run to pause: in-flight steps finish and journal, nothing new dispatches, the run ends `paused` (exit 4) and resumes later with `faber resume` |
 | `faber runs prune` | Delete finished, non-live run directories; paused runs are kept (resumable state) unless `--all`, which also removes paused and incomplete non-live runs; live runs are never touched |
@@ -55,6 +55,8 @@ Both share one validate-then-execute pipeline: the target workflow and everythin
 
 `resume` additionally guards on three independent schema stamps before touching the journal: the journal's own format version, the IR schema version, and the IR hash itself (a changed config re-derives a different hash and resume refuses, naming the drift rather than guessing).
 `--fresh` restarts under a new run id, ignoring all three.
+
+`--sessions` captures each attempt's harness session transcripts (the profile's `session_dir`) into `<run>/boxes/<step>/attempt-<n>/sessions/` — live host binds, so a crashed container still leaves its record, and a resumed re-run preserves the failed execution's transcript at a `.sessions.<k>` sibling before reusing the attempt dir. Off by default; recorded in the journal header so a plain resume (and, like `--name`, a `--fresh` restart) inherits it, and `resume --sessions` widens a run that started without it (per resuming invocation). Reading the transcripts — token accounting, prompt archaeology — is user-side work over the run directory; faber's job ends at durable, step-addressed records. Two caveats: a transcript contains whatever the agent read and echoed — including any secret value a hook or service exposed in-box — so treat the run directory with the same care as the box; and the bind captures everything under `session_dir`, so point it at the narrow transcript subpath, not the harness's whole state directory.
 
 ## `faber add-key` / `list-keys`
 

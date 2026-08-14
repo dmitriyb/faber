@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/dmitriyb/faber/agent"
 	"github.com/dmitriyb/faber/agent/contract"
@@ -167,13 +170,37 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	defer func() { _ = asm.Teardown(ctx) }()
 	spec.Bindings = asm.Args
 
-	// The operator's shell replaces the phase sequencer; the failed attempt's
-	// preserved state rides along read-only.
-	shell := r.Shell
-	if len(shell) == 0 {
-		shell = []string{"/bin/sh"}
+	// The operator's entry replaces the phase sequencer; the failed attempt's
+	// preserved state rides along read-only. The entry is the harness's own
+	// resumed session — the profile's resume_argv over a COPY of the saved
+	// transcript — whenever the failed attempt saved one and the operator did
+	// not force --shell; the copy (never a bind of the archive) keeps the
+	// host record immutable while the ephemeral session diverges, and it is
+	// removed with the salted dir when the session exits. Fallback: the shell.
+	entry := r.Shell
+	if len(entry) == 0 {
+		entry = []string{"/bin/sh"}
 	}
-	spec.Entry = shell
+	if inv := node.Template.Invoke; !t.Shell && inv != nil && len(inv.ResumeArgv) > 0 && inv.SessionDir != "" {
+		target := path.Join(contract.ContainerHome, inv.SessionDir)
+		if !strings.HasPrefix(target, contract.ContainerHome+"/") {
+			return fmt.Errorf("pipeline: interactive re-entry: profile session_dir %q does not resolve under %s", inv.SessionDir, contract.ContainerHome)
+		}
+		saved := filepath.Join(t.RunDir, "boxes", pathToken(t.StepID), "attempt-"+strconv.Itoa(attempt), "sessions")
+		if hasEntries(saved) {
+			stateDir := filepath.Join(sessionDir, "harness-session")
+			if err := copySessionTree(stateDir, saved); err != nil {
+				return fmt.Errorf("pipeline: interactive re-entry: copy saved session: %w", err)
+			}
+			spec.Mounts = append(spec.Mounts, infra.Mount{Host: stateDir, Container: target})
+			// The raw entry replaces the sequencer, so no preamble exports
+			// HOME; pin it to the box home or the harness would look for its
+			// session under the image default.
+			spec.Env["HOME"] = contract.ContainerHome
+			entry = inv.ResumeArgv
+		}
+	}
+	spec.Entry = entry
 	spec.Name = spec.Name + "-i" + strconv.Itoa(attempt) + "-" + salt
 	spec.Mounts = append(spec.Mounts, infra.Mount{
 		Host:      filepath.Dir(handoffPath),
@@ -208,6 +235,63 @@ func handoffInputs(h contract.Handoff, tpl *config.ResolvedTemplate) (map[string
 		}
 	}
 	return inputs, nil
+}
+
+// copySessionTree mirrors a saved harness-session tree for re-entry. Unlike
+// the skills stager's copyTree (world-readable real files, fresh mtimes,
+// symlinks dropped — the right shape for a read-only engine mount), a session
+// copy must stay faithful to what the harness wrote: harnesses locate "the
+// most recent session" via file mtimes or a latest-pointer symlink, so a copy
+// that flattens either resumes the wrong conversation. File modes and mtimes
+// are preserved, symlinks are recreated verbatim (they resolve inside the
+// operator's own debug container), and other non-regular entries are skipped.
+func copySessionTree(dst, src string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			link, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if err := copyFile(target, p); err != nil {
+			return err
+		}
+		if err := os.Chmod(target, info.Mode().Perm()); err != nil {
+			return err
+		}
+		return os.Chtimes(target, info.ModTime(), info.ModTime())
+	})
+}
+
+// hasEntries reports whether dir exists and holds at least one entry — the
+// "the failed attempt saved a session" gate; an absent or empty dir means
+// capture was off (or the harness wrote nothing) and re-entry falls back to
+// the shell.
+func hasEntries(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	return err == nil && len(entries) > 0
 }
 
 // sessionSalt mints the short random token distinguishing concurrent

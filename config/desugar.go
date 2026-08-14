@@ -633,6 +633,12 @@ func overlayInvoke(ri *ResolvedInvoke, p InvokeProfileDef) {
 	if p.BudgetFlag != nil {
 		ri.BudgetFlag = *p.BudgetFlag
 	}
+	if p.SessionDir != nil {
+		ri.SessionDir = *p.SessionDir
+	}
+	if p.ResumeArgv != nil {
+		ri.ResumeArgv = append([]string(nil), p.ResumeArgv...)
+	}
 }
 
 // resolveIdentity picks the identity name from the top-level alias or run.identity.
