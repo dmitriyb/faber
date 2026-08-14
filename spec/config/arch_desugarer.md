@@ -52,6 +52,12 @@ resolve; desugar performs the resolution, not the checking.
      primary `skill` in the inline form is a free-form prompt token, not a
      library reference, so no set-membership check applies.
    - **skills** (absent): no skills leg (current default).
+   - **invoke**: an `invoke:` block resolves to a fully concrete
+     `ResolvedInvoke` — built-in default ⊕ the named `invoke_profiles[<name>]`
+     entry's set fields ⊕ the inline overrides — so the box never re-derives a
+     field default. Absent `invoke:` resolves to nil (json `invoke,omitempty`),
+     the same absent-⇒-byte-identical-IR discipline as the pin and
+     `agent_optional`.
 
    See `arch_schema_types.md` "Skills assembly" for the two shapes and the
    direct-mount special case.

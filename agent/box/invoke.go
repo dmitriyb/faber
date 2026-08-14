@@ -5,48 +5,74 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/dmitriyb/faber/agent/contract"
+	"github.com/dmitriyb/faber/config"
 )
 
 // Invocation assembles the one headless agent invocation of the box — the
 // only nondeterministic phase, and atomic: there is no resuming into an
 // agent's chain of thought, only re-running the whole step. The CLI name and
-// skill are opaque user config; faber hardcodes no agent vendor.
+// skill are opaque user config, and the invocation's shape is the concrete
+// profile the host compiled (or the built-in default): faber hardcodes no
+// agent vendor, and no vendor literal appears in this file.
 type Invocation struct {
-	CLI       string // agent binary from the template's package set
+	CLI       string                // agent binary from the template's package set
+	Profile   config.ResolvedInvoke // concrete dialect; every field final
 	Skill     string
 	Body      string // CONTEXT.md bytes, verbatim — the hooks authored it
 	Extra     string // optional operator note for a single run
-	Model     string // pass-through; empty omits the flag (mandatory template config in engine runs)
-	Effort    string // pass-through; empty omits the flag (mandatory template config in engine runs)
-	MaxBudget string // pass-through; empty omits the flag
+	Model     string // pass-through; empty omits the pair (mandatory template config in engine runs)
+	Effort    string // pass-through; empty omits the pair (mandatory template config in engine runs)
+	MaxBudget string
 }
 
-// Prompt is the three-part prompt: the skill-activating slash command, the
-// bundle body verbatim, and the clearly delimited optional trailer.
+// Prompt expands the profile's prompt template over the closed placeholder
+// set: {skill}, {body} (the bundle body verbatim), and {extra} (the clearly
+// delimited optional trailer, or empty). strings.Replacer substitutes in one
+// pass over the template only — substituted text is never re-scanned, so
+// bundle bytes can never inject into the template.
 func (i Invocation) Prompt() string {
-	prompt := "/" + i.Skill + "\n\n" + i.Body
+	extra := ""
 	if i.Extra != "" {
-		prompt += "\n\nADDITIONAL INSTRUCTION: " + i.Extra
+		extra = "\n\nADDITIONAL INSTRUCTION: " + i.Extra
 	}
-	return prompt
+	return strings.NewReplacer(
+		"{skill}", i.Skill,
+		"{body}", i.Body,
+		"{extra}", extra,
+	).Replace(i.Profile.PromptTemplate)
 }
 
-// Argv is the headless invocation with full permission bypass: the sealed
-// environment is the restriction, and a second in-container permission gate
-// would be a control enforced by the untrusted thing it is meant to control.
+// Argv is the profile-expanded headless invocation:
+// CLI + subcommand + prompt (flagged or positional) + the skill's flag pair
+// (flag mode only) + the fixed tail + the model/effort/budget pairs. A
+// pass-through pair is emitted only when BOTH its profile flag and its value
+// are set — an empty value is today's omission path, an empty flag a harness
+// without that knob. Under the default profile the result is the full
+// permission bypass: the sealed environment is the restriction, and a second
+// in-container permission gate would be a control enforced by the untrusted
+// thing it is meant to control.
 func (i Invocation) Argv() []string {
-	argv := []string{i.CLI, "-p", i.Prompt(), "--permission-mode", "bypassPermissions"}
-	if i.Model != "" {
-		argv = append(argv, "--model", i.Model)
+	p := i.Profile
+	argv := append([]string{i.CLI}, p.Subcommand...)
+	if p.PromptFlag != "" {
+		argv = append(argv, p.PromptFlag)
 	}
-	if i.Effort != "" {
-		argv = append(argv, "--effort", i.Effort)
+	argv = append(argv, i.Prompt())
+	if p.SkillMode == config.SkillModeFlag {
+		argv = append(argv, p.SkillFlag, i.Skill)
 	}
-	if i.MaxBudget != "" {
-		argv = append(argv, "--max-budget-usd", i.MaxBudget)
+	argv = append(argv, p.FixedFlags...)
+	pair := func(flag, val string) {
+		if flag != "" && val != "" {
+			argv = append(argv, flag, val)
+		}
 	}
+	pair(p.ModelFlag, i.Model)
+	pair(p.EffortFlag, i.Effort)
+	pair(p.BudgetFlag, i.MaxBudget)
 	return argv
 }
 
@@ -65,6 +91,7 @@ func (b *Box) runAgent(ctx context.Context) error {
 	}
 	inv := Invocation{
 		CLI:       b.Env.AgentCLI,
+		Profile:   b.Env.Invoke,
 		Skill:     b.Env.Skill,
 		Body:      b.Bundle.Doc,
 		Extra:     b.Env.ExtraInstruction,

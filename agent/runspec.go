@@ -169,6 +169,16 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	if err != nil {
 		errs = append(errs, fmt.Errorf("output schema: %w", err))
 	}
+	// The resolved invocation dialect rides to the box as JSON; nil means the
+	// template declared no invoke: block and the box's built-in default (the
+	// same value config compiles defaults from) applies — no env var emitted,
+	// so pre-profile IRs produce byte-identical run specs.
+	var invoke []byte
+	if tpl.Invoke != nil {
+		if invoke, err = json.Marshal(tpl.Invoke); err != nil {
+			errs = append(errs, fmt.Errorf("invoke profile: %w", err))
+		}
+	}
 	if len(errs) > 0 {
 		return infra.RunSpec{}, fmt.Errorf("agent: build run spec for %s: %w", spec.NodeID, errors.Join(errs...))
 	}
@@ -193,6 +203,7 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 		}
 	}
 	setIf(contract.EnvIdentity, tpl.Identity)
+	setIf(contract.EnvInvokeProfile, string(invoke))
 	setIf(contract.EnvAgentCLI, spec.AgentCLI)
 	setIf(contract.EnvModel, spec.Model)
 	setIf(contract.EnvEffort, spec.Effort)

@@ -133,6 +133,7 @@ func Validate(cfg *Config, viols []AssemblyViolation) error {
 	v.checkCredentials()
 	v.checkNameDiscipline()
 	v.checkImages()
+	v.checkInvokeProfiles()
 	v.checkTemplates()
 	v.checkWorkflows()
 	return errors.Join(v.errs...)
@@ -226,6 +227,7 @@ func (v *validator) checkNameDiscipline() {
 		{"images", sortedKeys(v.cfg.Images)},
 		{"skills", sortedKeys(v.cfg.Skills)},
 		{"hooks", sortedKeys(v.cfg.Hooks)},
+		{"invoke_profiles", sortedKeys(v.cfg.InvokeProfiles)},
 	}
 	for _, section := range sections {
 		for _, k := range section.keys {
@@ -276,6 +278,26 @@ func (v *validator) checkPin(path string, pin *PinDef) {
 	}
 }
 
+// checkInvokeProfiles validates each library invocation profile standalone —
+// built-in defaults applied, no template context — so a dialect is valid on
+// its own like an image is, even before anything references it.
+func (v *validator) checkInvokeProfiles() {
+	for _, name := range sortedKeys(v.cfg.InvokeProfiles) {
+		ri := DefaultInvoke()
+		overlayInvoke(&ri, v.cfg.InvokeProfiles[name])
+		v.checkResolvedInvoke("invoke_profiles."+name, ri)
+	}
+}
+
+// checkResolvedInvoke folds a concrete profile's rule violations into the
+// collected report, prefixing each relative field path with the declaring
+// path (templates.<t>.invoke or invoke_profiles.<name>).
+func (v *validator) checkResolvedInvoke(path string, ri ResolvedInvoke) {
+	for _, fe := range ri.Violations() {
+		v.addf(path+"."+fe.Path, "%s", fe.Msg)
+	}
+}
+
 func (v *validator) checkTemplates() {
 	for _, name := range sortedKeys(v.cfg.Templates) {
 		t := v.cfg.Templates[name]
@@ -293,6 +315,7 @@ func (v *validator) checkTemplates() {
 		if t.Build != nil {
 			v.checkPin(path+".build.pin", t.Build.Pin)
 		}
+		v.checkInvoke(path, t)
 		v.checkIdentity(path, t)
 		v.checkHooks(path, t)
 		v.checkSkills(path, t)
@@ -366,6 +389,25 @@ func (v *validator) checkToolset(path string, t TemplateDef) {
 			v.addf(path+".image", "image %q has no packages (the toolset is the environment)", t.Image)
 		}
 	}
+}
+
+// checkInvoke validates a template's invoke: block: the named-profile
+// reference must resolve, and the EFFECTIVE profile — exactly the value
+// resolveInvoke compiles into the IR — must satisfy the invocation-profile
+// rules. Checking the resolved value (not the raw layers) is what lets an
+// inline override legitimately complete or correct a named profile.
+func (v *validator) checkInvoke(path string, t TemplateDef) {
+	if t.Invoke == nil {
+		return
+	}
+	if p := t.Invoke.Profile; p != "" {
+		if _, ok := v.cfg.InvokeProfiles[p]; !ok {
+			v.addf(path+".invoke.profile", "unknown invoke profile %q%s", p, didYouMean(p, sortedKeys(v.cfg.InvokeProfiles)))
+			return // the effective profile below would be checked against the wrong base
+		}
+	}
+	ri := resolveInvoke(v.cfg, t)
+	v.checkResolvedInvoke(path+".invoke", *ri)
 }
 
 // checkIdentity enforces the identity dual-mode: top-level identity: and

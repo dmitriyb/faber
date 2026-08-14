@@ -98,7 +98,7 @@ Structural, cross-reference, and vocabulary rules — all collected, none fatal-
   empty/absent `skills` leg (a discovery path pointing at nothing), is a violation.
   Field-pathed, collected.
 - Name discipline: step ids unique within a workflow (including inside loop
-  bodies); template/workflow/identity/image/skill/hook/source names non-empty and
+  bodies); template/workflow/identity/image/skill/hook/invoke-profile/source names non-empty and
   disjoint where referenced. Library keys, and every referenced name faber turns
   into a filesystem path component (most sharply a skill name, which run-prep
   stages under `<stage>/<name>`, but the same rule for image/hook/template/
@@ -116,9 +116,17 @@ Structural, cross-reference, and vocabulary rules — all collected, none fatal-
 - Reference existence (name level, over the merged libraries): every `use:` names a
   declared template or workflow; `template.image` names a declared image; each
   bare-name `template.hooks.*` names a declared hook; `template.identity`
-  (top-level or `run.identity`) names a declared identity; a generate's `source:`
+  (top-level or `run.identity`) names a declared identity; a
+  `template.invoke.profile` names a declared invoke profile; a generate's `source:`
   names a declared source and its `workflow:` a declared workflow; `depends_on`
   entries name step ids in the same scope.
+- **Invocation-profile rules** (over the *effective* profile — built-in default
+  ⊕ named profile ⊕ inline overrides — per referencing template, and standalone
+  per `invoke_profiles.<name>` with defaults applied): `skill_mode ∈ {prefix,
+  flag}`; `prompt_template` contains `{body}`; prefix mode reaches `{skill}` and
+  carries no `skill_flag`; flag mode names a non-empty `skill_flag` and keeps
+  `{skill}` out of the prompt template. See `arch_schema_types.md`
+  "Invocation profiles".
 - **Skills references — named mode only.** When `skills` is a **named list**, every
   `template.skills[*]` must name a declared skill AND the primary `template.skill`
   must be a member of that list (`template.skill ∈ template.skills`). When `skills`

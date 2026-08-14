@@ -9,7 +9,7 @@ expressed here, it is either mechanism (faber's job) or it does not exist.
 
 ## Top-level shape
 
-A `Config` is composed from a **project assembly** (the substrate) plus five
+A `Config` is composed from a **project assembly** (the substrate) plus six
 **named component libraries**. The project file carries the substrate and an
 `include:` list; each included file contributes library entries. All included
 files are merged into one flat `Config` before anything else runs (see
@@ -25,13 +25,14 @@ Config
 ├── Credentials  CredentialsDef    resolver command + per-service handle modes      │ (project
 ├── Identities   map[string]IdentityDef    role name -> key material source         │  assembly)
 ├── Images       map[string]ImageDef       NEW: named pure Nix toolsets            ┐┘
-├── Skills       map[string]SkillDef       NEW: named skill definitions            │ five named
+├── Skills       map[string]SkillDef       NEW: named skill definitions            │ six named
 ├── Hooks        map[string]HookDef        NEW: named hook executables             │ libraries
-├── Templates    map[string]TemplateDef    the boxes — composition nodes           │ (union-merged
-└── Workflows    map[string]WorkflowDef    the DAGs                                 ┘  across includes)
+├── InvokeProfiles map[string]InvokeProfileDef  named agent-CLI invocation dialects│ (union-merged
+├── Templates    map[string]TemplateDef    the boxes — composition nodes           │  across
+└── Workflows    map[string]WorkflowDef    the DAGs                                 ┘  includes)
 ```
 
-### The five libraries
+### The libraries
 
 ```
 ImageDef                      # a pure Nix toolset — exactly today's TemplateDef.Build
@@ -48,6 +49,17 @@ HookDef                       # a hook executable
 PinDef                        # an optional per-toolset nixpkgs snapshot
 ├── Rev      string           nixpkgs revision (commit or release tag)
 └── SHA256   string           fetchTarball hash
+
+InvokeProfileDef              # an agent-CLI invocation dialect (all fields optional; absent ⇒ built-in default)
+├── Subcommand     []string   argv tokens between the CLI and the prompt (default none)
+├── PromptFlag     *string    flag carrying the prompt (default "-p"; explicit "" ⇒ the prompt is a bare positional argument)
+├── SkillMode      string     prefix | flag (default prefix: the skill is injected into the prompt via {skill})
+├── SkillFlag      *string    the argument name carrying the skill when SkillMode is flag (explicit "" clears an inherited flag when overriding a profile to prefix mode)
+├── PromptTemplate string     template over {skill} {body} {extra} (default "/{skill}\n\n{body}{extra}")
+├── FixedFlags     []string   literal argv tail always appended (default ["--permission-mode", "bypassPermissions"]; explicit [] ⇒ none)
+├── ModelFlag      *string    flag for FABER_MODEL (default "--model"; explicit "" ⇒ the pair is never emitted)
+├── EffortFlag     *string    flag for FABER_EFFORT (default "--effort"; explicit "" ⇒ never emitted)
+└── BudgetFlag     *string    flag for FABER_MAX_BUDGET (default "--max-budget-usd"; explicit "" ⇒ never emitted)
 ```
 
 ### Optional per-image nixpkgs pin
@@ -83,10 +95,83 @@ the pin is now **user-supplied splice material** fed into infra's `fetchTarball`
 call — each value is charset-validated at the Loader (restricted to a safe charset),
 a field-pathed error on violation. See `impl_schema_structs.md`.
 
-`Images`, `Skills`, and `Hooks` are keyed by name; templates reference them by
-name. A library entry is inert data — faber never reads a `Dir`/`Path`/`Overlay`
-at load time; they are opaque paths resolved relative to the file that declared
-them (see "Path resolution", below).
+`Images`, `Skills`, `Hooks`, and `InvokeProfiles` are keyed by name; templates
+reference them by name. A library entry is inert data — faber never reads a
+`Dir`/`Path`/`Overlay` at load time; they are opaque paths resolved relative to
+the file that declared them (see "Path resolution", below).
+
+### Invocation profiles — the agent dialect as data
+
+The one nondeterministic phase of a box is a single headless agent-CLI
+invocation, and its *shape* — where the prompt rides, how the skill is
+activated, which flags carry model/effort/budget — is vendor dialect: policy,
+not mechanism. An `invoke_profiles:` entry makes that shape data. The engine
+keeps **zero vendor names**; it keeps one *anonymous built-in default* whose
+field values reproduce the previous hardcoded behavior byte-for-byte, and every
+other dialect (Goose, or anything else) ships as user configuration — never as
+an engine preset.
+
+```yaml
+invoke_profiles:
+  goose:                       # an example the USER writes; faber knows no vendor
+    subcommand: [run]
+    prompt_flag: -t
+    skill_mode: flag
+    skill_flag: --recipe
+    prompt_template: "{body}{extra}"
+    fixed_flags: []
+    effort_flag: ""            # this harness has no effort flag — the pair is dropped
+
+templates:
+  implementer:
+    invoke: {profile: goose}   # named ref; inline fields override field-by-field
+  reviewer: {}                 # no invoke: ⇒ the built-in default — IR byte-identical to before
+```
+
+A template opts in with `invoke:`: an optional `profile: <name>` reference into
+the library plus any inline `InvokeProfileDef` fields, which override the named
+profile's field-by-field; a template may also inline a full profile without
+naming one. Field-level absence is what layers: an *absent* field inherits
+(inline ← named profile ← built-in default), while an *explicitly empty* value
+is meaningful for the pointer/slice fields (`prompt_flag: ""` ⇒ positional
+prompt; `model_flag`/`effort_flag`/`budget_flag: ""` ⇒ the pair is never
+emitted; `fixed_flags: []` ⇒ no fixed tail; `skill_flag: ""` ⇒ clears an
+inherited flag, e.g. when overriding a flag-mode profile back to prefix mode). A template with no `invoke:` block
+gets the built-in default and emits IR byte-identical to before the field
+existed (golden-guarded).
+
+Because a template is a role's box, this is also the harness↔role wiring seam:
+one template runs one harness. The binary comes from the template's package set
+and `run.env.FABER_AGENT_CLI`, the dialect from `invoke:`, and any
+endpoint/provider configuration (e.g. a local or self-hosted endpoint) from the
+template's opaque `run.env` — so an `implementer` template can run one harness
+against a self-hosted endpoint while a `reviewer` template runs another, purely
+as config.
+
+Validation happens at `faber validate`, never mid-run, field-pathed and
+collected. Over each *effective* profile (defaults ⊕ named profile ⊕ inline
+overrides), both per referencing template (`templates.<t>.invoke…`) and
+standalone per library entry (`invoke_profiles.<name>…`, defaults applied — a
+library dialect must be valid on its own, like an image):
+
+- `templates.<t>.invoke.profile` must name a declared profile (dangling-ref
+  error with did-you-mean).
+- `skill_mode` must be `prefix` or `flag`.
+- the effective `prompt_template` must contain `{body}` (a prompt that cannot
+  carry the context bundle is never expandable).
+- `skill_mode: prefix` requires `{skill}` present in the effective
+  `prompt_template` (an unreachable skill is a dead template) and forbids
+  `skill_flag` (meaningful only in flag mode).
+- `skill_mode: flag` requires a non-empty `skill_flag` and forbids `{skill}` in
+  the effective `prompt_template` (the skill must be injected exactly once —
+  this also catches switching the mode while keeping the default template).
+
+Placeholders are the closed set `{skill}`/`{body}`/`{extra}`; any other braced
+text in `prompt_template` is opaque prompt bytes passed through verbatim. The
+resolved profile is compiled into the IR (`ResolvedTemplate.Invoke`) and rides
+to the box as the engine-owned `FABER_INVOKE_PROFILE` JSON — engine-owned like
+every `FABER_*` name, so template env may never set it (only
+`FABER_AGENT_CLI` is excepted there).
 
 ### TemplateDef — a composition node
 
@@ -103,9 +188,10 @@ TemplateDef  (named-reference form)
 ├── Skill     string               ref → Skills        the PRIMARY skill the box activates (/<skill>)
 ├── Skills    []string             refs → Skills       every skill delivered into the box (superset incl. Skill)
 ├── SkillsLink string              in-box $HOME-relative discovery path (was skills.link); required when Skills is non-empty
-├── Model     string               REQUIRED opaque agent pass-through (the box renders --model)
-├── Effort    string               REQUIRED opaque agent pass-through (the box renders --effort)
+├── Model     string               REQUIRED opaque agent pass-through (the box renders it via the profile's model flag)
+├── Effort    string               REQUIRED opaque agent pass-through (the box renders it via the profile's effort flag)
 ├── AgentOptional bool             agent_optional: the template's prelude may skip the agent (FABER_SKIP_AGENT=1 in bundle.env); default false — the agent runs
+├── Invoke    *InvokeDef           invoke: {profile: <name>, …inline overrides} — the agent-CLI dialect; absent ⇒ built-in default
 ├── Hooks     HookSet              {context, prelude, postlude, on_failure} — each a ref → Hooks
 ├── Run       RunDef               resources, runtime, env, volumes (+ Identity, back-compat)
 ├── Inputs    map[string]ParamDef  typed slots
@@ -146,9 +232,10 @@ TemplateDef  (inline form — current schema, still accepted)
 ├── Skills    *SkillsDef           inline {dir, link}             (instead of a name list + SkillsLink)
 │                                    dir = a skills-ROOT holding <name>/SKILL.md subtrees (see below)
 ├── Skill     string               the primary skill token (a free-form /<skill>, not a ref, in this mode)
-├── Model     string               REQUIRED opaque agent pass-through (the box renders --model)
-├── Effort    string               REQUIRED opaque agent pass-through (the box renders --effort)
+├── Model     string               REQUIRED opaque agent pass-through (the box renders it via the profile's model flag)
+├── Effort    string               REQUIRED opaque agent pass-through (the box renders it via the profile's effort flag)
 ├── AgentOptional bool             agent_optional: prelude-skippable agent (shared with the named form)
+├── Invoke    *InvokeDef           invoke: — shared with the named form (a full inline profile needs no profile: name)
 ├── Run.Identity string            identity (instead of top-level Identity)
 ├── Inputs / Output                unchanged
 ```
@@ -162,6 +249,12 @@ Exclusivity — a template may not mix inline and named for the *same aspect*
 | skills | `skills: [<name>…]` (+ `skills_link`) | `skills: {dir, link}` | `skills` list *and* mapping — impossible in one node; `skills_link` set alongside inline `{dir,link}`; **`skills_link` set with an empty/absent `skills` leg** (a dangling discovery path with nothing to deliver) |
 | hooks (per field) | bare name → Hooks | path (contains `/`, or begins `.`/`~`/`/`) | a bare name that resolves to no hook is a dangling-ref error, never a silent path |
 | identity | top-level `identity: <name>` | `run.identity: <name>` | both set |
+
+The `invoke:` aspect is deliberately **not** exclusivity-checked: `profile:
+<name>` and inline fields compose (inline overrides the named profile
+field-by-field) instead of excluding each other, because a dialect tweak
+("same harness, no budget flag") is an override, not a second form. See
+"Invocation profiles" above.
 
 **Spelling asymmetry (intentional, verdict: correct).** The named form carries
 the discovery path as the top-level template field `skills_link`, while the inline

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -137,6 +138,38 @@ func TestBuildRunSpecModelEffortPassThrough(t *testing.T) {
 	}
 	if got := rs.Env[contract.EnvEffort]; got != "high" {
 		t.Errorf("env[%s] = %q, want %q", contract.EnvEffort, got, "high")
+	}
+}
+
+// Verifies ae434449cac9: a resolved invocation profile reaches the box env
+// as its exact JSON (a decode round-trips to the same value), and a template
+// without one emits no variable at all — the box's built-in default is the
+// only fallback, so pre-profile templates produce byte-identical run specs.
+func TestBuildRunSpecInvokeProfile(t *testing.T) {
+	spec := validSpec()
+	rs, err := BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := rs.Env[contract.EnvInvokeProfile]; ok {
+		t.Fatalf("env[%s] = %q, want absent without a template invoke block", contract.EnvInvokeProfile, v)
+	}
+
+	spec = validSpec()
+	ri := config.DefaultInvoke()
+	ri.Subcommand = []string{"run"}
+	ri.EffortFlag = ""
+	spec.Template.Invoke = &ri
+	rs, err = BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got config.ResolvedInvoke
+	if err := json.Unmarshal([]byte(rs.Env[contract.EnvInvokeProfile]), &got); err != nil {
+		t.Fatalf("env[%s] is not the profile JSON: %v", contract.EnvInvokeProfile, err)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(ri) {
+		t.Fatalf("decoded profile = %+v, want %+v", got, ri)
 	}
 }
 

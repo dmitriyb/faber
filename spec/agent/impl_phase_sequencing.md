@@ -37,6 +37,7 @@ type BoxEnv struct {
     SkillsLink           string            // FABER_SKILLS_LINK; $HOME-relative path to symlink at /faber/skills, empty = no skills leg
     SecretsStdin         bool              // FABER_SECRETS_STDIN=1; file-mode tokens arrive on stdin for phase 3 to materialize
     AgentOptional        bool              // FABER_AGENT_OPTIONAL=1; the template declares itself agent-skippable (exact "1", like TOFU)
+    Invoke               config.ResolvedInvoke // FABER_INVOKE_PROFILE (concrete JSON); absent/empty ⇒ config.DefaultInvoke(); malformed or rule-breaking ⇒ env-phase violation
     Slots                []string          // FABER_INPUT_SLOTS; declared slot names, for the slot-keyed handoff
     // FABER_CONTRACT_VERSION is validated by the env phase (see the contract
     // version handshake in impl_hook_result_contracts.md)
@@ -250,25 +251,43 @@ type CmdResult struct{ Stdout []byte; StderrTail []byte; ExitCode int }
 
 ## AgentInvoker
 
+A pure expander over the concrete invocation profile (see
+`arch_agent_invoker.md`) — no vendor literal in the file:
+
 ```go
 type Invocation struct {
-    CLI    string // agent binary name; must be in the template's package set
-    Skill  string
-    Body   string // CONTEXT.md bytes, verbatim
+    CLI     string                // agent binary name; must be in the template's package set
+    Profile config.ResolvedInvoke // concrete dialect from BoxEnv (default when the env var was absent)
+    Skill   string
+    Body    string                // CONTEXT.md bytes, verbatim
     Extra, Model, Effort, MaxBudget string
 }
 
-func (i Invocation) Prompt() string // "/"+Skill+"\n\n"+Body [+ trailer]
+// Prompt expands Profile.PromptTemplate over {skill}, {body}, {extra} via
+// strings.Replacer — substituted text is never re-scanned, so bundle bytes
+// cannot inject into the template. {extra} is the ADDITIONAL INSTRUCTION
+// trailer, or empty.
+func (i Invocation) Prompt() string
 
 func (i Invocation) Argv() []string {
-    argv := []string{i.CLI, "-p", i.Prompt(),
-        "--permission-mode", "bypassPermissions"}
-    if i.Model != ""     { argv = append(argv, "--model", i.Model) }
-    if i.Effort != ""    { argv = append(argv, "--effort", i.Effort) }
-    if i.MaxBudget != "" { argv = append(argv, "--max-budget-usd", i.MaxBudget) }
+    p := i.Profile
+    argv := append([]string{i.CLI}, p.Subcommand...)
+    if p.PromptFlag != "" { argv = append(argv, p.PromptFlag) } // "" ⇒ positional prompt
+    argv = append(argv, i.Prompt())
+    if p.SkillMode == config.SkillModeFlag { argv = append(argv, p.SkillFlag, i.Skill) }
+    argv = append(argv, p.FixedFlags...)
+    // A pair is emitted only when BOTH the profile flag and the value are set.
+    if p.ModelFlag != "" && i.Model != ""       { argv = append(argv, p.ModelFlag, i.Model) }
+    if p.EffortFlag != "" && i.Effort != ""     { argv = append(argv, p.EffortFlag, i.Effort) }
+    if p.BudgetFlag != "" && i.MaxBudget != ""  { argv = append(argv, p.BudgetFlag, i.MaxBudget) }
     return argv
 }
 ```
+
+A byte-for-byte table test pins the default profile's argv and prompt to the
+historical output (`agent-cli -p /skill\n\nbody --permission-mode
+bypassPermissions …`), so the profile mechanism can never drift the default
+dialect.
 
 `runAgent` builds the Invocation from `BoxEnv` + `Bundle.Doc`, merges the
 bundle sidecar values into the child environment, and calls `Runner.Stream`

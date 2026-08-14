@@ -131,6 +131,24 @@ mounts, and the env contract is set directly.)
     under the process `HOME`; unset, no `$HOME/.claude` is created and the phase
     is a no-op. The `link` value is honored verbatim — nothing asserts `.claude`
     beyond the fixture's own config.
+18. **Invocation profile expansion.** A byte-for-byte table test pins the
+    default profile's prompt and argv to the historical output — prompt
+    `/skill\n\nbody[\n\nADDITIONAL INSTRUCTION: …]`, argv `agent-cli -p
+    <prompt> --permission-mode bypassPermissions [--model …] [--effort …]
+    [--max-budget-usd …]` — so the expander can never drift the default
+    dialect. A non-default profile (subcommand, positional prompt via
+    `prompt_flag: ""`, `skill_mode: flag`, empty `fixed_flags`, an empty
+    `effort_flag` dropping the pair) expands to exactly the profile's shape:
+    the skill rides its flag and appears nowhere in the prompt, the effort
+    pair is absent though `FABER_EFFORT` is set. Prompt expansion is
+    injection-proof: a `{skill}`/`{extra}` literal inside the bundle body
+    survives verbatim, never re-expanded. End to end through the sequencer:
+    with `FABER_INVOKE_PROFILE` set to a non-default profile the stub's
+    recorded argv matches that dialect; with the variable absent the recorded
+    argv takes the default dialect's shape — the byte-identity itself is what
+    the unit-level table test above pins, on the same code path; with malformed JSON
+    (or a profile violating the template rules) the env phase fails the step
+    before any phase below runs.
 
 ## Edge cases
 

@@ -26,40 +26,63 @@ The sidecar key is consumed by the engine (it is FABER-namespaced and never
 exported into any child environment); any value other than `1` is a bundle
 contract error.
 
+## The invocation profile
+
+The invocation's *shape* is data, not code: a concrete invocation profile —
+compiled by config from `invoke_profiles:` / a template's `invoke:` block and
+delivered as the engine-owned `FABER_INVOKE_PROFILE` JSON — tells the invoker
+where the prompt rides, how the skill is activated, and which flags carry
+model/effort/budget. The invoker is a pure expander over it; **no vendor
+literal appears in the phase**. When the variable is absent or empty (direct
+sequencer invocations, pre-profile hosts) the box uses the anonymous built-in
+default profile, whose field values reproduce the historical behavior
+byte-for-byte (a pinned table test guards the bytes).
+
 ## Prompt assembly
 
-The prompt is three parts, concatenated with blank-line separators:
+The prompt is the profile's `prompt_template` expanded over the closed
+placeholder set — under the default template, byte-identical to the historical
+three-part prompt:
 
 ```
-/<skill>
-
-<contents of $FABER_BUNDLE_DIR/CONTEXT.md>
-
-ADDITIONAL INSTRUCTION: <FABER_EXTRA_INSTRUCTION>     (only when set)
+{skill}  ->  the configured skill token (default template renders it as the
+             leading /<skill> slash-command line; a flag-mode profile carries
+             it as a separate argument instead and omits it here)
+{body}   ->  <contents of $FABER_BUNDLE_DIR/CONTEXT.md>, verbatim
+{extra}  ->  "\n\nADDITIONAL INSTRUCTION: <FABER_EXTRA_INSTRUCTION>", or empty
 ```
 
-The leading slash-command line activates the configured skill; the bundle body
-is passed verbatim (the hooks authored it, faber does not touch it); the
-optional trailer is an operator note passed through the box environment for a
-single run — clearly delimited so the skill can weigh it against its own
-instructions.
+The bundle body is passed verbatim (the hooks authored it, faber does not
+touch it — substituted text is never re-scanned for placeholders, so bundle
+bytes can never inject into the template); the optional trailer is an operator
+note passed through the box environment for a single run — clearly delimited
+so the skill can weigh it against its own instructions.
 
 ## Invocation
 
 The invoker executes the agent CLI (the binary is part of the template's
-package set — validate-time package proof guarantees it resolves) with:
+package set — validate-time package proof guarantees it resolves) with the
+profile-expanded argv:
 
 ```
-<agent-cli> -p <prompt> --permission-mode bypassPermissions
-            [--model <FABER_MODEL>] [--effort <FABER_EFFORT>]
-            [--max-budget-usd <FABER_MAX_BUDGET>]
+<agent-cli> <subcommand…> [<prompt_flag>] <expanded prompt>
+            [<skill_flag> <skill>]                 (skill_mode: flag only)
+            <fixed_flags…>
+            [<model_flag> <FABER_MODEL>] [<effort_flag> <FABER_EFFORT>]
+            [<budget_flag> <FABER_MAX_BUDGET>]
 ```
 
-Model, effort level and budget bound are pass-throughs from config; when unset
-the flags are omitted. Config validation makes model and effort mandatory per
-template — the agent's cost/quality knobs are pinned in config, never left to
-float on a vendor default — so in engine-launched boxes both flags are always
-present; the omission path serves direct sequencer invocations. The working directory is the workspace; the environment is
+Under the default profile that is exactly the historical
+`<agent-cli> -p <prompt> --permission-mode bypassPermissions [--model …]
+[--effort …] [--max-budget-usd …]`. An empty `prompt_flag` makes the prompt a
+bare positional argument. Model, effort level and budget bound are
+pass-throughs from config; a pair is omitted when its value is unset *or* its
+profile flag is empty (a harness without that knob). Config validation makes
+model and effort mandatory per template — the agent's cost/quality knobs are
+pinned in config, never left to float on a vendor default — so in
+engine-launched boxes both values are always present; the omission paths serve
+direct sequencer invocations and knob-less harnesses. The working directory is
+the workspace; the environment is
 the box environment plus the bundle's sidecar values, so anything the prelude
 derived (the branch name, a resolved record id) is visible to the skill.
 stdout and stderr stream to the container's log — they are never parsed. The

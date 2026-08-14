@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // IRVersion is the major IR version this package emits. Desugaring is
@@ -129,8 +130,15 @@ type ResolvedTemplate struct {
 	Env       map[string]string `json:"env,omitempty"`
 	Volumes   map[string]string `json:"volumes,omitempty"`
 	Skill     string            `json:"skill"`
-	Model     string            `json:"model"`  // mandatory opaque agent pass-through (the box renders --model)
-	Effort    string            `json:"effort"` // mandatory opaque agent pass-through (the box renders --effort)
+	Model     string            `json:"model"`  // mandatory opaque agent pass-through (rendered via the profile's model flag)
+	Effort    string            `json:"effort"` // mandatory opaque agent pass-through (rendered via the profile's effort flag)
+	// Invoke is the concrete invocation dialect the box expands, resolved at
+	// desugar (built-in default ⊕ named profile ⊕ inline overrides — the box
+	// never re-derives a field default). omitempty: a template without an
+	// invoke: block emits IR bytes identical to before the field existed, and
+	// changing a profile changes the IR hash — resume then refuses (drift)
+	// rather than silently re-dialecting a resumed step's agent.
+	Invoke *ResolvedInvoke `json:"invoke,omitempty"`
 	// AgentOptional carries the template's agent-skippable opt-in into the
 	// box env contract. omitempty: a template without the opt-in emits IR
 	// bytes identical to before the field existed, and flipping it changes
@@ -141,6 +149,84 @@ type ResolvedTemplate struct {
 	Skills        *ResolvedSkills     `json:"skills,omitempty"` // optional skill-definition delivery; nil = no skills leg
 	Inputs        map[string]ParamDef `json:"inputs"`
 	Output        map[string]FieldDef `json:"output"`
+}
+
+// Skill placement modes of an invocation profile.
+const (
+	SkillModePrefix = "prefix" // the skill is injected into the prompt via {skill}
+	SkillModeFlag   = "flag"   // the skill rides its own argument pair (SkillFlag, skill)
+)
+
+// ResolvedInvoke is a concrete, fully-defaulted agent-CLI invocation dialect —
+// every field final, no layering left. It serializes twice under the same JSON
+// tags: into the IR on ResolvedTemplate.Invoke, and over the box env contract
+// as the FABER_INVOKE_PROFILE payload the in-container expander consumes.
+type ResolvedInvoke struct {
+	Subcommand     []string `json:"subcommand,omitempty"`  // argv tokens between the CLI and the prompt
+	PromptFlag     string   `json:"prompt_flag,omitempty"` // "" ⇒ the prompt is a bare positional argument
+	SkillMode      string   `json:"skill_mode"`            // prefix | flag
+	SkillFlag      string   `json:"skill_flag,omitempty"`  // the skill's argument name in flag mode
+	PromptTemplate string   `json:"prompt_template"`       // over {skill} {body} {extra}
+	FixedFlags     []string `json:"fixed_flags,omitempty"` // literal argv tail always appended
+	ModelFlag      string   `json:"model_flag,omitempty"`  // "" ⇒ the pair is never emitted
+	EffortFlag     string   `json:"effort_flag,omitempty"` // "" ⇒ never emitted
+	BudgetFlag     string   `json:"budget_flag,omitempty"` // "" ⇒ never emitted
+}
+
+// DefaultInvoke is the anonymous built-in invocation dialect: its field values
+// reproduce the invocation the engine emitted before profiles existed,
+// byte-for-byte (pinned by a table test in the agent module). It lives in
+// config because both altitudes consume it — desugar seeds profile layering
+// with it, and the box falls back to it when FABER_INVOKE_PROFILE is absent —
+// so the compiled profile and the direct-invocation fallback can never drift.
+func DefaultInvoke() ResolvedInvoke {
+	return ResolvedInvoke{
+		PromptFlag:     "-p",
+		SkillMode:      SkillModePrefix,
+		PromptTemplate: "/{skill}\n\n{body}{extra}",
+		FixedFlags:     []string{"--permission-mode", "bypassPermissions"},
+		ModelFlag:      "--model",
+		EffortFlag:     "--effort",
+		BudgetFlag:     "--max-budget-usd",
+	}
+}
+
+// Violations reports the invocation-profile rules a concrete profile breaks,
+// each as a profile-relative field path plus message: the skill-mode enum, a
+// prompt template that can carry the context bundle ({body}), and skill
+// injection happening exactly once — via the prompt in prefix mode, via the
+// flag pair in flag mode. The single source for both altitudes: the Loader's
+// validate-time checks (prefixed with the declaring field path) and the box's
+// env phase (a run-time guard for direct sequencer invocations, so a
+// rule-breaking hand-authored FABER_INVOKE_PROFILE fail-stops instead of
+// expanding nonsense).
+func (ri ResolvedInvoke) Violations() []FieldError {
+	var out []FieldError
+	add := func(path, format string, args ...any) {
+		out = append(out, FieldError{Path: path, Msg: fmt.Sprintf(format, args...)})
+	}
+	switch ri.SkillMode {
+	case SkillModePrefix:
+		if !strings.Contains(ri.PromptTemplate, "{skill}") {
+			add("prompt_template", "skill_mode %q requires {skill} in the prompt template (the skill would be unreachable)", SkillModePrefix)
+		}
+		if ri.SkillFlag != "" {
+			add("skill_flag", "only meaningful with skill_mode %q", SkillModeFlag)
+		}
+	case SkillModeFlag:
+		if ri.SkillFlag == "" {
+			add("skill_flag", "required with skill_mode %q", SkillModeFlag)
+		}
+		if strings.Contains(ri.PromptTemplate, "{skill}") {
+			add("prompt_template", "skill_mode %q forbids {skill} in the prompt template (the skill is injected exactly once, via the flag pair); set a prompt_template without it", SkillModeFlag)
+		}
+	default:
+		add("skill_mode", "unknown mode %q (legal: %s, %s)", ri.SkillMode, SkillModePrefix, SkillModeFlag)
+	}
+	if !strings.Contains(ri.PromptTemplate, "{body}") {
+		add("prompt_template", "must contain {body} (the prompt cannot carry the context bundle without it)")
+	}
+	return out
 }
 
 // ResolvedSkills is the resolved source side of a template's skills leg. Exactly

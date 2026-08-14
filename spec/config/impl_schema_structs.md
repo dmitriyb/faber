@@ -15,6 +15,7 @@ type Config struct {
     Images      map[string]ImageDef    `yaml:"images"`       // library: union-merged
     Skills      map[string]SkillDef    `yaml:"skills"`       // library: union-merged
     Hooks       map[string]HookDef     `yaml:"hooks"`        // library: union-merged
+    InvokeProfiles map[string]InvokeProfileDef `yaml:"invoke_profiles"` // library: union-merged
     Templates   map[string]TemplateDef `yaml:"templates"`    // library: union-merged
     Workflows   map[string]WorkflowDef `yaml:"workflows"`    // library: union-merged
 }
@@ -43,6 +44,32 @@ type HookDef struct {
 type PinDef struct {
     Rev    string `yaml:"rev"`    // nixpkgs revision (commit or release tag); Loader-charset-checked
     SHA256 string `yaml:"sha256"` // fetchTarball hash; Loader-charset-checked
+}
+
+// InvokeProfileDef is a named agent-CLI invocation dialect. Pointer/slice
+// carriers make field-level absence first-class, because absence is what layers
+// (inline ← named profile ← built-in default) while an EXPLICIT empty value is
+// itself meaningful: prompt_flag: "" makes the prompt a bare positional
+// argument; model_flag/effort_flag/budget_flag: "" omit the pair entirely (a
+// harness without that knob); fixed_flags: [] appends no fixed tail. All values
+// are opaque argv/prompt material — faber never interprets them.
+type InvokeProfileDef struct {
+    Subcommand     []string `yaml:"subcommand"`      // argv tokens between the CLI and the prompt
+    PromptFlag     *string  `yaml:"prompt_flag"`     // nil ⇒ "-p"
+    SkillMode      string   `yaml:"skill_mode"`      // prefix | flag; "" ⇒ prefix
+    SkillFlag      *string  `yaml:"skill_flag"`      // required (and only legal) in flag mode; explicit "" clears an inherited flag when overriding to prefix mode
+    PromptTemplate string   `yaml:"prompt_template"` // over {skill} {body} {extra}; "" ⇒ "/{skill}\n\n{body}{extra}"
+    FixedFlags     []string `yaml:"fixed_flags"`     // nil ⇒ ["--permission-mode", "bypassPermissions"]
+    ModelFlag      *string  `yaml:"model_flag"`      // nil ⇒ "--model"
+    EffortFlag     *string  `yaml:"effort_flag"`     // nil ⇒ "--effort"
+    BudgetFlag     *string  `yaml:"budget_flag"`     // nil ⇒ "--max-budget-usd"
+}
+
+// InvokeDef is a template's invoke: block: an optional named-profile reference
+// plus inline overrides — deliberately composable, not dual-mode-exclusive.
+type InvokeDef struct {
+    Profile          string `yaml:"profile"` // ref -> InvokeProfiles; "" ⇒ overrides apply directly to the default
+    InvokeProfileDef `yaml:",inline"`
 }
 
 type NetworkDef struct {
@@ -88,6 +115,7 @@ type TemplateDef struct {
     Model  string              `yaml:"model"`  // agent model id; REQUIRED, opaque pass-through (box renders --model)
     Effort string              `yaml:"effort"` // agent effort level; REQUIRED, opaque pass-through (box renders --effort)
     AgentOptional bool         `yaml:"agent_optional"` // the prelude may skip the agent; default false (the agent runs)
+    Invoke *InvokeDef          `yaml:"invoke"` // agent-CLI dialect: {profile: <name>, …inline overrides}; nil ⇒ built-in default
     Hooks  HookSet             `yaml:"hooks"`  // each value: a hook NAME (bare) or a PATH (has separator)
     Skills SkillsRef           `yaml:"-"`      // sequence of names OR inline {dir,link}; set by UnmarshalYAML
     Inputs map[string]ParamDef `yaml:"inputs"`
@@ -308,9 +336,25 @@ so tests assert them independently. The dual-mode and library checks:
 - **Model and effort are mandatory.** Every template declares non-empty `model`
   and `effort`, field-pathed (`templates.review.model: required`). Both values
   are opaque pass-throughs — vendor vocabulary faber never interprets; the box
-  renders them as `--model` / `--effort` on the agent argv. Requiring them at
+  renders them through the invocation profile's model/effort flags (default
+  `--model` / `--effort`) on the agent argv. Requiring them at
   validate time pins the agent's cost/quality knobs in config instead of letting
-  them float on whatever the installed agent CLI defaults to that week.
+  them float on whatever the installed agent CLI defaults to that week. (A
+  harness with no such flag drops the *pair* via `model_flag`/`effort_flag: ""`
+  in its profile; the template still declares the values.)
+- **Invocation profiles.** `templates.<t>.invoke.profile` must name a declared
+  `invoke_profiles` entry (dangling-ref error with did-you-mean). The
+  *effective* profile — built-in defaults overlaid with the named profile's set
+  fields, then the inline overrides — is checked per template at
+  `templates.<t>.invoke…`, and each library entry is checked standalone
+  (defaults applied) at `invoke_profiles.<name>…`, so an unreferenced dialect is
+  still valid on its own. Checks on the effective value: `skill_mode ∈ {prefix,
+  flag}`; `prompt_template` contains `{body}`; prefix mode requires `{skill}`
+  in the template and forbids `skill_flag`; flag mode requires a non-empty
+  `skill_flag` and forbids `{skill}` in the template (the skill is injected
+  exactly once — this also catches flipping the mode while keeping the default
+  template). Profile names ride the same name discipline (`safeName`) and
+  assembly duplicate detection as every other library.
 - **Substrate placement.** A substrate key on an included (non-root) file is a
   violation (`<file>: included files may only contribute libraries`).
 

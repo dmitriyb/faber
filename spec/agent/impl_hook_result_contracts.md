@@ -93,6 +93,12 @@ faber-box ships from the host as the same build, any mismatch is a
 box-binary-misconfiguration detector (a stale or foreign sequencer via the host config's `box_bin`) —
 not a migration path.
 
+`FABER_INVOKE_PROFILE` (the concrete invocation-profile JSON) is the worked
+example of the additive rule: an env variable whose absence the box tolerates
+with a defined default (the built-in dialect) does **not** bump the version —
+an old box under a new host ignores the unknown variable, and a new box under
+an old host falls back to the default.
+
 ## Result emission (internal/agent/result.go)
 
 ```go

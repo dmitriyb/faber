@@ -51,6 +51,7 @@ workflows:
 func TestAssembleIncludeMerge(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "images.yaml", "images:\n  base: {packages: [git]}\n")
+	writeFile(t, dir, "profiles.yaml", "invoke_profiles:\n  quiet: {subcommand: [run]}\n")
 	writeFile(t, dir, "templates.yaml", `
 templates:
   box:
@@ -59,17 +60,21 @@ templates:
     skill: act
     model: agent-model
     effort: high
+    invoke: {profile: quiet}
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
 `)
 	writeFile(t, dir, "workflows.yaml", fragWorkflows)
 	root := writeFile(t, dir, "orchestrator.yaml", `
 version: 1
-include: [images.yaml, templates.yaml, workflows.yaml]
+include: [images.yaml, profiles.yaml, templates.yaml, workflows.yaml]
 `)
 	cfg := mustLoad(t, root)
 	if _, ok := cfg.Images["base"]; !ok {
 		t.Fatal("images.base not merged from fragment")
+	}
+	if _, ok := cfg.InvokeProfiles["quiet"]; !ok {
+		t.Fatal("invoke_profiles.quiet not merged")
 	}
 	if _, ok := cfg.Templates["box"]; !ok {
 		t.Fatal("templates.box not merged")
@@ -78,7 +83,7 @@ include: [images.yaml, templates.yaml, workflows.yaml]
 		t.Fatal("workflows.flow not merged")
 	}
 
-	// Equivalent single-file config with the inline build: form.
+	// Equivalent single-file config with the inline build: and invoke: forms.
 	single := writeFile(t, t.TempDir(), "orchestrator.yaml", `
 version: 1
 templates:
@@ -88,6 +93,7 @@ templates:
     skill: act
     model: agent-model
     effort: high
+    invoke: {subcommand: [run]}
     inputs: {input: {type: string, required: true}}
     output: {result: {type: string, required: true}}
 `+fragWorkflows)
@@ -113,8 +119,8 @@ templates:
 // (not a hard stop, since a duplicate still yields a mergeable Config).
 func TestAssembleDuplicateKeyAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
-	a := writeFile(t, dir, "a.yaml", "templates:\n  review: {image: base, skill: a}\n")
-	b := writeFile(t, dir, "b.yaml", "templates:\n  review: {image: base, skill: b}\n")
+	a := writeFile(t, dir, "a.yaml", "templates:\n  review: {image: base, skill: a}\ninvoke_profiles:\n  quiet: {subcommand: [run]}\n")
+	b := writeFile(t, dir, "b.yaml", "templates:\n  review: {image: base, skill: b}\ninvoke_profiles:\n  quiet: {subcommand: [go]}\n")
 	root := writeFile(t, dir, "orchestrator.yaml", "version: 1\ninclude: [a.yaml, b.yaml]\n")
 
 	cfg, viols, err := Load(root)
@@ -125,9 +131,9 @@ func TestAssembleDuplicateKeyAcrossFiles(t *testing.T) {
 		t.Fatal("duplicate key across files must be recorded as a violation")
 	}
 	joined := Validate(cfg, viols).Error()
-	if !strings.Contains(joined, "templates.review") ||
+	if !strings.Contains(joined, "templates.review") || !strings.Contains(joined, "invoke_profiles.quiet") ||
 		!strings.Contains(joined, filepath.Base(a)) || !strings.Contains(joined, filepath.Base(b)) {
-		t.Fatalf("duplicate violation must name both files, got:\n%s", joined)
+		t.Fatalf("duplicate violations must cover every library and name both files, got:\n%s", joined)
 	}
 }
 

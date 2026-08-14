@@ -106,10 +106,11 @@ func (a *assembler) assemble(readPath string, isRoot bool, stack []string) error
 		})
 	}
 
-	// Union-merge the five named libraries with per-key provenance.
+	// Union-merge the six named libraries with per-key provenance.
 	mergeLib(a, readPath, "images", cfg.Images, &a.result.Images)
 	mergeLib(a, readPath, "skills", cfg.Skills, &a.result.Skills)
 	mergeLib(a, readPath, "hooks", cfg.Hooks, &a.result.Hooks)
+	mergeLib(a, readPath, "invoke_profiles", cfg.InvokeProfiles, &a.result.InvokeProfiles)
 	mergeLib(a, readPath, "templates", cfg.Templates, &a.result.Templates)
 	mergeLib(a, readPath, "workflows", cfg.Workflows, &a.result.Workflows)
 
