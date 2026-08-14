@@ -215,6 +215,21 @@ func TestCLIRunEntry(t *testing.T) {
 		}
 	})
 
+	t.Run("--sessions threads into the run options", func(t *testing.T) {
+		exec := &fakeExecutor{}
+		code, _, stderr := runCLI(t, Deps{Executor: exec}, "run", "task",
+			"--config", "testdata/reference.yaml", "--param", "repo=sandbox", "--param", "item=I-1", "--sessions")
+		if code != 0 || !exec.opts.Sessions {
+			t.Fatalf("got %d (%+v): %s", code, exec.opts, stderr)
+		}
+		exec = &fakeExecutor{}
+		code, _, _ = runCLI(t, Deps{Executor: exec}, "run", "task",
+			"--config", "testdata/reference.yaml", "--param", "repo=sandbox", "--param", "item=I-1")
+		if code != 0 || exec.opts.Sessions {
+			t.Fatalf("sessions must default off, got %+v", exec.opts)
+		}
+	})
+
 	t.Run("empty string is presence, not truthiness", func(t *testing.T) {
 		exec := &fakeExecutor{}
 		code, _, stderr := runCLI(t, Deps{Executor: exec}, "run", "task",
@@ -339,6 +354,46 @@ func TestCLIResumeGuard(t *testing.T) {
 		code, _, _ := runCLI(t, Deps{Journal: fakeJournal{h}, Executor: exec}, "resume", "r-1", "--interactive", "task/merge")
 		if code != 0 || exec.opts.Mode != "interactive" || exec.opts.InteractiveStep != "task/merge" {
 			t.Fatalf("got %d (%+v)", code, exec.opts)
+		}
+		if exec.opts.InteractiveShell {
+			t.Fatal("--shell must default off")
+		}
+	})
+
+	t.Run("sessions and shell flags thread into the options", func(t *testing.T) {
+		h := header
+		h.IRHash = goodHash
+		exec := &fakeExecutor{}
+		code, _, _ := runCLI(t, Deps{Journal: fakeJournal{h}, Executor: exec},
+			"resume", "r-1", "--sessions", "--interactive", "task/merge", "--shell")
+		if code != 0 || !exec.opts.Sessions || !exec.opts.InteractiveShell {
+			t.Fatalf("got %d (%+v)", code, exec.opts)
+		}
+	})
+
+	t.Run("a capturing run keeps capturing across resume and --fresh", func(t *testing.T) {
+		h := header
+		h.IRHash, h.Sessions = goodHash, true
+		exec := &fakeExecutor{}
+		code, _, _ := runCLI(t, Deps{Journal: fakeJournal{h}, Executor: exec}, "resume", "r-1")
+		if code != 0 || !exec.opts.Sessions {
+			t.Fatalf("plain resume of a --sessions run must keep capture, got %+v", exec.opts)
+		}
+		exec = &fakeExecutor{}
+		code, _, _ = runCLI(t, Deps{Journal: fakeJournal{h}, Executor: exec}, "resume", "r-1", "--fresh")
+		if code != 0 || !exec.opts.Sessions {
+			t.Fatalf("--fresh restart of a --sessions run must keep capture (like the name), got %+v", exec.opts)
+		}
+	})
+
+	t.Run("--shell without --interactive is a usage error", func(t *testing.T) {
+		exec := &fakeExecutor{}
+		code, _, stderr := runCLI(t, Deps{Journal: fakeJournal{header}, Executor: exec}, "resume", "r-1", "--shell")
+		if code != 2 || !strings.Contains(stderr, "--shell is meaningful only with --interactive") {
+			t.Fatalf("got %d: %s", code, stderr)
+		}
+		if exec.called {
+			t.Fatal("a usage error must not execute")
 		}
 	})
 }

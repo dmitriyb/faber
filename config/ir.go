@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 )
@@ -171,6 +172,8 @@ type ResolvedInvoke struct {
 	ModelFlag      string   `json:"model_flag,omitempty"`  // "" ⇒ the pair is never emitted
 	EffortFlag     string   `json:"effort_flag,omitempty"` // "" ⇒ never emitted
 	BudgetFlag     string   `json:"budget_flag,omitempty"` // "" ⇒ never emitted
+	SessionDir     string   `json:"session_dir,omitempty"` // $HOME-relative transcript dir; "" ⇒ no session capture
+	ResumeArgv     []string `json:"resume_argv,omitempty"` // session-resuming argv; empty ⇒ shell-only re-entry
 }
 
 // DefaultInvoke is the anonymous built-in invocation dialect: its field values
@@ -225,6 +228,27 @@ func (ri ResolvedInvoke) Violations() []FieldError {
 	}
 	if !strings.Contains(ri.PromptTemplate, "{body}") {
 		add("prompt_template", "must contain {body} (the prompt cannot carry the context bundle without it)")
+	}
+	// The session dialect: the capture bind lands at $HOME/<session_dir>, so
+	// the path must stay strictly inside the box HOME — never absolute, never
+	// climbing out, never HOME itself (a bind over the whole tmpfs).
+	if d := ri.SessionDir; d != "" {
+		switch {
+		case strings.HasPrefix(d, "/"):
+			add("session_dir", "must be relative to $HOME, not absolute: %q", d)
+		case hasDotDotSegment(d):
+			add("session_dir", "must not contain a %q path segment: %q", "..", d)
+		case path.Clean(d) == ".":
+			add("session_dir", "must name a proper subpath of $HOME, not $HOME itself: %q", d)
+		}
+	}
+	if len(ri.ResumeArgv) > 0 && ri.SessionDir == "" {
+		add("resume_argv", "requires a session_dir in the same effective profile (there is no session it could resume)")
+	}
+	for i, tok := range ri.ResumeArgv {
+		if tok == "" {
+			add(fmt.Sprintf("resume_argv[%d]", i), "empty argv token")
+		}
 	}
 	return out
 }

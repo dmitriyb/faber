@@ -127,3 +127,12 @@ func Interactive(ctx context.Context, runDir, stepID string, deps Deps) error
    the record's handoff directory mounted read-only at a well-known path.
 4. On shell exit: BindingSet teardown hooks run unconditionally; nothing is
    appended to the journal; exit code is the shell's.
+
+The `Store.Interactive` gate carries the operator's `--shell` choice through
+`InteractiveTarget.Shell` to the box-reconstruction seam. The entry-program
+choice itself is the seam's (pipeline's) business: shell when `Shell` is set,
+when the failed attempt saved no session, or when the profile defines no
+`resume_argv`; otherwise the profile's session-resuming argv over a copy of
+the saved session (spec/pipeline/impl_scheduling.md, "Session-resuming
+interactive re-entry"). This module only plumbs the flag and the target —
+observation-not-execution is unchanged either way.

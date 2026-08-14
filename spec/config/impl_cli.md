@@ -217,6 +217,21 @@ invocations are byte-identical — and threads the journaled name back as
 `RunOptions.Name`, which only the fresh path reads: a named run stays named
 across a `--fresh` restart.
 
+Session capture is per-run policy, so it is a flag, never orchestrator.yaml:
+`run --sessions` threads `RunOptions.Sessions` into the fresh journal header;
+`resume --sessions` enables capture for the remainder of a run that started
+without it. `runResumeE` sets `RunOptions.Sessions = flag OR header.Sessions`
+(the seam header carries the flag), so a capturing run keeps capturing across
+plain resume AND a `--fresh` restart — the fresh path writes a new header
+from the options, and losing the flag there would silently stop the
+transcripts, the same reasoning that inherits `Name`. The one asymmetry left:
+a `resume --sessions` widening is not written back (the journaled header is
+immutable), so a later resume of a run that never began with the flag must
+repeat it. `resume --shell` forces the bare-shell interactive
+re-entry (`RunOptions.InteractiveShell`) even when a saved session and a
+profile `resume_argv` exist; it is meaningful only with `--interactive`;
+`--shell` without `--interactive` is a usage error (exit 2).
+
 ### runUpgradeE (config/cmd_upgrade.go)
 
 ```

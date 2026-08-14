@@ -92,6 +92,63 @@ disposable and lives under the attempt's scratch dir. This is the settled option
 mount contract; the rejected option (b) of one `/faber/skills/<name>` mount per
 source does not exist anywhere in the design.
 
+## Session capture (the run-prep seam owns the live bind)
+
+Session transcripts are the harness's native session state — where it keeps
+them is the invocation profile's `session_dir` (vendor dialect as data, see
+spec/config/arch_schema_types.md); whether to keep them is per-run policy
+(`--sessions`, journaled in the header and OR-able back in by
+`resume --sessions`). When capture is on **and** the step template's resolved
+profile carries a `session_dir`, `RunAttempt` creates
+`<attemptDir>/sessions/` (after the pre-attempt scrub, so each attempt starts
+empty) and passes it as `BoxSpec.SessionsDir`; the run-spec assembler then
+mounts it read-write at `$HOME/<session_dir>` and sets `FABER_SESSIONS_DIR`
+to that container path — mount and variable always together, the
+`FABER_SECRETS_STDIN` pair-set discipline. Either gate absent ⇒ no mount, no
+variable, byte-identical run specs.
+
+Consequences, all by construction: each attempt's transcripts are isolated
+and addressed by the existing `boxes/<step>/attempt-<n>/` layout (the scrub
+clears only its *own* attempt dir, so earlier attempts' records persist); the
+transcript is on the host the moment the harness writes it, so a container
+that dies mid-step leaves the record behind; `/workspace` stays an anonymous
+native volume — only append-scale transcript writes cross the bind. The one
+place the scrub WOULD eat a transcript is the resume-reuse case: a resumed
+run restarts attempt numbering, so the re-run of a failed step reuses the
+failed attempt's dir — and that failed attempt's transcript is the record
+that explains the failure. `preserveSessions` therefore moves a reused
+attempt dir's non-empty `sessions/` aside — to the sibling
+`<attemptDir>.sessions.<k>`, first free `k` — before the scrub, regardless of
+the current toggle: whatever a prior execution captured is a record. Re-entry
+keeps reading `attempt-<final>/sessions` (the latest failed execution's
+transcript); the `.sessions.<k>` siblings are older preserved generations. The
+assembler re-checks the profile pairing (a `SessionsDir` without a profile
+`session_dir` is a refusal) and the container path stays inside `HOME` by
+config validation, re-checked as defense in depth. The engine's job ends at
+durable, step-addressed transcripts under the run directory; reading them is
+user-side work.
+
+## Session-resuming interactive re-entry
+
+Re-entry (`Reentry.Reenter`) keeps its shape — same image, bindings, inputs,
+handoff mount — but when the failed attempt saved a session
+(`boxes/<step>/attempt-<final>/sessions/` exists and is non-empty), the
+profile defines `resume_argv`, and the operator did not force `--shell`, the
+saved session is **copied** (never bound — the archived record stays
+immutable while the ephemeral session diverges freely) into the salted
+interactive dir and that copy is mounted read-write at `$HOME/<session_dir>`.
+The copy is faithful, not the skills stager's normalizing `copyTree`:
+harnesses locate "the most recent session" via file mtimes or a
+latest-pointer symlink, so `copySessionTree` preserves file modes and mtimes
+and recreates symlinks verbatim (they resolve inside the operator's own
+debug container);
+the entry program becomes `resume_argv` with `HOME` pinned to the box home
+(the raw entry replaces the sequencer, so no preamble exports it), landing
+the operator inside the conversation that produced the failure. The salted
+dir — copy included — is removed when the session exits, as today. Fallback
+to the bare shell: `--shell`, no saved session, or no `resume_argv`.
+Re-entry scope stays failed-only.
+
 ## The loop
 
 ```go

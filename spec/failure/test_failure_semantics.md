@@ -99,6 +99,12 @@ StepRunner and a recording HookRunner unless a real container is stated;
     `--all` prune additionally removes the paused and incomplete runs; the
     live run survives both, and the removed ids are reported.
 
+19. **Sessions flag rides the header.** A header written with the sessions
+    flag replays it on resume (`RunSeed.Header.Sessions`); a header without
+    it emits bytes identical to before the field existed (`omitempty`), so
+    existing journals replay unchanged. `Store.Interactive` threads the
+    operator's `--shell` choice into `InteractiveTarget.Shell` untouched.
+
 ## Edge cases
 
 - Agent succeeded but wrote no `result.json`: the engine's fallback record is

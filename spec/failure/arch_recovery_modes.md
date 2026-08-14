@@ -75,8 +75,15 @@ for the same identity), and the same resolved inputs exported as the step
 env — but deliberately NO credential handles (the debug shell observes a
 failed step and never runs the agent, so no token is resolved and none is
 streamed; an operator who needs a secret sets it by hand), and with the
-box's entry program replaced by an interactive shell on the operator's
-terminal. The failed attempt's handoff directory (preserved
+box's entry program replaced on the operator's terminal. The entry is the
+harness's own session, not a bare shell, whenever the failed attempt saved
+one: with session capture on (`--sessions`) and a profile `resume_argv`, the
+saved transcript is copied — never bound, so the archived record stays
+immutable while the ephemeral session diverges — into the throwaway
+interactive dir, mounted at the profile's `session_dir` under the box
+`$HOME`, and `resume_argv` launches the operator inside the conversation
+that produced the failure. `--shell` forces the bare shell; a missing
+session or a profile without `resume_argv` falls back to it. The failed attempt's handoff directory (preserved
 diagnostic state, per the result contract) is surfaced read-only inside the
 box, so the operator sees what the agent saw, with the agent's exact toolset
 on hand. Exiting the shell tears down the bindings as any run would. An

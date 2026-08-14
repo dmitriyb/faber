@@ -40,9 +40,17 @@ type RunOptions struct {
 	Name            string
 	Mode            string // "" (fresh run) | "resume" | "fresh" | "interactive"
 	InteractiveStep string
-	MaxParallel     int
-	Budgets         map[string]float64
-	MeteringPath    string
+	// InteractiveShell forces the bare-shell interactive re-entry even when a
+	// saved session and a profile resume_argv would land the operator inside
+	// the harness's resumed session. Meaningful only with InteractiveStep.
+	InteractiveShell bool
+	// Sessions turns on per-attempt harness session-transcript capture. Per-run
+	// policy, never orchestrator.yaml: recorded in the journal header on fresh
+	// runs; on resume it is ORed with the journaled flag for this invocation.
+	Sessions     bool
+	MaxParallel  int
+	Budgets      map[string]float64
+	MeteringPath string
 	// ReportJSON is where the machine-readable run report goes: a file path,
 	// "-" for stdout, or empty for none.
 	ReportJSON string
@@ -71,6 +79,7 @@ type Executor interface {
 type JournalHeader struct {
 	RunID      string
 	Name       string // optional operator-given run name ("" when unnamed)
+	Sessions   bool   // the run captures harness session transcripts (--sessions)
 	ConfigPath string
 	Workflow   string
 	Params     map[string]string

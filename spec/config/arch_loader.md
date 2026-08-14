@@ -125,8 +125,10 @@ Structural, cross-reference, and vocabulary rules — all collected, none fatal-
   per `invoke_profiles.<name>` with defaults applied): `skill_mode ∈ {prefix,
   flag}`; `prompt_template` contains `{body}`; prefix mode reaches `{skill}` and
   carries no `skill_flag`; flag mode names a non-empty `skill_flag` and keeps
-  `{skill}` out of the prompt template. See `arch_schema_types.md`
-  "Invocation profiles".
+  `{skill}` out of the prompt template; `session_dir` is `$HOME`-relative and
+  contained (not absolute, no `..` segment, cleaned form a proper subpath);
+  `resume_argv` requires an effective `session_dir` and carries no empty
+  token. See `arch_schema_types.md` "Invocation profiles".
 - **Skills references — named mode only.** When `skills` is a **named list**, every
   `template.skills[*]` must name a declared skill AND the primary `template.skill`
   must be a member of that list (`template.skill ∈ template.skills`). When `skills`

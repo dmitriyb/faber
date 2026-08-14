@@ -242,25 +242,25 @@ func TestInteractiveReentry(t *testing.T) {
 	}
 
 	// Refused: settled ok, naming the state.
-	err = store.Interactive(t.Context(), "run-1", "task/a", &fakeReentry{})
+	err = store.Interactive(t.Context(), "run-1", "task/a", false, &fakeReentry{})
 	if err == nil || !strings.Contains(err.Error(), `settled "ok"`) {
 		t.Fatalf("want refusal naming the ok state, got %v", err)
 	}
 	// Refused: settled halted — interactive is failed-only (a halt preserves
 	// no handoff state), and the refusal names the actual state.
-	err = store.Interactive(t.Context(), "run-1", "task/h", &fakeReentry{})
+	err = store.Interactive(t.Context(), "run-1", "task/h", false, &fakeReentry{})
 	if err == nil || !strings.Contains(err.Error(), `settled "halted"`) {
 		t.Fatalf("want refusal naming the halted state, got %v", err)
 	}
 	// Refused: never settled.
-	err = store.Interactive(t.Context(), "run-1", "task/z", &fakeReentry{})
+	err = store.Interactive(t.Context(), "run-1", "task/z", false, &fakeReentry{})
 	if err == nil || !strings.Contains(err.Error(), "no journal record") {
 		t.Fatalf("want refusal for an absent step, got %v", err)
 	}
 
 	// Failed step: the seam gets the record and the resolvable handoff path.
 	re := &fakeReentry{}
-	if err := store.Interactive(t.Context(), "run-1", "task/b", re); err != nil {
+	if err := store.Interactive(t.Context(), "run-1", "task/b", false, re); err != nil {
 		t.Fatal(err)
 	}
 	if re.target == nil || re.target.StepID != "task/b" {

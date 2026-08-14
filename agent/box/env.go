@@ -99,6 +99,11 @@ type BoxEnv struct {
 	// template declares no skills leg and the phase is a no-op.
 	SkillsLink string
 
+	// SessionsDir is the container path (under HOME) of the live sessions
+	// bind; the preamble chowns its daemon-created intermediate components so
+	// the dropped harness can write beside them. Empty means capture is off.
+	SessionsDir string
+
 	// SecretsStdin reports FABER_SECRETS_STDIN=1: file-mode tokens arrive as a
 	// JSON payload on the box's stdin, and the secrets phase materializes them
 	// into the /run/secrets tmpfs before the origin-agnostic env export. Unset
@@ -154,6 +159,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		WorkspaceDir:     withDefault(get(contract.EnvWorkspaceDir), contract.ContainerWorkspace),
 		GitCache:         get(contract.EnvGitCache),
 		SkillsLink:       get(contract.EnvSkillsLink),
+		SessionsDir:      get(contract.EnvSessionsDir),
 		SecretsStdin:     get(contract.EnvSecretsStdin) == "1",
 		rawSchema:        get(contract.EnvOutputSchema),
 		rawAttempt:       get(contract.EnvAttempt),

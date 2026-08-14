@@ -160,6 +160,7 @@ func (s *Store) LoadHeader(runID string) (config.JournalHeader, error) {
 	return config.JournalHeader{
 		RunID:      hdr.RunID,
 		Name:       hdr.Name,
+		Sessions:   hdr.Sessions,
 		ConfigPath: hdr.ConfigPath,
 		Workflow:   hdr.Workflow,
 		Params:     hdr.Params,

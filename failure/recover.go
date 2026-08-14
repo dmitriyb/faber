@@ -123,6 +123,12 @@ type InteractiveTarget struct {
 	Header Header
 	StepID string
 	Record ResultRecord
+
+	// Shell is the operator's --shell choice: force the bare-shell re-entry
+	// even when a saved session and a profile resume_argv exist. The entry
+	// choice itself belongs to the box-reconstruction seam; this module only
+	// plumbs the flag.
+	Shell bool
 }
 
 // HandoffPath resolves the failed record's handoff pointer under the run
@@ -156,8 +162,8 @@ type BoxReentry interface {
 // refuses unless the step's last journaled record is failed, naming the
 // step's actual state otherwise. Nothing is appended to the journal — the
 // run's state is unchanged afterward; the operator then chooses resume or
-// fresh.
-func (s *Store) Interactive(ctx context.Context, runID, stepID string, re BoxReentry) error {
+// fresh. shell forces the bare-shell entry (--shell) through the target.
+func (s *Store) Interactive(ctx context.Context, runID, stepID string, shell bool, re BoxReentry) error {
 	rp, err := s.Load(runID)
 	if err != nil {
 		return err
@@ -192,6 +198,7 @@ func (s *Store) Interactive(ctx context.Context, runID, stepID string, re BoxRee
 		Header: rp.Header,
 		StepID: stepID,
 		Record: rec,
+		Shell:  shell,
 	})
 }
 

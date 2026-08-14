@@ -97,7 +97,11 @@ not a migration path.
 example of the additive rule: an env variable whose absence the box tolerates
 with a defined default (the built-in dialect) does **not** bump the version —
 an old box under a new host ignores the unknown variable, and a new box under
-an old host falls back to the default.
+an old host falls back to the default. `FABER_SESSIONS_DIR` rides the same
+rule: the host sets it (a container path under `HOME`) exactly when it also
+mounted the live sessions bind there — the pair-set discipline of
+`FABER_SECRETS_STDIN` — and absence simply means capture is off, so the
+preamble's gated component-chown never runs.
 
 ## Result emission (internal/agent/result.go)
 

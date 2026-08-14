@@ -952,6 +952,30 @@ func TestRunUserGroups(t *testing.T) {
 	}
 }
 
+// Verifies 93ba0858d75f (session transcripts): the preamble's sessions chown
+// set is the bind plus each daemon-created intermediate, bottom-up, strictly
+// inside HOME — never HOME itself, and empty when capture is off or the path
+// does not sit under HOME (a stray value contributes nothing).
+func TestSessionChownPaths(t *testing.T) {
+	got := sessionChownPaths(contract.ContainerHome + "/.h/sessions")
+	want := []string{contract.ContainerHome + "/.h/sessions", contract.ContainerHome + "/.h"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("chown set = %v, want %v", got, want)
+	}
+	for _, dir := range []string{
+		"", contract.ContainerHome, "/etc/sessions",
+		// The walk runs as root, so a hand-authored traversal or a trailing
+		// slash must clean to something the HOME guard rejects — never chown
+		// /etc, /, or HOME itself.
+		contract.ContainerHome + "/../../etc",
+		contract.ContainerHome + "/",
+	} {
+		if got := sessionChownPaths(dir); got != nil {
+			t.Fatalf("chown set for %q = %v, want none", dir, got)
+		}
+	}
+}
+
 // Verifies the agent-socket-group setgroups fix's parse side: -1 is the
 // "none" sentinel (0 is a valid gid — macOS's socket group — and cannot
 // double as unset), a present "0" parses to 0, a positive value parses

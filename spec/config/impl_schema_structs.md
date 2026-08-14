@@ -63,6 +63,8 @@ type InvokeProfileDef struct {
     ModelFlag      *string  `yaml:"model_flag"`      // nil ⇒ "--model"
     EffortFlag     *string  `yaml:"effort_flag"`     // nil ⇒ "--effort"
     BudgetFlag     *string  `yaml:"budget_flag"`     // nil ⇒ "--max-budget-usd"
+    SessionDir     *string  `yaml:"session_dir"`     // $HOME-relative transcript dir; nil ⇒ none (no capture); "" clears
+    ResumeArgv     []string `yaml:"resume_argv"`     // session-resuming argv; nil ⇒ none; [] clears
 }
 
 // InvokeDef is a template's invoke: block: an optional named-profile reference
@@ -353,7 +355,12 @@ so tests assert them independently. The dual-mode and library checks:
   in the template and forbids `skill_flag`; flag mode requires a non-empty
   `skill_flag` and forbids `{skill}` in the template (the skill is injected
   exactly once — this also catches flipping the mode while keeping the default
-  template). Profile names ride the same name discipline (`safeName`) and
+  template). The session fields add three rules over the effective value:
+  `session_dir` must be `$HOME`-relative and contained (not absolute, no `..`
+  segment, and its cleaned form a proper subpath — never `.`), `resume_argv`
+  requires a non-empty effective `session_dir` (there is nothing else it could
+  resume), and no `resume_argv` token may be empty. Profile names ride the
+  same name discipline (`safeName`) and
   assembly duplicate detection as every other library.
 - **Substrate placement.** A substrate key on an included (non-root) file is a
   violation (`<file>: included files may only contribute libraries`).

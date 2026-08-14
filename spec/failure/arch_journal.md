@@ -42,10 +42,17 @@ format-tolerant; only interpretive replay refuses.
 
 1. **Header** — first line, written at run start: `{format, run id, optional
    operator-given run name, config hash, workflow name, supplied params, IR
-   hash, IR version, resolved per-template image tags}`. The name
+   hash, IR version, resolved per-template image tags, optional sessions
+   flag}`. The name
    (`faber run --name <name>`) is identification for humans — commands that
    take a run reference resolve it by enumerating headers; it carries no
-   uniqueness guarantee and never keys anything. Resume compatibility is
+   uniqueness guarantee and never keys anything. The sessions flag
+   (`faber run --sessions`, additive within format 1 like the name) records
+   that the run captures harness session transcripts, so a plain resume —
+   and, like the name, a `--fresh` restart — inherits capture;
+   `resume --sessions` ORs it on for the remainder of a
+   run that started without it — the header is immutable, so that widening
+   lasts for the resuming invocation only and is repeated per resume. Resume compatibility is
    defined against this line: the config module's pipeline is deterministic, so "same IR hash"
    means "same graph", and a mismatch is detected before any skip decision is
    trusted. The IR version distinguishes an engine-side IR schema change from

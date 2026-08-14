@@ -26,6 +26,7 @@ func newRunCmd(deps Deps) *cobra.Command {
 	cmd.Flags().StringArray("budget", nil, "budget bound unit=n (repeatable)")
 	cmd.Flags().Int("max-parallel", 0, "maximum concurrently running steps (0 = unlimited)")
 	cmd.Flags().String("metering", "", "path to run-time metering config")
+	cmd.Flags().Bool("sessions", false, "capture each attempt's harness session transcripts under the run directory (needs a profile session_dir)")
 	cmd.Flags().String("report-json", "", "write the machine-readable run report to this path (- = stdout)")
 	return cmd
 }
@@ -42,6 +43,7 @@ func runRunE(cmd *cobra.Command, args []string, deps Deps) error {
 	budgetFlags, _ := cmd.Flags().GetStringArray("budget")
 	maxParallel, _ := cmd.Flags().GetInt("max-parallel")
 	metering, _ := cmd.Flags().GetString("metering")
+	sessions, _ := cmd.Flags().GetBool("sessions")
 	reportJSON, _ := cmd.Flags().GetString("report-json")
 
 	logger, err := common.logger(cmd.ErrOrStderr())
@@ -68,6 +70,7 @@ func runRunE(cmd *cobra.Command, args []string, deps Deps) error {
 	defer stop()
 	opts := RunOptions{
 		Name:        name,
+		Sessions:    sessions,
 		MaxParallel: maxParallel, Budgets: budgets, MeteringPath: metering,
 		ReportJSON: reportJSON,
 		ConfigPath: common.config, Workflow: workflow, Supplied: supplied,

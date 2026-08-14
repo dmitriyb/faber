@@ -99,6 +99,30 @@ docker anywhere in this section.
 15. **Pause after completion is not a pause.** The probe turning true when
     every node has already settled changes nothing: run-end `settled`,
     exit 0 — the run-end status is paused only when the drain ended the run.
+16. **Session capture gates on both toggles.** With sessions on and a
+    template profile naming a `session_dir`: the attempt's run spec carries
+    the `<attempt>/sessions` read-write bind at `$HOME/<session_dir>` plus
+    `FABER_SESSIONS_DIR`, the host dir exists (empty) before the container
+    runs, and a second attempt gets a fresh empty dir while the first
+    attempt's survives. A re-run at the SAME attempt number (the resume-reuse
+    case — resumed runs restart attempt numbering) preserves the prior
+    execution's non-empty transcript at the `<attemptDir>.sessions.<k>`
+    sibling before the scrub and starts fresh. Sessions off, OR a profile
+    without `session_dir`, OR
+    no profile at all: no bind, no variable — run specs byte-identical to
+    before the feature. The run-spec assembler refuses a `SessionsDir`
+    against a template whose profile names no `session_dir` (the pair-set
+    guard, exercised directly).
+17. **Session-resuming re-entry.** With a saved non-empty
+    `attempt-<final>/sessions` and a profile `resume_argv`: the interactive
+    spec's entry is the profile argv, `HOME` is pinned to the box home, and
+    the mount at `$HOME/<session_dir>` is a COPY under the salted interactive
+    dir — mutating it leaves the archived attempt bytes untouched, and the
+    copy is gone when the session exits. The copy preserves file mtimes and
+    recreates symlinks verbatim (harnesses find "the most recent session"
+    through them). Fallbacks each yield the bare
+    shell: `--shell` despite a saved session, a missing/empty saved dir, a
+    profile without `resume_argv`.
 
 ## Edge cases
 

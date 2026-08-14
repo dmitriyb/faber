@@ -38,6 +38,7 @@ type BoxEnv struct {
     SecretsStdin         bool              // FABER_SECRETS_STDIN=1; file-mode tokens arrive on stdin for phase 3 to materialize
     AgentOptional        bool              // FABER_AGENT_OPTIONAL=1; the template declares itself agent-skippable (exact "1", like TOFU)
     Invoke               config.ResolvedInvoke // FABER_INVOKE_PROFILE (concrete JSON); absent/empty ⇒ config.DefaultInvoke(); malformed or rule-breaking ⇒ env-phase violation
+    SessionsDir          string            // FABER_SESSIONS_DIR; container path of the live sessions bind under HOME, "" = capture off
     Slots                []string          // FABER_INPUT_SLOTS; declared slot names, for the slot-keyed handoff
     // FABER_CONTRACT_VERSION is validated by the env phase (see the contract
     // version handshake in impl_hook_result_contracts.md)
@@ -127,6 +128,20 @@ func (b *Box) enterRunUser() error {
     if _, err := os.Stat(contract.ContainerSecretsDir); err == nil {
         if err := os.Chown(contract.ContainerSecretsDir, b.Env.RunUID, b.Env.RunGID); err != nil {
             return fmt.Errorf("preamble: chown %s: %w", contract.ContainerSecretsDir, err)
+        }
+    }
+    // The sessions bind is another gated add. The bind target itself is
+    // host-owned by the run user already (the host pre-created it, like the
+    // result dir), but the daemon created its INTERMEDIATE components inside
+    // the HOME tmpfs as root — chown each component between the bind and
+    // HOME (exclusive), or the dropped harness cannot write its own files
+    // beside them. sessionChownPaths CLEANS the value first: this walk runs
+    // as root, and a raw prefix check would let a hand-authored
+    // "/home/box/../../etc" (direct invocations take env verbatim) chown
+    // outside HOME. A value cleaning outside HOME yields the empty set.
+    for _, p := range sessionChownPaths(b.Env.SessionsDir) {
+        if err := os.Chown(p, b.Env.RunUID, b.Env.RunGID); err != nil {
+            return fmt.Errorf("preamble: chown %s: %w", p, err)
         }
     }
     b.setEnv("HOME", home) // b.Environ only — never os.Setenv (no-global-state policy)

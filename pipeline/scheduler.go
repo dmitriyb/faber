@@ -106,6 +106,9 @@ type scheduler struct {
 
 	runID  string
 	runDir string
+	// sessions is the per-run transcript-capture toggle threaded into every
+	// box attempt (--sessions ORed with the journal header's flag on resume).
+	sessions bool
 
 	// pause probes the durable pause marker (failure.PauseRequested over the
 	// run dir); nil never pauses (unit wiring). paused latches the first true
@@ -599,6 +602,7 @@ func (s *scheduler) boxWorker(ctx context.Context, job boxJob) {
 			Template: job.tpl,
 			Image:    job.image,
 			Inputs:   job.inputs,
+			Sessions: s.sessions,
 		})
 		res := br.Result
 		view := metering.ResultView{NodeID: job.id, Status: metering.StatusFailed, Usage: br.Usage}

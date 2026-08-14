@@ -321,6 +321,41 @@ func TestLoadHeaderSeam(t *testing.T) {
 	}
 }
 
+// Verifies bff0f92afc29 (test 19): the per-run sessions flag rides the header
+// — recorded at Begin, replayed by Load and the LoadHeader seam, and absent
+// from the bytes when off (omitempty: pre-feature journals replay unchanged).
+func TestHeaderSessionsFlag(t *testing.T) {
+	store := NewStore(t.TempDir(), nil)
+	hdr := diamondHeader("run-1")
+	hdr.Sessions = true
+	j, err := store.Begin(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	rp, err := store.Load("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rp.Header.Sessions {
+		t.Fatal("Load must replay the sessions flag")
+	}
+	seam, err := store.LoadHeader("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seam.Sessions {
+		t.Fatal("the LoadHeader seam must carry the sessions flag")
+	}
+	raw, err := json.Marshal(Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sessions") {
+		t.Fatalf("an absent sessions flag must serialize to nothing: %s", raw)
+	}
+}
+
 // Verifies bff0f92afc29: an oversized record is refused at append time with a
 // clear error — it must never become a journal line that replay's scanner
 // cannot read back (which would poison every later Load).
