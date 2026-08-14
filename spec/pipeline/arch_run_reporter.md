@@ -64,9 +64,16 @@ footer.
   generate: [...]}` — stably ordered and suitable for diffing or piping into
   the user's own tooling.
 
+A run whose last run-end record says `paused` is flagged in both outputs: the
+JSON report carries `paused: true` and the human footer names the pause and
+the resume command — a paused run must read as deliberately incomplete, not
+as a crash (its undispatched steps report `absent` either way).
+
 The process exit code follows the run's terminal states: exit 1 when any step
 settled `failed`; exit 3 when no step failed but at least one settled `halted`
-(the run stopped for an operator — resumable, not broken); exit 0 otherwise.
+(the run stopped for an operator — resumable, not broken); exit 4 when the
+run ended in a cooperative pause with nothing failed or halted; exit 0
+otherwise.
 A run whose only non-ok states are condition-skips is a success — a skipped
 `fix` step is the workflow working as declared. The mapping comes from the
 scheduler's own counters, never from re-reading the journal at report time.

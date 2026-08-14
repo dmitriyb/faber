@@ -94,6 +94,7 @@ type Header struct {
     Kind       string            `json:"kind"`   // "header"
     Format     int               `json:"format"` // journal schema stamp (JournalFormat = 1)
     RunID      string            `json:"run_id"`
+    Name       string            `json:"name,omitempty"` // optional operator-given run name (--name)
     ConfigPath string            `json:"config_path"`
     ConfigHash string            `json:"config_hash"`
     Workflow   string            `json:"workflow"`
@@ -112,9 +113,12 @@ type ResultRecord struct {
 }
 // CostRecord ("cost": StepID, InputHash, metering.Cost),
 // CleanupRecord ("cleanup": StepID, InputHash, OK bool, Detail) and
-// RunEndRecord ("run-end": Status settled|aborted, Failed, Halted, Finished)
-// mirror the shape. appendHeader owns the Format stamp; Load refuses any
-// other stamp (fail closed, no auto-migration).
+// RunEndRecord ("run-end": Status settled|aborted|paused, Failed, Halted,
+// Finished) mirror the shape. appendHeader owns the Format stamp; Load
+// refuses any other stamp (fail closed, no auto-migration). The name and the
+// paused status arm are additive within format 1: an older faber replays the
+// header unchanged (unknown JSON fields are dropped) and never meets a
+// paused run-end mid-replay decision — run-end is informational to replay.
 ```
 
 ```go
@@ -140,6 +144,48 @@ type Key struct{ StepID, InputHash string }
 // warnings.
 func Load(path string, log *slog.Logger) (*Replay, error)
 ```
+
+## Pause marker and the runs store surface (internal/failure/pause.go, store.go)
+
+```go
+const pauseFile = "pause" // beside journal.jsonl and run.lock in the run dir
+
+// RequestPause writes the durable pause marker for a LIVE run (the run-lock
+// flock probe gates it; a non-live run has nothing to drain and errors).
+func (s *Store) RequestPause(runID string) error
+// PauseRequested reports whether runDir carries the marker (the scheduler's
+// scheduling-point probe — one stat, no lock).
+func PauseRequested(runDir string) bool
+// ClearPause removes a stale marker; a missing marker is not an error.
+// Called by Resume and Begin under the freshly acquired run lock.
+func ClearPause(runDir string) error
+```
+
+The liveness gate on RequestPause is advisory (the run can exit between probe
+and write); the leftover marker is harmless — resume clears it on start, and
+the scheduler that already appended its run-end never reads it again.
+
+```go
+// ResolveRunRef maps a run reference (id or header name) to a run id by
+// enumerating run directories and reading headers. An existing run id wins
+// over an equal name; an ambiguous name errors naming every matching id.
+func (s *Store) ResolveRunRef(ref string) (string, error)
+
+// PruneRuns deletes finished, non-live run directories and reports what it
+// removed. Default: run-end present and status != paused. all=true widens to
+// paused and incomplete non-live runs. Each candidate's run lock is acquired
+// non-blocking immediately before deletion (refusal ⇒ skip), and the
+// journal is os.Remove'd first under the lock: RemoveAll unlinks run.lock
+// at an unspecified point, letting a racing resume flock a fresh inode —
+// with the journal already gone that resume fails loudly at its journal
+// read instead of losing appends.
+func (s *Store) PruneRuns(all bool) ([]string, error)
+```
+
+`AuditRuns` (the upgrade guard's tolerant kind-probe scan) is enriched for
+the `faber runs` listing: the header probe additionally captures `name`,
+`workflow`, and `started`, and the trailing run-end probe captures its
+`status` — still never interpretive replay, so any-format journals list.
 
 `Load` scans line-by-line (`bufio.Scanner`, generous max token size),
 dispatching on `kind`; unknown kinds are skipped with a log line (additive

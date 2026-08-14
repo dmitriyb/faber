@@ -82,6 +82,24 @@ docker anywhere in this section.
     reaches the RunSpec, so infra's argv builder sees the unchanged single-bind
     contract.
 
+13. **Pause drains and resumes.** A three-step chain with the pause probe
+    scripted to turn true after the first settlement: step one's record is
+    journaled ok, steps two and three are never dispatched (StepRunner never
+    invoked), the run-end record says `paused`, the run's error is the typed
+    pause error (exit 4), and the report carries the paused footer with the
+    resume command while the undispatched steps read `absent`. Resuming with
+    a fresh executor over the same journal: step one is a cached hit, the
+    rest run, the fresh run-end says `settled`, exit 0.
+14. **Pause lets parallel flights settle.** Two independent chains with the
+    probe true while both heads are in flight: both heads settle and journal
+    normally, no second node of either chain dispatches, the run ends
+    `paused`. With one head scripted to fail, the run error is the failure
+    error (exit 1) — failure outranks pause — while the run-end still says
+    `paused` and the failed step keeps its own record.
+15. **Pause after completion is not a pause.** The probe turning true when
+    every node has already settled changes nothing: run-end `settled`,
+    exit 0 — the run-end status is paused only when the drain ended the run.
+
 ## Edge cases
 
 - Empty item set: generate node settles ok, zero instances, dependents

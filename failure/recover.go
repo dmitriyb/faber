@@ -44,6 +44,12 @@ func (s *Store) Resume(ir *config.IR, runID string, supplied map[string]string) 
 		lock.Release()
 		return nil, err
 	}
+	// A stale pause marker (written after the paused run ended, or while it
+	// was down) must not re-pause the resumed run; clearing happens under the
+	// lock, before any dispatch could probe it.
+	if err := ClearPause(s.RunDir(runID)); err != nil {
+		return fail(err)
+	}
 	rp, err := s.Load(runID)
 	if err != nil {
 		return fail(err)

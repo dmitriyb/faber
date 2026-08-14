@@ -83,6 +83,7 @@ func wireDeps(stdout, stderr io.Writer) (config.Deps, error) {
 		Builder:   builder.ConfigBuilder(),
 		Journal:   store,
 		Audit:     store,
+		Runs:      store,
 		Executor:  &wiredExecutor{stdout: stdout, docker: docker, builder: builder, store: store, host: hc},
 		Registry:  registryController{},
 		BuildInfo: config.BuildInfo{Version: version, Commit: commit, Date: date},

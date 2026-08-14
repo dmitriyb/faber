@@ -40,10 +40,13 @@ format-tolerant; only interpretive replay refuses.
 
 ## Record kinds
 
-1. **Header** — first line, written at run start: `{format, run id, config
-   hash, workflow name, supplied params, IR hash, IR version, resolved
-   per-template image tags}`. Resume compatibility is defined against this
-   line: the config module's pipeline is deterministic, so "same IR hash"
+1. **Header** — first line, written at run start: `{format, run id, optional
+   operator-given run name, config hash, workflow name, supplied params, IR
+   hash, IR version, resolved per-template image tags}`. The name
+   (`faber run --name <name>`) is identification for humans — commands that
+   take a run reference resolve it by enumerating headers; it carries no
+   uniqueness guarantee and never keys anything. Resume compatibility is
+   defined against this line: the config module's pipeline is deterministic, so "same IR hash"
    means "same graph", and a mismatch is detected before any skip decision is
    trusted. The IR version distinguishes an engine-side IR schema change from
    operator config drift, so refusals blame the right party. The image tags
@@ -67,7 +70,12 @@ format-tolerant; only interpretive replay refuses.
    state is durable state: a crash mid-wait leaves the timeline on disk
    instead of losing it with the never-settled node.
 6. **Run-end** — appended once per execution when the scheduler returns:
-   `{status: settled|aborted, failed count, finished}`. Its absence is the
+   `{status: settled|aborted|paused, failed count, finished}`. `paused` is
+   the cooperative-drain ending: an operator requested a pause, every
+   in-flight step settled and was journaled normally, and the scheduler
+   stopped dispatching — the run is deliberately incomplete and resumable,
+   distinct from `aborted` (something broke or was cancelled) and from
+   `settled` (every node terminal). Its absence is the
    durable signature of an interrupted run — exactly what the active-runs
    guard behind `faber upgrade` looks for. A resumed run appends a fresh marker when it
    finishes; replay is last-wins. Unknown kinds are still skipped on replay
@@ -79,6 +87,22 @@ record for the same key supersedes an earlier one (retry sequences journal
 only the final record, but a resumed run appends a fresh record after a
 re-run rather than editing history — append-only means no record is ever
 rewritten).
+
+## The pause marker
+
+Beside the journal, the run directory holds at most one more control file:
+`pause`, the durable cooperative-stop request. `faber runs pause <ref>` writes
+it into a **live** run's directory (the run-lock flock probe gates the
+command; pausing a non-live run is an error — there is nothing to drain). The
+marker is the whole mechanism: no signal, no pid trust, no IPC. The scheduler
+re-derives the request from the store at its scheduling points, so the request
+survives races and process boundaries; honoring it — drain in-flight steps,
+stop dispatching, end the run with a `paused` run-end record — is the
+pipeline scheduler's job (see `spec/pipeline/arch_scheduler.md`). Resume
+clears a stale marker on start (under the run lock, before any dispatch), so
+a marker written while the run was down cannot re-pause the resumed run. A
+pause is an operator request recorded outside the workflow: it involves no
+step result, no failure policy, no `halt.json`.
 
 ## Same-run exclusivity: one appender per run
 
@@ -101,8 +125,11 @@ consults at readiness, and folds the replayed cost records into the metering
 admitter's spent ledger so a declared budget covers the whole logical run, not
 just the segment since the last interruption. The RunReporter folds the
 journal into the human summary and JSON report. The interactive recovery mode
-reads a failed record's handoff pointer. All three read the same bytes; there
-is no second store.
+reads a failed record's handoff pointer. The `faber runs` operator surface
+(list, pause, prune) is one more read-mostly consumer: listing is the
+tolerant audit scan plus header reads (id, name, workflow, state, started),
+never interpretive replay. All of them read the same bytes; there is no
+second store.
 
 ## Deferred seam: store location and cross-run concurrency
 

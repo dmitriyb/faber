@@ -31,6 +31,13 @@ with `--fresh` as the escape:
    default pin, image-schema change, or overlay edit — inputs the IR hash
    cannot see) refuses rather than silently invalidating every journal key.
 
+Before any dispatch, resume clears a stale pause marker from the run
+directory (under the run lock it already holds): a `faber runs pause` issued
+while the run was down must not immediately re-pause the run it was too late
+to stop. After a clean pause, resume needs nothing special — journal reuse
+re-enters at the first step without an `ok` record, which is precisely the
+next step the drained run never dispatched.
+
 On a match, execution proceeds normally except that when a step becomes
 ready, its input-hash is computed and looked up: a journaled `ok` record with a matching
 `(step-id, input-hash)` is skipped, its payload reused for downstream
@@ -96,6 +103,37 @@ job is to report availability, so it lists them and still exits 0, never
 blocking. Across a schema bump the consequence is explicit either way: in-flight
 runs are finished on the old binary or restarted `--fresh`; there is no
 auto-migration.
+
+## The runs operator surface
+
+The run store's administration lives behind `faber runs` (config module
+dispatch, failure module mechanism):
+
+- **Reference resolution.** Commands that take a run reference (`resume`,
+  `runs pause`) accept a run id or a header name. Resolution enumerates run
+  directories and reads headers — no cross-run index is introduced. An id
+  always wins over an equal name; an ambiguous name is an error naming the
+  matching run ids; an unknown reference is an error.
+- **Listing.** `faber runs` reports every journaled run's id, name, workflow,
+  state, and started timestamp. State derives from the audit facts: `live`
+  (lock held), else `incomplete` (no run-end marker — interrupted or
+  crashed), else the last run-end record's status verbatim (`paused`,
+  `settled`, `aborted`). The scan is the same tolerant kind-probe the
+  upgrade audit uses, enriched with header identity fields — journals of any
+  format still list.
+- **Pause.** `faber runs pause <ref>` writes the pause marker into a live
+  run's directory (see the Journal's pause-marker section); pausing a
+  non-live run is an error.
+- **Prune.** `faber runs prune` deletes run directories that are finished (a
+  run-end record present) and not live. Paused runs are kept by default —
+  they are resumable state by design; `--all` additionally removes paused
+  and incomplete non-live runs (crashed or abandoned). A live run is never
+  touched: each candidate's run lock is acquired non-blocking immediately
+  before deletion (a refusal skips the run), and the journal is deleted
+  first under that lock — recursive removal unlinks the lock file at an
+  unspecified point, which would let a racing resume flock a fresh lock
+  inode, but with the journal already gone that resume refuses loudly at
+  its journal read instead of appending into a directory mid-deletion.
 
 ## Generate items are not special
 
