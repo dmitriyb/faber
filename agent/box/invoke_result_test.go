@@ -8,13 +8,18 @@ import (
 	"testing"
 
 	"github.com/dmitriyb/faber/agent/contract"
+	"github.com/dmitriyb/faber/config"
 )
 
-// Verifies ae434449cac9: the prompt is the skill-activating slash command,
-// the bundle body verbatim, and the clearly delimited optional trailer; the
-// argv always carries the permission bypass (the sealed environment is the
-// restriction) and pass-through flags only when set.
+// Verifies ae434449cac9: the byte-for-byte guard on the built-in default
+// profile — the prompt is the skill-activating slash command, the bundle body
+// verbatim, and the clearly delimited optional trailer; the argv always
+// carries the permission bypass (the sealed environment is the restriction)
+// and pass-through flags only when set. The expectations are the exact bytes
+// the pre-profile invoker emitted, so the profile mechanism can never drift
+// the default dialect.
 func TestInvocationPromptAndArgv(t *testing.T) {
+	def := config.DefaultInvoke()
 	tests := []struct {
 		name       string
 		inv        Invocation
@@ -23,13 +28,13 @@ func TestInvocationPromptAndArgv(t *testing.T) {
 	}{
 		{
 			name:       "minimal",
-			inv:        Invocation{CLI: "agent-cli", Skill: "skill-a", Body: "body\n"},
+			inv:        Invocation{CLI: "agent-cli", Profile: def, Skill: "skill-a", Body: "body\n"},
 			wantPrompt: "/skill-a\n\nbody\n",
 			wantArgv:   []string{"agent-cli", "-p", "/skill-a\n\nbody\n", "--permission-mode", "bypassPermissions"},
 		},
 		{
 			name:       "all pass-throughs",
-			inv:        Invocation{CLI: "agent-cli", Skill: "skill-a", Body: "body", Extra: "note", Model: "agent-model", Effort: "high", MaxBudget: "2.50"},
+			inv:        Invocation{CLI: "agent-cli", Profile: def, Skill: "skill-a", Body: "body", Extra: "note", Model: "agent-model", Effort: "high", MaxBudget: "2.50"},
 			wantPrompt: "/skill-a\n\nbody\n\nADDITIONAL INSTRUCTION: note",
 			wantArgv: []string{
 				"agent-cli", "-p", "/skill-a\n\nbody\n\nADDITIONAL INSTRUCTION: note",
@@ -38,7 +43,7 @@ func TestInvocationPromptAndArgv(t *testing.T) {
 		},
 		{
 			name:       "model and effort only (the mandatory template pair)",
-			inv:        Invocation{CLI: "agent-cli", Skill: "skill-a", Body: "body", Model: "agent-model", Effort: "low"},
+			inv:        Invocation{CLI: "agent-cli", Profile: def, Skill: "skill-a", Body: "body", Model: "agent-model", Effort: "low"},
 			wantPrompt: "/skill-a\n\nbody",
 			wantArgv: []string{
 				"agent-cli", "-p", "/skill-a\n\nbody",
@@ -58,17 +63,147 @@ func TestInvocationPromptAndArgv(t *testing.T) {
 	}
 }
 
+// Verifies ae434449cac9: a non-default profile drives every expansion seam —
+// subcommand tokens, a positional prompt (empty prompt flag), the skill as a
+// flag pair with nothing in the prompt, an empty fixed tail, and a dropped
+// effort pair (empty flag) though the value is set.
+func TestInvocationNonDefaultProfile(t *testing.T) {
+	inv := Invocation{
+		CLI: "other-cli",
+		Profile: config.ResolvedInvoke{
+			Subcommand:     []string{"run", "--quiet"},
+			PromptFlag:     "", // positional prompt
+			SkillMode:      config.SkillModeFlag,
+			SkillFlag:      "--recipe",
+			PromptTemplate: "{body}{extra}",
+			ModelFlag:      "--llm",
+			EffortFlag:     "", // this harness has no effort knob
+			BudgetFlag:     "--cost-cap",
+		},
+		Skill: "skill-a", Body: "body", Extra: "note",
+		Model: "agent-model", Effort: "high", MaxBudget: "2.50",
+	}
+	wantPrompt := "body\n\nADDITIONAL INSTRUCTION: note"
+	if got := inv.Prompt(); got != wantPrompt {
+		t.Fatalf("prompt = %q, want %q", got, wantPrompt)
+	}
+	wantArgv := []string{
+		"other-cli", "run", "--quiet", wantPrompt,
+		"--recipe", "skill-a", "--llm", "agent-model", "--cost-cap", "2.50",
+	}
+	if got := inv.Argv(); fmt.Sprint(got) != fmt.Sprint(wantArgv) {
+		t.Fatalf("argv = %q, want %q", got, wantArgv)
+	}
+}
+
+// Verifies ae434449cac9: prompt expansion is injection-proof — placeholder
+// literals inside the bundle body (or the operator note) survive verbatim,
+// never re-expanded, because substituted text is not re-scanned.
+func TestInvocationPromptNoReExpansion(t *testing.T) {
+	inv := Invocation{
+		CLI: "agent-cli", Profile: config.DefaultInvoke(), Skill: "skill-a",
+		Body:  "uses {extra} and {skill} literally",
+		Extra: "note with {body}",
+	}
+	want := "/skill-a\n\nuses {extra} and {skill} literally\n\nADDITIONAL INSTRUCTION: note with {body}"
+	if got := inv.Prompt(); got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+}
+
 // Verifies ae434449cac9: unset model/effort/budget emit no flags at all (the
 // omission path serves direct sequencer invocations; engine runs always set
 // model and effort from the template's mandatory fields).
 func TestInvocationOmitsUnsetFlags(t *testing.T) {
-	argv := Invocation{CLI: "agent-cli", Skill: "skill-a", Body: "b"}.Argv()
+	argv := Invocation{CLI: "agent-cli", Profile: config.DefaultInvoke(), Skill: "skill-a", Body: "b"}.Argv()
 	joined := strings.Join(argv, " ")
 	for _, flag := range []string{"--model", "--effort", "--max-budget-usd"} {
 		if strings.Contains(joined, flag) {
 			t.Fatalf("argv %q carries %s though unset", joined, flag)
 		}
 	}
+}
+
+// Verifies ae434449cac9: FABER_INVOKE_PROFILE drives the invocation end to
+// end through the sequencer — present, the recorded agent argv follows the
+// profile's dialect; absent, it is the default dialect; malformed JSON or a
+// rule-breaking profile fails the env phase before any subprocess runs.
+func TestInvokeProfileEnvContract(t *testing.T) {
+	run := func(t *testing.T, profile string) (testDirs, *fakeRunner, int) {
+		d := newTestDirs(t)
+		fr := &fakeRunner{}
+		fr.handle = func(spec CmdSpec, stream bool) (CmdResult, error) {
+			if spec.Argv[0] == "agent-cli" {
+				writeOutput(t, d, `{}`)
+			}
+			return CmdResult{}, nil
+		}
+		b := newTestBox(t, d, map[string]string{contract.EnvInvokeProfile: profile}, fr)
+		return d, fr, Main(context.Background(), b)
+	}
+	agentCall := func(t *testing.T, fr *fakeRunner) []string {
+		t.Helper()
+		for _, c := range fr.calls {
+			if c.Argv[0] == "agent-cli" {
+				return c.Argv
+			}
+		}
+		t.Fatal("agent never invoked")
+		return nil
+	}
+	t.Run("profile dialect on the argv", func(t *testing.T) {
+		_, fr, code := run(t, `{"subcommand":["run"],"skill_mode":"flag","skill_flag":"--recipe","prompt_template":"{body}{extra}"}`)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		argv := agentCall(t, fr)
+		// [cli, subcommand, positional prompt, skill pair]; nothing else — the
+		// absent JSON fields are concrete empties, never re-defaulted.
+		if len(argv) != 5 || argv[1] != "run" || argv[3] != "--recipe" || argv[4] != "skill-a" {
+			t.Fatalf("argv = %q, want [agent-cli run <prompt> --recipe skill-a]", argv)
+		}
+		if strings.Contains(argv[2], "/skill-a") {
+			t.Fatalf("prompt %q carries the skill though the profile moved it to a flag", argv[2])
+		}
+	})
+	t.Run("absent profile falls back to the default dialect", func(t *testing.T) {
+		_, fr, code := run(t, "")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		argv := agentCall(t, fr)
+		joined := strings.Join(argv, " ")
+		if argv[1] != "-p" || !strings.Contains(joined, "--permission-mode bypassPermissions") {
+			t.Fatalf("argv = %q, want the default dialect", argv)
+		}
+	})
+	t.Run("malformed JSON fails the env phase", func(t *testing.T) {
+		d, fr, code := run(t, `{not json`)
+		if code != 1 {
+			t.Fatalf("exit code = %d, want 1", code)
+		}
+		if len(fr.calls) != 0 {
+			t.Fatalf("no subprocess may run after an env-contract violation, got %v", fr.argvs())
+		}
+		if h := readHandoff(t, d); h.Phase != "env" || h.Reason != contract.ReasonEnvContract {
+			t.Fatalf("handoff = %+v, want phase env reason env-contract", h)
+		}
+	})
+	t.Run("rule-breaking profile fails the env phase", func(t *testing.T) {
+		d, fr, code := run(t, `{"skill_mode":"prefix","prompt_template":"{body}"}`)
+		if code != 1 {
+			t.Fatalf("exit code = %d, want 1", code)
+		}
+		if len(fr.calls) != 0 {
+			t.Fatalf("no subprocess may run, got %v", fr.argvs())
+		}
+		rec := readRecord(t, d)
+		for _, part := range []string{contract.EnvInvokeProfile, "prompt_template"} {
+			if !strings.Contains(rec.Error.Detail, part) {
+				t.Errorf("detail %q does not name %q", rec.Error.Detail, part)
+			}
+		}
+	})
 }
 
 // Verifies ae434449cac9: the agent's child environment is the box

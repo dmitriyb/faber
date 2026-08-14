@@ -73,6 +73,12 @@ func (s *Store) Begin(hdr Header) (*Journal, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A pre-existing marker in a caller-named run dir must not pause the
+	// brand-new execution before it dispatches anything.
+	if err := ClearPause(s.RunDir(hdr.RunID)); err != nil {
+		lock.Release()
+		return nil, err
+	}
 	f, err := os.OpenFile(s.journalPath(hdr.RunID), os.O_APPEND|os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		lock.Release()
@@ -153,6 +159,7 @@ func (s *Store) LoadHeader(runID string) (config.JournalHeader, error) {
 	}
 	return config.JournalHeader{
 		RunID:      hdr.RunID,
+		Name:       hdr.Name,
 		ConfigPath: hdr.ConfigPath,
 		Workflow:   hdr.Workflow,
 		Params:     hdr.Params,
@@ -197,12 +204,16 @@ func (s *Store) AuditRuns() ([]config.RunAudit, error) {
 	return audits, nil
 }
 
-// auditRun probes one journal for the guard's three facts: lock liveness,
-// completeness, and the header's format stamp. Completeness means the LAST
-// probeable record is a run-end marker — the journal is append-only, so a
-// resumed run appends past its earlier marker and a resumed-then-interrupted
-// run must audit unfinished, not complete. An unterminated final line (crash
-// artifact) is ignored, matching replay's torn-tail semantics.
+// auditRun probes one journal for the guard's three facts — lock liveness,
+// completeness, and the header's format stamp — plus the identity fields the
+// `faber runs` listing renders: the header's name, workflow, and start time,
+// and the last run-end's status. Completeness means the LAST probeable
+// record is a run-end marker — the journal is append-only, so a resumed run
+// appends past its earlier marker and a resumed-then-interrupted run must
+// audit unfinished, not complete. An unterminated final line (crash
+// artifact) is ignored, matching replay's torn-tail semantics. The identity
+// fields decode as raw JSON with best-effort parsing so a foreign shape
+// degrades that one field, never the whole line's probeability.
 func (s *Store) auditRun(runID string) (config.RunAudit, error) {
 	f, err := os.Open(s.journalPath(runID))
 	if err != nil {
@@ -226,25 +237,46 @@ func (s *Store) auditRun(runID string) (config.RunAudit, error) {
 	if !terminated && len(lines) > 0 {
 		lines = lines[:len(lines)-1] // torn fragment: not a record
 	}
-	lastKind := ""
+	lastKind, lastStatus := "", ""
 	for i, line := range lines {
 		var probe struct {
-			Kind   string `json:"kind"`
-			Format int    `json:"format"`
+			Kind     string          `json:"kind"`
+			Format   int             `json:"format"`
+			Status   json.RawMessage `json:"status"`
+			Name     json.RawMessage `json:"name"`
+			Workflow json.RawMessage `json:"workflow"`
+			Started  json.RawMessage `json:"started"`
 		}
 		if json.Unmarshal(line, &probe) != nil {
 			// A terminated line the guard cannot probe voids any earlier
 			// run-end: replay would hard-error on this journal, and "complete"
 			// for an unreplayable journal is the optimistic answer the guard
 			// must not give.
-			lastKind = ""
+			lastKind, lastStatus = "", ""
 			continue
 		}
 		if i == 0 && probe.Kind == KindHeader {
 			a.Format = probe.Format
+			a.Name = probeString(probe.Name)
+			a.Workflow = probeString(probe.Workflow)
+			_ = json.Unmarshal(probe.Started, &a.Started) // best-effort; zero on mismatch
 		}
 		lastKind = probe.Kind
+		lastStatus = probeString(probe.Status)
 	}
 	a.Complete = lastKind == KindRunEnd
+	if a.Complete {
+		a.EndStatus = lastStatus
+	}
 	return a, nil
+}
+
+// probeString best-effort decodes a raw JSON value as a string, returning ""
+// for absent or non-string shapes — the audit scan's tolerance discipline.
+func probeString(raw json.RawMessage) string {
+	var s string
+	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
 }

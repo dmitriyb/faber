@@ -22,6 +22,8 @@ import (
 // a newer journal fails closed at record validation ("unknown status") —
 // less curated than the format message, but the upgrade flow is forward-only
 // and refuses to move mid-run, so the downgrade read is already off-path.
+// The header's optional name and the run-end's paused status arm are the
+// same kind of additive value: replay never interprets either.
 const JournalFormat = 1
 
 // Journal record kinds — the "kind" discriminator on every JSONL line.
@@ -49,9 +51,13 @@ const (
 // upgrade cannot silently invalidate every journal key while the guard
 // passes.
 type Header struct {
-	Kind       string            `json:"kind"`
-	Format     int               `json:"format,omitempty"`
-	RunID      string            `json:"run_id"`
+	Kind   string `json:"kind"`
+	Format int    `json:"format,omitempty"`
+	RunID  string `json:"run_id"`
+	// Name is the optional operator-given run name (faber run --name):
+	// identification for humans and for name-form run references, never a
+	// key, never unique. Additive within format 1.
+	Name       string            `json:"name,omitempty"`
 	ConfigPath string            `json:"config_path"`
 	ConfigHash string            `json:"config_hash"`
 	Workflow   string            `json:"workflow"`
@@ -110,10 +116,12 @@ type DeferRecord struct {
 const (
 	RunEndSettled = "settled" // every node reached a terminal state
 	RunEndAborted = "aborted" // the run stopped early (cancel, journal failure)
+	RunEndPaused  = "paused"  // a cooperative pause drained the run: in-flight steps settled, nothing further dispatched
 )
 
 // RunEndRecord marks the end of one execution of the run: the executor
-// appends it after the scheduler returns, settled or aborted. Its absence is
+// appends it after the scheduler returns — settled, aborted, or paused (a
+// cooperative pause drained this execution). Its absence is
 // the durable signature of an interrupted run — what the pre-upgrade guard
 // looks for. A resumed run appends a fresh run-end when it finishes; replay
 // is last-wins.

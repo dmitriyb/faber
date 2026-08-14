@@ -4,16 +4,20 @@
 |---|---|
 | `faber validate` | Load, desugar, wiring-check every workflow; prove package resolution; `--emit-ir` prints the canonical IR; `--workflow name` narrows |
 | `faber build` | Build template images via Nix `dockerTools.buildLayeredImage`; `--template` narrows |
-| `faber run <workflow>` | Execute with `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--report-json path\|-` |
-| `faber resume <run-id>` | Re-enter a journaled run; `--fresh` ignores the journal, `--interactive <step>` reopens the failed box with a shell |
+| `faber run <workflow>` | Execute with `--name n` (a human name for the run, stored in the journal header), `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--report-json path\|-` |
+| `faber resume <run-id\|name>` | Re-enter a journaled run; `--fresh` ignores the journal, `--interactive <step>` reopens the failed box with a shell |
+| `faber runs` | List journaled runs: id, name, workflow, state (`live`/`paused`/`settled`/`aborted`/`incomplete`), started; `--json` for the same rows machine-readably |
+| `faber runs pause <run-id\|name>` | Ask a live run to pause: in-flight steps finish and journal, nothing new dispatches, the run ends `paused` (exit 4) and resumes later with `faber resume` |
+| `faber runs prune` | Delete finished, non-live run directories; paused runs are kept (resumable state) unless `--all`, which also removes paused and incomplete non-live runs; live runs are never touched |
 | `faber upgrade` | Forward-only update of faber and faber-box to the latest signed release via the embedded `install.sh`; self-replaces both binaries as a unit. Refuses a latest older than installed (rollback anomaly, non-overridable) and refuses while live/unfinished runs exist. `--check`/`--dry-run` (report only; warns about — never blocks on — active runs), `--version vX.Y.Z` (install an exact release, any direction), `--rollback`, `--force` (proceed despite active runs) |
 | `faber add-key --role <name> --fingerprint SHA256:… [--comment c] [--git-name n] [--git-email e] [--force]` | Register a role→fingerprint (plus the role's committer identity) in the global identity registry |
 | `faber list-keys` | Print the global role→fingerprint registry |
 | `faber version` / `--version` / `-v` | Print version, commit, and build date |
 
 Common flags: `--config` (default `orchestrator.yaml`), `--log-level` (`debug`/`info`/`warn`/`error`), `--log-format` (`auto`/`json`/`text`; JSON when not a TTY).
-`upgrade`/`add-key`/`list-keys`/`version` touch no `orchestrator.yaml` and take no `--config`.
-Exit codes: 0 ok, 1 validation/run failure, 2 usage, 3 halted (`run`/`resume`: no step failed but at least one settled halted — the run stopped for an operator and is resumable).
+`runs`/`upgrade`/`add-key`/`list-keys`/`version` touch no `orchestrator.yaml` and take no `--config` (the run store lives under `host.json`'s `state_dir`).
+Exit codes: 0 ok, 1 validation/run failure, 2 usage, 3 halted (`run`/`resume`: no step failed but at least one settled halted — the run stopped for an operator and is resumable), 4 paused (`run`/`resume`: the run ended in a cooperative pause with nothing failed or halted; failure outranks halt outranks pause).
+Run references (`resume`, `runs pause`) accept a run id or a `--name`-given name; an id always wins over an equal name, and an ambiguous name errors naming the matching ids.
 `--help`/`-h`/`help` print usage and exit 0 at every level: `faber --help`, `faber <command> --help`, `faber help <command>`.
 
 ## Host configuration

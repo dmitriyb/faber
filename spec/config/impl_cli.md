@@ -184,6 +184,39 @@ re-checks the failure-module versions of the same guards plus the recorded
 image tags; the CLI guards exist to refuse before the full config pipeline
 re-runs.
 
+### runRunsListE / runRunsPauseE / runRunsPruneE (config/cmd_runs.go)
+
+```
+faber runs [--json]           list runs: id, name, workflow, state, started
+faber runs pause <ref>        write the pause marker (live runs only)
+faber runs prune [--all]      delete finished non-live run dirs
+```
+
+All three dispatch through the `RunController` seam (failure module):
+
+```go
+type RunController interface {
+    ResolveRunRef(ref string) (string, error) // id or header name -> run id
+    RequestPause(runID string) error          // live runs only
+    PruneRuns(all bool) ([]string, error)     // removed run ids
+}
+```
+
+The listing reuses `RunAuditor.AuditRuns()` — the audit rows are enriched
+with the header's name/workflow/started and the last run-end's status — and
+derives each state config-side from the audit facts alone: `live` (lock
+held), else `incomplete` (no run-end), else the run-end status verbatim
+(`paused`/`settled`/`aborted`). `--json` encodes the same rows; the text path
+prints aligned columns to stdout. `runs` with a positional argument that is
+not a registered subcommand is a usage error (exit 2); a pause of a non-live
+run or an unknown/ambiguous reference is operational (exit 1). `run` gains
+`--name` (threaded as `RunOptions.Name` into the journal header), and
+`runResumeE` resolves its positional through `ResolveRunRef` before
+`LoadHeader` — an id always wins over an equal name, so existing id-based
+invocations are byte-identical — and threads the journaled name back as
+`RunOptions.Name`, which only the fresh path reads: a named run stays named
+across a `--fresh` restart.
+
 ### runUpgradeE (config/cmd_upgrade.go)
 
 ```

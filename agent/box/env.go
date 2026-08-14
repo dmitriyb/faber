@@ -1,12 +1,14 @@
 package box
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/dmitriyb/faber/agent/contract"
+	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/security"
 )
 
@@ -55,6 +57,15 @@ type BoxEnv struct {
 	ExtraInstruction string
 	MaxBudget        string
 
+	// Invoke is the concrete invocation dialect the agent phase expands,
+	// decoded from FABER_INVOKE_PROFILE by the env phase. Absent or empty
+	// means the built-in default (config.DefaultInvoke) — the tolerated
+	// absence that keeps direct sequencer invocations and pre-profile hosts
+	// working without a contract-version bump. Malformed JSON, or a profile
+	// violating the template rules, is an env-contract violation — never a
+	// silent fallback to a dialect the host did not send.
+	Invoke config.ResolvedInvoke
+
 	GitName  string
 	GitEmail string
 
@@ -101,13 +112,14 @@ type BoxEnv struct {
 	// opt-in.
 	AgentOptional bool
 
-	// rawSchema, rawAttempt, rawTOFU, rawContract and rawAgentOptional hold
-	// the undecoded values for the env phase.
+	// rawSchema, rawAttempt, rawTOFU, rawContract, rawAgentOptional and
+	// rawInvoke hold the undecoded values for the env phase.
 	rawSchema        string
 	rawAttempt       string
 	rawTOFU          string
 	rawContract      string
 	rawAgentOptional string
+	rawInvoke        string
 }
 
 // ParseEnv decodes the box environment. It never fails: the env phase
@@ -148,6 +160,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		rawTOFU:          get(security.EnvHostKeyTOFU),
 		rawContract:      get(contract.EnvContractVersion),
 		rawAgentOptional: get(contract.EnvAgentOptional),
+		rawInvoke:        get(contract.EnvInvokeProfile),
 	}
 	if raw := strings.TrimSpace(get(contract.EnvInputSlots)); raw != "" {
 		for _, name := range strings.Split(raw, ",") {
@@ -229,6 +242,19 @@ func (e *BoxEnv) validate() error {
 		e.AgentOptional = true
 	default:
 		errs = append(errs, fmt.Errorf("%s: %q is not the contract value \"1\" — refusing to guess whether the agent is skippable", contract.EnvAgentOptional, e.rawAgentOptional))
+	}
+	// The invocation dialect: absent means the built-in default (the tolerated
+	// absence serving direct invocations and pre-profile hosts); present means
+	// a concrete profile that must decode and satisfy the shared profile rules
+	// — never a silent fallback to a dialect the host did not send.
+	if e.rawInvoke == "" {
+		e.Invoke = config.DefaultInvoke()
+	} else if err := json.Unmarshal([]byte(e.rawInvoke), &e.Invoke); err != nil {
+		errs = append(errs, fmt.Errorf("%s: %v", contract.EnvInvokeProfile, err))
+	} else {
+		for _, fe := range e.Invoke.Violations() {
+			errs = append(errs, fmt.Errorf("%s: %s: %s", contract.EnvInvokeProfile, fe.Path, fe.Msg))
+		}
 	}
 	if e.HostKey != "" && e.TOFU {
 		errs = append(errs, fmt.Errorf("%s and %s are mutually exclusive", security.EnvHostKey, security.EnvHostKeyTOFU))

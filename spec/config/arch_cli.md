@@ -39,7 +39,7 @@ for faber specifically:
 ## Subcommand registration pattern
 
 One file per subcommand under `config/` (`cmd_validate.go`, `cmd_build.go`,
-`cmd_run.go`, `cmd_resume.go`, `cmd_upgrade.go`,
+`cmd_run.go`, `cmd_resume.go`, `cmd_runs.go`, `cmd_upgrade.go`,
 `cmd_addkey.go`, `cmd_listkeys.go`, plus `version.go`), each exporting a
 `newXxxCmd(deps Deps) *cobra.Command` that registers its own flags and a
 `runXxxE(cmd *cobra.Command, ..., deps Deps) error` body — mirroring
@@ -48,8 +48,8 @@ spexmachina's `cmd/spex/*.go` file-per-command split (`newXxxCmd()` +
 `newXxxCmd` and `runXxxE` both take an explicit `deps Deps` parameter
 (closed over by the `RunE` closure), because faber's subcommands dispatch
 into not-yet-wired module seams (`PackageProver`, `ImageBuilder`, `Executor`,
-`JournalStore`, `RunAuditor`, `RegistryController`, `Installer`) that
-spexmachina's commands have no equivalent of.
+`JournalStore`, `RunAuditor`, `RunController`, `RegistryController`,
+`Installer`) that spexmachina's commands have no equivalent of.
 
 `NewRootCmd(deps Deps) *cobra.Command` wires every subcommand onto the root
 via `AddCommand`, exactly like spexmachina's `main.go`. `RunWithDeps` builds
@@ -73,8 +73,11 @@ subcommand.
 |---------|-------------|--------------|
 | `faber validate [--config path] [--emit-ir] [--workflow name]` | Load -> Validate -> Desugar -> WiringChecker -> infra package-resolution proof | the named (or every) workflow would start |
 | `faber build [--config path] [--template name]` | Load -> Validate -> ImageBuilder per template | images built and tagged |
-| `faber run <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
-| `faber resume <run-id> [--fresh] [--interactive <step-id>] [--report-json path\|-]` | journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
+| `faber run <workflow> [--name n] [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
+| `faber resume <run-id\|name> [--fresh] [--interactive <step-id>] [--report-json path\|-]` | run-ref resolution -> journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
+| `faber runs [--json]` | RunController listing (audit scan + header reads) | the run store was enumerated and printed |
+| `faber runs pause <run-id\|name>` | run-ref resolution -> pause-marker write (live runs only) | the pause request is durably recorded |
+| `faber runs prune [--all]` | RunController prune (finished + non-live; `--all` widens to paused and incomplete) | the eligible run directories were removed |
 | `faber upgrade [--check\|--dry-run] [--version vX.Y.Z] [--rollback] [--force]` | active-runs guard (refuse while live/unfinished unless `--force`) -> resolve faber/faber-box paths -> run the embedded install.sh in upgrade mode (`Installer` seam; forward-only latest, or the exact `--version` in any direction) | both binaries moved forward to the latest signed release (or installed at `--version`, or rolled back), or reported for `--check` |
 | `faber add-key --role <name> --fingerprint SHA256:… [--comment <c>] [--git-name <n>] [--git-email <e>] [--force]` | security.RoleRegistry load -> AddKey -> atomic save | the role points at the fingerprint with its committer identity (upsert or verified no-op) |
 | `faber list-keys` | security.RoleRegistry load -> print | the registry was read and printed |
@@ -142,6 +145,21 @@ what puts the script on the explicit-version path versus the forward-only latest
 path. `--current` is passed on both paths (a `dev`/unstamped build omits it),
 but the anomaly refusal fires only on the latest path.
 
+The `runs` group is run-store administration in one word: `faber runs` lists
+every journaled run (id, name, workflow, state — `live`, `paused`, `settled`,
+`aborted`, `incomplete` — and started timestamp; `--json` emits the same rows
+machine-readably), `runs pause` records the cooperative stop request, and
+`runs prune` deletes finished run directories (paused runs kept without
+`--all`; live runs never touched). The mechanism — the tolerant audit scan,
+name-or-id resolution over headers, the pause marker, the lock-guarded
+deletion — is the failure module's, behind the `RunController` seam; the
+subcommands are thin dispatch plus rendering. `resume` stays top-level: it is
+a lifecycle verb of the same rank as `run`, not run-store administration.
+`run --name <n>` stores an optional human name in the journal header
+(threaded through `RunOptions.Name`); commands taking a run reference accept
+a run id or a name, an id always winning over an equal name and an ambiguous
+name refusing with the matching ids.
+
 `faber --help`, `faber -h`, `faber help`, and every subcommand's `-h`/`--help`
 (e.g. `faber run --help`, `faber help run`) print usage and flag defaults to
 stdout and exit 0 — never the exit-2 usage error, and never only reachable at
@@ -175,9 +193,13 @@ HOME (the platform convention `roles.json` already follows), never a value.
 ## Exit codes
 
 0 success; 1 validation or run failure (details already reported); 2 usage
-error. `validate` reports *all* errors before exiting — the multi-error
-discipline of the Loader and WiringChecker surfaces here as one combined,
-field-path-sorted listing.
+error; 3 halted (`run`/`resume`: no step failed but at least one settled
+halted); 4 paused (`run`/`resume`: the run ended in a cooperative pause with
+nothing failed or halted — failure outranks halt outranks pause). The two
+run-outcome codes ride the executor's typed errors (`RunHalted`, `RunPaused`)
+through the generic `ExitCode()` mapping below. `validate` reports *all*
+errors before exiting — the multi-error discipline of the Loader and
+WiringChecker surfaces here as one combined, field-path-sorted listing.
 
 This contract predates cobra and is preserved exactly, not relaxed to
 cobra's own defaults (uncaught error → stderr, exit 1, no usage-vs-operational

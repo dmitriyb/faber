@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -33,7 +34,10 @@ type ImageBuilder interface {
 // RunOptions carries run policy from the CLI to the executor. Measurement is
 // run policy, so metering config lives beside the run, not in orchestrator.yaml.
 type RunOptions struct {
-	RunID           string
+	RunID string
+	// Name is the optional operator-given run name (faber run --name),
+	// stored in the journal header for humans and name-form run references.
+	Name            string
 	Mode            string // "" (fresh run) | "resume" | "fresh" | "interactive"
 	InteractiveStep string
 	MaxParallel     int
@@ -66,6 +70,7 @@ type Executor interface {
 // engine upgrade from operator config drift.
 type JournalHeader struct {
 	RunID      string
+	Name       string // optional operator-given run name ("" when unnamed)
 	ConfigPath string
 	Workflow   string
 	Params     map[string]string
@@ -83,12 +88,17 @@ type JournalStore interface {
 }
 
 // RunAudit is one journaled run's upgrade-relevant state, as the pre-upgrade
-// guard reports it.
+// guard reports it — enriched with the header identity fields the `faber
+// runs` listing renders (all best-effort: empty/zero when unprobeable).
 type RunAudit struct {
-	RunID    string
-	Live     bool // another process currently holds the run's lock
-	Complete bool // the journal records a run-end marker
-	Format   int  // journal schema stamp (0 = pre-versioning journal)
+	RunID     string
+	Live      bool      // another process currently holds the run's lock
+	Complete  bool      // the journal records a run-end marker
+	Format    int       // journal schema stamp (0 = pre-versioning journal)
+	Name      string    // header's optional operator-given run name
+	Workflow  string    // header's workflow
+	Started   time.Time // header's start timestamp (zero when unprobeable)
+	EndStatus string    // last run-end record's status ("" when incomplete)
 }
 
 // RunAuditor enumerates journaled runs for the active-runs guard `faber
@@ -97,6 +107,16 @@ type RunAudit struct {
 // the guard's whole job is to look before an upgrade leaps.
 type RunAuditor interface {
 	AuditRuns() ([]RunAudit, error)
+}
+
+// RunController administers the run store (failure module): run-reference
+// resolution (a run id or a header name; an id wins over an equal name), the
+// durable pause request (live runs only), and prune. The listing itself
+// rides RunAuditor — the same tolerant scan the upgrade guard uses.
+type RunController interface {
+	ResolveRunRef(ref string) (string, error)
+	RequestPause(runID string) error
+	PruneRuns(all bool) ([]string, error)
 }
 
 // RegistryController manages the global role→fingerprint registry (security
@@ -127,6 +147,7 @@ type Deps struct {
 	Executor  Executor
 	Journal   JournalStore
 	Audit     RunAuditor
+	Runs      RunController
 	Registry  RegistryController
 	BuildInfo BuildInfo
 	// Installer runs the embedded install.sh in upgrade mode (faber upgrade).
@@ -165,7 +186,11 @@ commands:
   validate   load, desugar, and check every workflow; --emit-ir prints the IR
   build      build template images
   run        execute a workflow: faber run <workflow> --param k=v ...
-  resume     re-enter a journaled run: faber resume <run-id>
+  resume     re-enter a journaled run: faber resume <run-id|name>
+  runs       list journaled runs (id, name, workflow, state, started; --json);
+             runs pause <run-id|name> asks a live run to pause (drain in-flight
+             steps, then stop, exit 4); runs prune deletes finished non-live
+             run directories (--all also removes paused and incomplete ones)
   upgrade    forward-only update of faber and faber-box to the latest signed
              release via the embedded install.sh; refuses a latest older than
              installed (non-overridable), and refuses while live/unfinished runs
@@ -217,6 +242,7 @@ func NewRootCmd(deps Deps) *cobra.Command {
 		newBuildCmd(deps),
 		newRunCmd(deps),
 		newResumeCmd(deps),
+		newRunsCmd(deps),
 		newUpgradeCmd(deps),
 		newAddKeyCmd(deps),
 		newListKeysCmd(deps),
@@ -227,9 +253,11 @@ func NewRootCmd(deps Deps) *cobra.Command {
 // Run is the faber CLI: subcommand dispatch, exit-code contract, and logging
 // initialization, testable in-process. Exit codes: 0 success; 1 validation or
 // run failure (details already reported on stderr); 2 usage error; 3 halted
-// (run/resume only: no step failed but at least one settled halted — the
-// executor's typed halt error carries the code through the generic
-// ExitCode() mapping below).
+// (run/resume only: no step failed but at least one settled halted); 4 paused
+// (run/resume only: the run ended in a cooperative pause with nothing failed
+// or halted — failure outranks halt outranks pause). The run-outcome codes
+// ride the executor's typed errors through the generic ExitCode() mapping
+// below.
 func Run(args []string, stdout, stderr io.Writer) int {
 	return RunWithDeps(args, stdout, stderr, Deps{})
 }

@@ -148,6 +148,22 @@ carries the splice (or the contract error, settling the node failed). The node
 settles `ok` only after the splice is applied, so no dependent can slip
 between expansion and rewiring.
 
+## The pause gate
+
+The scheduler carries a `pause func() bool` probe (the executor wires it to
+`failure.PauseRequested(runDir)`; tests fake it). The drain pass checks it
+first and, once true, latches `paused` and stops granting slots and
+dispatching ready nodes; the event loop keeps folding settlements (journal
+appends, cost records, propagation all normal) and exits when `paused` and
+nothing is outstanding while nodes remain undispatched. An idle loop (a
+timed defer window with no worker outstanding) re-probes on a coarse tick
+(`pausePollInterval`, ~1s, test-shrinkable via the scheduler's `pausePoll`),
+so the pause never waits out the window. The executor then
+appends the `paused` run-end record and — when no step failed or halted —
+returns the typed `RunPaused` error (`ExitCode() 4`). A deferred node (timed
+or zero-until) is not outstanding: its wake event may arrive after the loop
+exits and is absorbed by the closed-loop send guard.
+
 ## Failure and halt propagation
 
 ```go

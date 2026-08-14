@@ -11,12 +11,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const resumeUsageText = "usage: faber resume <run-id> [--fresh] [--interactive <step-id>] [flags]"
+const resumeUsageText = "usage: faber resume <run-id|name> [--fresh] [--interactive <step-id>] [flags]"
 
 func newResumeCmd(deps Deps) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "resume <run-id>",
-		Short: "Re-enter a journaled run: faber resume <run-id>",
+		Use:   "resume <run-id|name>",
+		Short: "Re-enter a journaled run: faber resume <run-id|name>",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runResumeE(cmd, args, deps)
 		},
@@ -35,7 +35,17 @@ func runResumeE(cmd *cobra.Command, args []string, deps Deps) error {
 	if len(args) == 0 {
 		return usageErr(errors.New(resumeUsageText))
 	}
+	// The positional is a run reference: an id, or a --name-given header
+	// name (an id always wins over an equal name). With no RunController
+	// wired the reference is used as an id unchanged.
 	runID := args[0]
+	if deps.Runs != nil {
+		resolved, err := deps.Runs.ResolveRunRef(runID)
+		if err != nil {
+			return err
+		}
+		runID = resolved
+	}
 
 	common := readCommonFlags(cmd)
 	fresh, _ := cmd.Flags().GetBool("fresh")
@@ -93,6 +103,9 @@ func runResumeE(cmd *cobra.Command, args []string, deps Deps) error {
 	defer stop()
 	opts := RunOptions{
 		RunID: runID, Mode: mode, InteractiveStep: interactive,
+		// Only the fresh path reads Name (it writes a brand-new header);
+		// inheriting it keeps a named run named across --fresh restarts.
+		Name:       header.Name,
 		ReportJSON: reportJSON,
 		ConfigPath: header.ConfigPath, Workflow: header.Workflow, Supplied: header.Params,
 		Targets: targets, Config: cfg,
