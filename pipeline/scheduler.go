@@ -107,6 +107,17 @@ type scheduler struct {
 	runID  string
 	runDir string
 
+	// pause probes the durable pause marker (failure.PauseRequested over the
+	// run dir); nil never pauses (unit wiring). paused latches the first true
+	// probe: a seen request stays honored for the rest of the execution even
+	// if the marker file vanishes, so the drain decision cannot flap mid-run.
+	// pausePoll is the idle re-probe interval (0 ⇒ pausePollInterval): with
+	// nothing outstanding the loop blocks on events, and only this tick lets
+	// a pause request end the run instead of waiting out a defer window.
+	pause     func() bool
+	paused    bool
+	pausePoll time.Duration
+
 	// failed counts nodes settled failed by THIS execution — the exit-code
 	// source of truth, owned by the loop goroutine rather than re-derived by
 	// re-reading the journal at report time (a report-load failure must not
@@ -146,12 +157,22 @@ func (s *scheduler) run(ctx context.Context) error {
 			s.step(<-s.events)
 			continue
 		}
+		if s.paused && s.outstanding == 0 {
+			// The pause drain ended the run: everything in flight settled and
+			// journaled normally, nothing new dispatches, and the remaining
+			// nodes stay unjournaled — exactly where resume re-enters.
+			break
+		}
 		select {
 		case ev := <-s.events:
 			s.step(ev)
 		case <-ctx.Done():
 			s.fatal = fmt.Errorf("pipeline: run aborted: %w", context.Cause(ctx))
 			continue
+		case <-s.pauseProbe():
+			// Idle tick, no event: the drain below re-probes the marker, so
+			// a pause requested during a quiet wait (a timed defer window
+			// with no worker outstanding) ends the run within one interval.
 		}
 		if s.fatal == nil {
 			s.drain(ctx)
@@ -195,12 +216,48 @@ func (s *scheduler) releaseSlot() {
 	}
 }
 
+// pausePollInterval is the default idle re-probe cadence for the pause
+// marker — coarse on purpose: one stat per interval, and a pause is honored
+// within roughly one interval even when the run is sitting out a rate-limit
+// defer window with nothing in flight.
+const pausePollInterval = time.Second
+
+// pauseProbe returns the idle re-probe wake channel, or nil (never fires)
+// when no probe is wired or the request is already latched — the select
+// then waits on events alone.
+func (s *scheduler) pauseProbe() <-chan time.Time {
+	if s.pause == nil || s.paused {
+		return nil
+	}
+	d := s.pausePoll
+	if d == 0 {
+		d = pausePollInterval
+	}
+	return time.After(d)
+}
+
+// pauseGate re-derives the durable pause request from the store, once per
+// drain pass, and latches it. Checking here — the single admission point for
+// slots and dispatch — is what makes pause cooperative: outstanding workers
+// keep settling through the ordinary event path while nothing new starts.
+func (s *scheduler) pauseGate() bool {
+	if s.paused {
+		return true
+	}
+	if s.pause != nil && s.pause() {
+		s.paused = true
+		s.log.Info("pause requested; letting in-flight steps settle, dispatching nothing new")
+	}
+	return s.paused
+}
+
 // drain runs the loop-side work to a fixed point: grant slots to waiting box
 // nodes in id order, then run the cheap gates for every ready node in id
 // order. The slot grant order — not goroutine wakeup — decides which box
 // launches next, keeping dispatch deterministic under a full semaphore.
+// A pause request stops the pass before any grant or dispatch.
 func (s *scheduler) drain(ctx context.Context) {
-	for s.fatal == nil {
+	for s.fatal == nil && !s.pauseGate() {
 		progressed := false
 		for len(s.slotQ) > 0 && s.slotFree() && s.fatal == nil {
 			id := s.slotQ.pop()

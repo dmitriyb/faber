@@ -21,6 +21,7 @@ func newRunCmd(deps Deps) *cobra.Command {
 		},
 	}
 	addCommonFlags(cmd)
+	cmd.Flags().String("name", "", "human name for the run, stored in the journal header (usable as a run reference)")
 	cmd.Flags().StringArray("param", nil, "workflow param binding k=v (repeatable)")
 	cmd.Flags().StringArray("budget", nil, "budget bound unit=n (repeatable)")
 	cmd.Flags().Int("max-parallel", 0, "maximum concurrently running steps (0 = unlimited)")
@@ -36,6 +37,7 @@ func runRunE(cmd *cobra.Command, args []string, deps Deps) error {
 	workflow := args[0]
 
 	common := readCommonFlags(cmd)
+	name, _ := cmd.Flags().GetString("name")
 	paramFlags, _ := cmd.Flags().GetStringArray("param")
 	budgetFlags, _ := cmd.Flags().GetStringArray("budget")
 	maxParallel, _ := cmd.Flags().GetInt("max-parallel")
@@ -65,6 +67,7 @@ func runRunE(cmd *cobra.Command, args []string, deps Deps) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	opts := RunOptions{
+		Name:        name,
 		MaxParallel: maxParallel, Budgets: budgets, MeteringPath: metering,
 		ReportJSON: reportJSON,
 		ConfigPath: common.config, Workflow: workflow, Supplied: supplied,

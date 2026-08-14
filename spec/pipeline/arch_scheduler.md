@@ -73,6 +73,44 @@ mid-retry `defer` re-queues without consuming the retry, and a mid-retry
 `reject` settles the step failed immediately — spent only grows, so burning
 the remaining attempts on refusals would be noise.
 
+## Cooperative pause
+
+The scheduler honors the failure module's durable pause marker (`pause` in
+the run directory, written by `faber runs pause` against a live run). The
+marker is re-derived from the store at the scheduling points — once per
+drain pass, one stat, no signal handling, no IPC — plus a coarse idle tick
+(about a second) so a request made during a quiet wait, a timed rate-limit
+defer window with nothing in flight being the driving case, ends the run
+within roughly one interval instead of waiting out the window. Once seen the
+request is sticky for the rest of the execution:
+
+- **Stop admitting work.** No box slot is granted and no ready step is
+  dispatched; the ready and slot queues simply stop draining.
+- **Drain and settle.** Every outstanding worker finishes normally — the
+  same drain-and-settle discipline the fatal path uses, except the context
+  stays live, so settling steps journal ordinary records (their `ok`
+  records are ordinary resume reuse hits) and metering settles as usual.
+- **End paused.** When nothing is outstanding and undispatched nodes
+  remain, the run ends with a run-end record of status `paused`. If the
+  drain finds the graph actually completed, the run settled — the run-end
+  status is `paused` only when the drain itself is what ended the run.
+
+Pause drains the whole run: with parallel steps in flight, each finishes and
+settles, and nothing new dispatches. Loops need no special handling —
+iterations are unrolled at desugar time, so "pause after the current step of
+the current cycle" is exactly "stop dispatching new steps". A step waiting
+on a defer (timed or zero-until) is not outstanding work: it settles nothing,
+so a paused run ends without it and resume re-runs it — no record, no loss.
+
+Pause is not an abort and not a halt: it is an operator request recorded
+outside the workflow, involving no step result, no failure policy, and no
+`halt.json`. A step that fails or halts while the run is draining keeps its
+own status and its normal propagation; only the run-end status says `paused`.
+The executor maps a cleanly paused run to its own exit code (4) via a typed
+error, after the existing precedences — failure (1) outranks halt (3)
+outranks pause (4) — so a supervising script branches on the code, never on
+report text.
+
 ## Run preflight
 
 Before any run state exists (no journal, no run dir, no lock), every agent
