@@ -1,10 +1,21 @@
 # Installing faber
 
-Two binaries are published on the [GitHub Releases page][releases]: `faber` (the host CLI, linux/darwin, amd64/arm64) and `faber-box` (the in-container phase sequencer, linux only, amd64/arm64).
-`faber-box` runs as every box's entrypoint, bind-mounted into the container, and never on the host directly (see [`deploy.md`](deploy.md)); both are installed side by side and upgraded as a pair.
-Every release archive is signed with SSHSIG (`ssh-keygen -Y sign`), verifiable with the `ssh-keygen` that already ships with OpenSSH — no extra tool to install just to verify.
+Two binaries are published on the [GitHub Releases page][releases]: `faber`,
+the host CLI (linux/darwin, amd64/arm64), and `faber-box`, the in-container
+phase sequencer (linux only, amd64/arm64). `faber-box` is bind-mounted into
+every box and never runs on the host directly, see [`deploy.md`](deploy.md);
+the two are installed side by side and upgraded as a pair. Every release
+archive is signed with SSHSIG (`ssh-keygen -Y sign`), verifiable with the
+`ssh-keygen` that ships with OpenSSH — no extra tool to install just to verify.
 
 [releases]: https://github.com/dmitriyb/faber/releases
+
+## Why not `curl | sh`
+
+A piped script executes as it streams and cannot verify itself before it
+runs. Verification therefore has to wrap the download from outside the
+stream: download the script, verify the script, then run it. That is the
+whole reason the primary path is three commands rather than one pipe.
 
 ## Primary: verified install script
 
@@ -29,22 +40,29 @@ and sh install.sh
 and rm -f install.sh install.sh.sig
 ```
 
-This downloads `install.sh`, verifies **the script itself** against the public key below, and only then runs it — never `curl | sh`.
-`install.sh` then resolves the latest release, detects your OS/arch, downloads the matching `faber` archive plus the `faber-box` archive (linux/arch always) and their signatures, and verifies both with the same key (embedded in the script, trusted because the script was just verified) before installing them side by side.
-Set `VERSION=v0.1.0` before the final `sh install.sh` to install a specific release instead of the latest.
-
-The block above needs bash or zsh (`<(…)` process substitution).
-Under a plain `sh`, write the allowed-signers line to a file first:
+**plain `sh`** (no `<(…)` process substitution): write the allowed-signers
+line to a file first, then verify against it.
 
 ```sh
 printf 'dvbozhko@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIhmCWVDP/Tcm3CqXNjTQTChbKxr223xMob9zc56Uuny release signing\n' > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I dvbozhko@gmail.com -n file -s install.sh.sig < install.sh
-sh install.sh
 ```
+
+The block verifies **the script itself** against the public key below and
+only then runs it. `install.sh` resolves the latest release, detects your
+OS/arch, downloads the matching `faber` archive plus the `faber-box` archive
+(linux, your arch, always) and their signatures, and verifies **both** with
+the same key (embedded in the script, trusted because the script was just
+verified) before installing them side by side.
+
+The script is POSIX `sh`. Set `VERSION=v0.1.0` before `sh install.sh` to
+install a specific release, and `INSTALL_DIR=DIR` to choose the install
+directory (default `/usr/local/bin`).
 
 ## Maximal: verify the binary archives directly
 
-No install script — download the archives for your platform from the [Releases page][releases], then verify each by any one of:
+No install script — download the archives for your platform from the
+[Releases page][releases], then verify each by any one of:
 
 ```bash
 # SSHSIG, against the same pinned key as above
@@ -60,14 +78,26 @@ CGO_ENABLED=0 GOOS=linux go install github.com/dmitriyb/faber/cmd/faber-box@<tag
 ```
 
 The same three checks apply to `faber-box_<version>_linux_<arch>.tar.gz`.
-Each release also carries a consolidated `checksums.txt`, one `.sha256` per archive, and a machine-readable `manifest.json` (schema, target, sha256, size per artifact).
+Each release also carries a consolidated `checksums.txt`, one `.sha256` per
+archive, and a machine-readable `manifest.json` (schema, target, sha256, size
+per artifact).
 
 ## What each channel protects, and what it doesn't
 
-- **Primary** verifies both the install script and the binaries it fetches, end to end — `download → verify → run`, never a piped script. A piped `curl … | sh` executes as it streams and cannot verify itself before running, so verification has to wrap the download from outside the stream; that is why the primary path is not a one-liner pipe.
-- **Maximal** gives you the strongest per-artifact check for a single file, with no script in between.
-- The trust anchor in both cases is the public key **copied from this document**. That defeats tampering of the download in transit; the residual risk is being sent to a look-alike copy of this repository, closed by using the known repository URL and by pinning the public key **once** — copy it a single time, then verify every future release against that pinned copy.
-- Signatures and attestations give **authenticity, not freshness**: a channel attacker who can intercept your download could still steer you to a genuine-but-older, vulnerable release. This applies to every channel above equally at *first install*, where there is no installed version to floor against. For *updates* it is closed: `faber upgrade` is forward-only (see Upgrading).
+- **Primary** verifies both the install script and the binaries it fetches,
+  end to end: `download → verify → run`, never a piped script.
+- **Maximal** gives the strongest per-artifact check for a single file, with
+  no script in between.
+- The trust anchor in both cases is the public key **copied from this page**.
+  That defeats tampering in transit; the residual risk is a look-alike copy
+  of this repository, closed by using the known repository URL and by pinning
+  the key **once** — copy it a single time, then verify every future release
+  against that pinned copy.
+- Signatures and attestations give **authenticity, not freshness**: an
+  attacker who can intercept a download could still steer a *first install*
+  to a genuine-but-older release. For *updates* this is closed: `faber upgrade`
+  is forward-only and hard-refuses a resolved latest older than what is
+  installed.
 
 ## Public key
 
@@ -75,12 +105,24 @@ Each release also carries a consolidated `checksums.txt`, one `.sha256` per arch
 dvbozhko@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIhmCWVDP/Tcm3CqXNjTQTChbKxr223xMob9zc56Uuny release signing
 ```
 
-This is the same key across all three verification paths above (SSHSIG install script, SSHSIG archives, and the `allowed_signers` line either way), and the same key faber's sibling tools (portitor, spexmachina) use.
-It can also be pinned and cross-checked against GitHub's own copy at `https://api.github.com/users/dmitriyb/ssh_signing_keys`, once it is added under Settings → SSH and GPG keys → Signing keys — useful if this document itself is ever suspected of being tampered with in a fork or mirror.
+The same key serves all three verification paths above, and the same line
+is published by faber's sibling tools, [portitor](https://github.com/dmitriyb/portitor)
+and [spexmachina](https://github.com/dmitriyb/spexmachina), so one pinned
+copy serves all three. It can be cross-checked against GitHub's own copy at
+`https://api.github.com/users/dmitriyb/ssh_signing_keys` once it is added
+under Settings → SSH and GPG keys → Signing keys — useful if this page itself
+is suspected of being tampered with in a fork or mirror.
 
 ## Upgrading
 
-Once faber is installed, `faber upgrade` updates it — and its coupled `faber-box` — to the latest signed release in place, without re-downloading `install.sh`:
+An installed pair updates itself with `faber upgrade`, which embeds the same
+signed `install.sh` and runs it against the installed binaries: the same
+resolve → download → SSHSIG-verify, then both binaries replaced as a unit,
+since a mismatched `faber`/`faber-box` pair is a broken state (the two share
+a contract version). Both signatures are verified before either binary is
+touched, and the previous pair is kept as `.bak` for `--rollback`. It refuses
+while a run is live or unfinished — faber is not swapped mid-run; `--force`
+overrides that guard and only that guard.
 
 ```sh
 faber upgrade                    # forward to the latest release
@@ -90,11 +132,11 @@ faber upgrade --rollback         # restore the previous pair from their .bak bac
 faber upgrade --force            # proceed despite live/unfinished runs
 ```
 
-`faber upgrade` reuses the exact `install.sh` above, embedded byte-for-byte into the already-verified faber binary, so the same resolve → download → SSHSIG-verify path runs with nothing separate to fetch or trust.
-It first runs the active-runs guard: it refuses while a run is live or unfinished, since faber is not swapped mid-run (`--force` overrides that guard).
-It then replaces **both** binaries as a unit, because a mismatched `faber`/`faber-box` pair is a broken state (the two share a contract version).
-Both signatures are verified before either binary is touched (fail closed), and the previous pair is kept alongside the new one for `--rollback`.
-
-Upgrade is **forward-only**: it moves toward the latest release and hard-refuses a latest that is OLDER than the installed version. A latest that moved backward is a rollback anomaly (a compromised origin serving an old but validly-signed release as "latest"), and no flag overrides it.
-To install an older release deliberately, name it with `--version`, which installs that exact release in any direction with no guard.
-`faber upgrade --check` reports availability and changes nothing; it warns about (but does not block on) active runs and exits 0 whenever it could resolve the latest release.
+Upgrade is **forward-only**: it hard-refuses, non-overridably, a resolved
+latest that is *older* than the installed version — a signature proves
+authenticity, not freshness, so a latest that moved backward is treated as a
+rollback anomaly. `--check` reports the comparison without changing anything
+(it warns about active runs and exits 0 whenever the latest resolved),
+`--version vX.Y.Z` installs an exact release in any direction (the deliberate
+path to an older release), and `--rollback` restores the backup pair. See
+[`commands.md`](commands.md) for the flag reference.
