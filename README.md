@@ -1,7 +1,13 @@
 # faber
 
-A generic containerized-agent workflow engine.
-You declare a workflow in one `orchestrator.yaml`; faber compiles it to a deterministic JSON IR, builds immutable agent images from pinned Nix package sets, and executes the workflow as a host-side DAG of single-purpose containers ("boxes").
+**A workflow engine for containerized agents: one YAML in, a host-side DAG of sealed single-purpose boxes out.**
+
+[![Release](https://img.shields.io/github/v/release/dmitriyb/faber)](https://github.com/dmitriyb/faber/releases)
+[![Go](https://img.shields.io/github/go-mod/go-version/dmitriyb/faber)](go.mod)
+[![License](https://img.shields.io/github/license/dmitriyb/faber)](LICENSE)
+[![CI](https://github.com/dmitriyb/faber/actions/workflows/ci.yml/badge.svg)](https://github.com/dmitriyb/faber/actions/workflows/ci.yml)
+
+<!-- recording placeholder: faber validate --emit-ir on examples/quickstart, then a quickstart run -->
 
 ```
 orchestrator.yaml ──validate──▶ JSON IR (acyclic, byte-deterministic)
@@ -17,21 +23,21 @@ orchestrator.yaml ──validate──▶ JSON IR (acyclic, byte-deterministic)
 ```
 
 Faber is **mechanism, not policy**: it knows `docker build`/`docker run`, a workflow DAG, and a handful of pluggable interfaces.
-It never learns your issue tracker, your review gate, or your agent vendor — all opinionated behavior arrives as user config: opaque scripts, typed params, data-source commands, and companion services on a docker network faber treats as opaque.
+It never learns your issue tracker, your review gate, or your agent vendor; all opinionated behavior arrives as user config: opaque scripts, typed params, data-source commands, and companion services on a docker network faber treats as opaque.
 See [`docs/architecture.md`](docs/architecture.md) for the full model.
 
----
+## What it does
+
+- **Compiles one `orchestrator.yaml` to a deterministic IR.** Wiring, types, reference cycles and package resolution are checked at `faber validate`, with field paths; the same YAML always yields byte-identical JSON, so the plan is diffable and reviewable before anything runs.
+- **Builds immutable images from a pinned Nix package set.** No Dockerfile and no repo content baked in; an image is a function of its package list, overlay and nixpkgs pin.
+- **Runs every step in its own box with a fixed phase order.** context, prelude, agent, postlude, result, driven by an engine-owned sequencer. The typed output is enforced at the container boundary, and every security control (egress proxy, one pinned git remote, one role key in an ephemeral ssh-agent, credentials as handles) is bound from outside the untrusted container.
+- **Schedules the DAG on the host.** Topological and parallel, with CEL conditions on edges, bounded loops unrolled at compile time, `generate` fan-out over a data-source command at run time, and an append-only journal that `faber resume` picks up from.
+- **Knows no domain words.** Trackers, review gates, spec tools and agent vendors are all user configuration; a change that teaches faber one of them is wrong by construction.
 
 ## Install
 
-Two binaries are published on the [GitHub Releases page][releases]: `faber` (the host CLI, linux/darwin, amd64/arm64) and `faber-box` (the in-container phase sequencer, linux only, amd64/arm64 — it runs as every box's entrypoint, never on the host directly; see [`docs/deploy.md`](docs/deploy.md)).
-Every release archive is signed with SSHSIG (`ssh-keygen -Y sign`), verifiable with the `ssh-keygen` that already ships with OpenSSH on essentially every machine — no extra tool to install just to verify.
-
-[releases]: https://github.com/dmitriyb/faber/releases
-
-### Primary: verified install script
-
-**bash / zsh:**
+Two binaries are published on the [GitHub Releases page](https://github.com/dmitriyb/faber/releases): `faber` (the host CLI, linux/darwin, amd64/arm64) and `faber-box` (the in-container phase sequencer, linux only).
+The install script is verified against the release signing key before it runs, and the script verifies both binaries the same way and installs them side by side.
 
 ```bash
 curl -fsSL https://github.com/dmitriyb/faber/releases/latest/download/install.sh     -o install.sh \
@@ -42,7 +48,8 @@ curl -fsSL https://github.com/dmitriyb/faber/releases/latest/download/install.sh
 && rm -f install.sh install.sh.sig
 ```
 
-**fish:**
+<details>
+<summary>fish</summary>
 
 ```fish
 curl -fsSL https://github.com/dmitriyb/faber/releases/latest/download/install.sh -o install.sh
@@ -52,93 +59,102 @@ and sh install.sh
 and rm -f install.sh install.sh.sig
 ```
 
-This downloads `install.sh`, verifies **the script itself** against the public key below, and only then runs it — never `curl | sh`.
-`install.sh` then resolves the latest release, detects your OS/arch, downloads the matching `faber` archive plus the `faber-box` archive (linux/arch always — see above) and their signatures, and verifies both with the same key (embedded in the script, trusted because the script was just verified) before installing them side by side.
-Set `VERSION=v0.1.0` before the final `sh install.sh` to install a specific release instead of the latest.
+</details>
 
-The block above needs bash or zsh (`<(…)` process substitution).
-Under a plain `sh`, write the allowed-signers line to a file first:
+<details>
+<summary>plain sh (no process substitution)</summary>
 
 ```sh
 printf 'dvbozhko@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIhmCWVDP/Tcm3CqXNjTQTChbKxr223xMob9zc56Uuny release signing\n' > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I dvbozhko@gmail.com -n file -s install.sh.sig < install.sh
+sh install.sh
 ```
 
-### Maximal: verify the binary archives directly
+</details>
 
-No install script — download the archives for your platform from the [Releases page][releases], then verify each by any one of:
+<details>
+<summary>maximal: verify the archives directly, no script</summary>
 
 ```bash
-# SSHSIG, against the same pinned key as above
 ssh-keygen -Y verify -f allowed_signers -I dvbozhko@gmail.com -n file \
   -s faber_<version>_<os>_<arch>.tar.gz.sig < faber_<version>_<os>_<arch>.tar.gz
-
-# SLSA provenance via Sigstore/Rekor — identity-anchored, no key to manage
 gh attestation verify faber_<version>_<os>_<arch>.tar.gz --repo dmitriyb/faber
-
-# Go users: the Go module checksum database
 go install github.com/dmitriyb/faber/cmd/faber@<tag>
 CGO_ENABLED=0 GOOS=linux go install github.com/dmitriyb/faber/cmd/faber-box@<tag>
 ```
 
-The same three checks apply to `faber-box_<version>_linux_<arch>.tar.gz`.
-Each release also carries a consolidated `checksums.txt`, one `.sha256` per archive, and a machine-readable `manifest.json` (schema, target, sha256, size per artifact).
+The same checks apply to `faber-box_<version>_linux_<arch>.tar.gz`.
 
-### What each channel protects, and what it doesn't
+</details>
 
-- **Primary** verifies both the install script and the binaries it fetches, end to end — `download → verify → run`, never a piped script: a piped `curl … | sh` executes as it streams and cannot verify itself before running, so verification has to wrap the download from outside the stream, which is exactly why the primary path is not a one-liner pipe.
-- **Maximal** gives you the strongest per-artifact check for a single file, with no script in between.
-- The trust anchor in both cases is the public key **copied from this README** — that defeats tampering of the download in transit; the residual risk is being sent to a look-alike or phishing copy of this repository, closed by using the known repository URL and by pinning the public key **once** — copy it a single time, then verify every future release against that pinned copy rather than re-copying it from wherever you happen to land.
-- Signatures and attestations give **authenticity, not freshness**: a channel attacker who can intercept your download could still steer you to a genuine-but-older, vulnerable release (a downgrade); this applies to every channel above equally, and there is no minimum-version floor enforced today — note it as a residual risk rather than a solved one.
+<details>
+<summary>upgrading</summary>
 
-### Public key
+`faber upgrade` moves `faber` and its coupled `faber-box` to the latest signed release in place, as a pair, through the same signed installer embedded in the binary. It refuses while a run is live or unfinished (`--force` overrides), is forward-only and refuses a "latest" older than what is installed; `--version vX.Y.Z` installs an exact release, `--rollback` restores the previous pair, `--check` resolves and verifies without changing anything.
 
-```
-dvbozhko@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIhmCWVDP/Tcm3CqXNjTQTChbKxr223xMob9zc56Uuny release signing
-```
+</details>
 
-This is the same key across all three verification paths above (SSHSIG install script, SSHSIG archives, and the `allowed_signers` line either way) — and the same key faber's sibling tools (portitor, spexmachina) use.
-It can also be pinned and cross-checked against GitHub's own copy at `https://api.github.com/users/dmitriyb/ssh_signing_keys`, once it is added under Settings → SSH and GPG keys → Signing keys — useful if this README itself is ever suspected of being tampered with in a fork or mirror.
+The public key, what each channel protects, and the residual risks are in [`docs/install.md`](docs/install.md).
 
-### Upgrading
+## Quick start
 
-Once faber is installed, `faber upgrade` updates it — and its coupled `faber-box` — to the latest signed release in place, without re-downloading `install.sh`:
+`faber validate` needs nix (it proves every package against the pinned nixpkgs snapshot, fetched over the network the first time). `faber build` and `faber run` need docker. Config paths are read relative to the working directory, so start in the example's directory.
 
 ```sh
-faber upgrade                 # forward to the latest release
-faber upgrade --version v0.1.4   # a specific release, any direction
-faber upgrade --check         # resolve and verify the target, change nothing (also: --dry-run)
-faber upgrade --rollback      # restore the previous pair from their .bak backups
-faber upgrade --force         # proceed despite live/unfinished runs
+cd examples/quickstart
+faber validate --config orchestrator.yaml --emit-ir
 ```
 
-`faber upgrade` reuses the exact `install.sh` above, embedded byte-for-byte into the (already-verified, signed) faber binary — so the same resolve → download → SSHSIG-verify path runs, with nothing separate to fetch or trust.
-It first runs the active-runs guard (it refuses while a run is live or unfinished — faber is not swapped mid-run; `--force` overrides that guard) and then replaces **both** binaries as a unit, since a mismatched `faber`/`faber-box` pair is a broken state (the two share a contract version).
-Both signatures are verified before either binary is touched (fail closed), and the previous pair is kept alongside the new one for `--rollback`.
-Upgrade is **forward-only**: it moves toward the latest release and hard-refuses a latest that is OLDER than the installed version — a latest that moved backward is a rollback anomaly (a compromised origin serving an old but validly-signed release as "latest"), and no flag overrides it.
-To install an older release deliberately, name it with `--version`, which installs that exact release in any direction with no guard.
-`faber upgrade --check` reports availability and changes nothing; it warns about (but does not block on) active runs and exits 0 whenever it could resolve the latest release.
-
-## Usage sketch
+This prints the canonical IR: one `agent` node, its template with the pinned package set, and the typed inputs and output schema. Nothing is built.
 
 ```sh
-faber validate --config orchestrator.yaml   # schema, wiring, types, cycles, nix resolution
-faber build    --config orchestrator.yaml   # nix-build + docker-load every template image
-faber run task --config orchestrator.yaml \
-    --param repo=sandbox --param item=I-1   # execute; prints the run report + journal path
-faber resume <run-id>                       # skip journaled hits, restart at the first gap
+faber build --config orchestrator.yaml
+faber run brief --config orchestrator.yaml --param topic="what our retry policy does"
 ```
 
-Everything wrong with a config surfaces at `validate` with field paths — missing params, unknown output fields, type mismatches, reference cycles, unresolvable packages — never mid-run.
-See [`examples/`](examples/) for working configurations.
+`build` nix-builds the template image and loads it into docker.
+`run` resolves the agent credential through `hooks/get-token` (a stub that exits 1 until you point it at your secret store), starts one box, enforces the declared `{summary, confidence}` output at the container boundary, and prints the run report and the journal path.
+A stopped or failed run continues from its journal, skipping every step that already settled:
+
+```sh
+faber resume <run-id>
+```
+
+Everything wrong with a config surfaces at `validate` with a field path, never mid-run.
+
+
+## Examples
+
+[`examples/quickstart`](examples/quickstart/) is the one shipped example: a single template, a single workflow, one claude box with a typed output, and the credential stub above.
+Its README lists every step from token to run.
+The sealed shape, with an egress lock, a pinned git gateway and one role key per box, is described in [`docs/deploy.md`](docs/deploy.md) and specified under `spec/security/`.
+
+## How it compares
+
+Checked against each project's documentation on 2026-09-08. Two cells the docs do not state are marked as such.
+
+| | Workflow written as | A step runs in | Next step decided by | Crash recovery |
+|---|---|---|---|---|
+| LangGraph | Python code, nodes are functions | the LangGraph runtime, inside your application | conditional edges in code | checkpointer, per thread |
+| CrewAI Flows | Python decorators (`@start`, `@listen`, `@router`) | not documented | `@router` and `@listen` in code | `@persist` state, reloaded on restart |
+| Microsoft Agent Framework | C#, Python or Go code, executors and edges | in-process execution | edge conditions in code | superstep checkpoints, resume |
+| OpenAI Agents SDK | Python code | the runner loop in your application | the model, through handoffs exposed as tools | none built in; optional Temporal integration |
+| Temporal | code in Go, Java, TypeScript or Python | worker processes you operate | workflow code | event-history replay (durable execution) |
+| Dagger container-use | no workflow file; an MCP server plus agent prompts | a fresh container per agent, on its own git branch | the coding agent | container state tracked; the agent resumes |
+| GitHub Agentic Workflows | Markdown plus YAML front matter, compiled to a lock file | GitHub Actions runners | declarative `on:` triggers; safe-outputs gate writes | no automatic retries, one run per trigger |
+| faber | one YAML, compiled to a deterministic JSON IR | a fresh container per step, bound from outside | CEL conditions compiled at validate, never the model | journal keyed by step and input hash, `faber resume` |
+
+The difference in one line: the others orchestrate agents inside a process or a runner you already trust, while faber treats every step as an untrusted box and puts the workflow, the gates and the recovery outside it.
+LangGraph v1, CrewAI, Microsoft Agent Framework 1.0 and the OpenAI Agents SDK describe themselves as production releases; Dagger container-use is experimental and GitHub Agentic Workflows is in public preview.
 
 ## Learn more
 
-- [`docs/architecture.md`](docs/architecture.md) — how a run works: the box, the security boundary, the DAG, the failure/resume model.
-- [`docs/configuration.md`](docs/configuration.md) — the `orchestrator.yaml` schema by example.
-- [`docs/commands.md`](docs/commands.md) — the full CLI reference.
-- [`docs/deploy.md`](docs/deploy.md) — deploying faber: host requirements, companion topology, credentials, operations.
-- `spec/**` — the authoritative, requirement-level specification (spexmachina format).
+- [`docs/architecture.md`](docs/architecture.md): how a run works, the box, the security boundary, the DAG, the failure and resume model.
+- [`docs/configuration.md`](docs/configuration.md): the `orchestrator.yaml` schema by example.
+- [`docs/commands.md`](docs/commands.md): the full CLI reference.
+- [`docs/deploy.md`](docs/deploy.md): host requirements, companion topology, credentials, operations.
+- [`docs/install.md`](docs/install.md): every install channel, the public key, upgrading.
+- `spec/**`: the authoritative, requirement-level specification (spexmachina format).
 
 ## License
 
