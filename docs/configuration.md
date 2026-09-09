@@ -92,7 +92,7 @@ Named references exist so one toolset/hook/skill tree can be shared across templ
 ## Invocation profiles
 
 An `invoke_profiles:` entry describes one agent CLI's headless dialect; a template opts in with `invoke: {profile: <name>, …}`, inline fields overriding the named profile's field-by-field (they compose — this aspect is deliberately not either/or).
-Because a template is a role's box, this is the harness↔role seam: one template's package set + `FABER_AGENT_CLI` pick the binary, its `invoke:` picks the dialect, and its opaque `run.env` carries provider/endpoint knobs — so different roles in one workflow can run different harnesses against different endpoints (see `examples/mixed-harness/`).
+Because a template is a role's box, this is the harness↔role seam: one template's package set + `FABER_AGENT_CLI` pick the binary, its `invoke:` picks the dialect, and its opaque `run.env` carries provider/endpoint knobs — so different roles in one workflow can run different harnesses against different endpoints.
 A template with no `invoke:` gets the anonymous built-in default, byte-identical to the invocation faber always emitted; faber ships no vendor profile.
 Explicit emptiness is meaningful: `prompt_flag: ""` makes the prompt positional, `model_flag`/`effort_flag`/`budget_flag: ""` drop the pair, `fixed_flags: []` drops the tail; an *absent* field inherits instead.
 The resolved profile lands in the IR and reaches the box as `FABER_INVOKE_PROFILE`; `faber validate` checks profile rules (a `{body}`-carrying prompt template, skill injected exactly once, a `$HOME`-contained `session_dir`) at compile time, never mid-run.

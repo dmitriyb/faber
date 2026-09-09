@@ -1,0 +1,10 @@
+#!/bin/sh
+# credential resolver: get_token(service) -> token on stdout. Runs host-side
+# only; the box receives the value as /run/secrets/<service>, exported into the
+# agent's env under the uppercased service name (here CLAUDE_CODE_OAUTH_TOKEN,
+# the variable claude honors for a token from `claude setup-token`).
+# Replace the exit below with your secret store, e.g.:
+#   pass show "faber/$1"   |   rbw get "$1"   |   security find-generic-password -s "$1" -w
+set -eu
+echo "get-token: not wired to a secret store yet (service: $1); edit hooks/get-token" >&2
+exit 1

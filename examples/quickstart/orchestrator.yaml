@@ -1,14 +1,28 @@
 version: 1
 
 # The smallest useful faber config: one template, one workflow, one step.
-# No network lock, no gateway, no credentials — the box runs on the default
-# docker network and clones nothing. Good for a first `validate/build/run`;
-# NOT a production posture (see docs/deploy.md for the sealed setup).
+# No network lock, no gateway, no identities — the box runs on the default
+# docker network and clones nothing. One file-mode credential lets the agent
+# authenticate. Good for a first `validate/build/run`; NOT a production posture
+# (see docs/deploy.md for the sealed setup).
+#
+# Paths below are read relative to the working directory: run faber from this
+# directory (`cd examples/quickstart`).
+
+credentials:
+  resolver: ./hooks/get-token          # get_token(service): opaque, host-side; wire it to your secret store
+  services:
+    claude_code_oauth_token:           # file mode -> /run/secrets -> env CLAUDE_CODE_OAUTH_TOKEN in the box
+      mode: file
 
 templates:
   summarize:
     build:
       packages: [coreutils, claude-code]
+      overlay: ./nix/overlay.nix       # claude-code as a pinned Anthropic release
+      pin:                             # nixpkgs snapshot (nixos-25.11); faber's compiled-in default is older
+        rev: b6018f87da91d19d0ab4cf979885689b469cdd41
+        sha256: sha256:0ln4yw7z3g9lb0x081hc0pd2j1wsx2qqf6bgmwwvdbkcl4bcy1dp
     run:
       env:
         FABER_AGENT_CLI: claude        # which agent CLI the box invokes (no vendor default)
