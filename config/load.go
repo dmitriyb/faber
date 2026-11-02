@@ -242,8 +242,8 @@ func identity(p string) string {
 }
 
 // hasSubstrate reports whether a config fragment sets any substrate key —
-// version, network, remote, credentials, or identities — which is honored only
-// in the root project file.
+// version, network, remote, credentials, identities, or lanes — which is
+// honored only in the root project file.
 func (c *Config) hasSubstrate() bool {
 	n := c.Network
 	netSet := n.Name != "" || n.Proxy != "" || len(n.NoProxy) > 0 || n.Nftables
@@ -251,7 +251,7 @@ func (c *Config) hasSubstrate() bool {
 	remoteSet := r.URL != "" || r.HostKeyFile != "" || r.TOFU
 	cr := c.Credentials
 	credSet := cr.Resolver != "" || len(cr.Services) > 0
-	return c.Version != 0 || netSet || remoteSet || credSet || len(c.Identities) > 0
+	return c.Version != 0 || netSet || remoteSet || credSet || len(c.Identities) > 0 || len(c.Lanes) > 0
 }
 
 // sortedKeys returns the map's keys in sorted order. Every map iteration in

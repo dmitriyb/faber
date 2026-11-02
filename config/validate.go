@@ -132,6 +132,7 @@ func Validate(cfg *Config, viols []AssemblyViolation) error {
 	v.checkRemote()
 	v.checkCredentials()
 	v.checkNameDiscipline()
+	v.checkLanes()
 	v.checkImages()
 	v.checkInvokeProfiles()
 	v.checkTemplates()
@@ -317,6 +318,11 @@ func (v *validator) checkTemplates() {
 		}
 		v.checkInvoke(path, t)
 		v.checkIdentity(path, t)
+		if t.Lane != "" {
+			if _, ok := v.cfg.Lanes[t.Lane]; !ok {
+				v.addf(path+".lane", "unknown lane %q%s", t.Lane, didYouMean(t.Lane, sortedKeys(v.cfg.Lanes)))
+			}
+		}
 		v.checkHooks(path, t)
 		v.checkSkills(path, t)
 		if m := t.Run.Resources.Memory; m != "" && !memoryPattern.MatchString(m) {
@@ -667,6 +673,19 @@ func (v *validator) checkSteps(path string, wf WorkflowDef, steps []StepDef, see
 				v.addf(sp+".generate.workflow", "unknown workflow %q", g.Workflow)
 			}
 			v.checkBindings(sp+".generate.with", g.With, true)
+			if g.MaxParallel < 0 {
+				v.addf(sp+".generate.max_parallel", "must be >= 1 (0 or absent = unbounded)")
+			}
+		}
+	}
+}
+
+// checkLanes requires every declared lane to bound at least one box: a
+// zero or negative lane would deadlock every template that names it.
+func (v *validator) checkLanes() {
+	for _, name := range sortedKeys(v.cfg.Lanes) {
+		if v.cfg.Lanes[name] < 1 {
+			v.addf("lanes."+name, "must be >= 1")
 		}
 	}
 }

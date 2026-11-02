@@ -10,7 +10,10 @@ type IR struct {
     Workflow  string           `json:"workflow"`
     Nodes     []Node           `json:"nodes"` // sorted by ID
     Edges     []Edge           `json:"edges"` // sorted by (To, ToPort)
+    Lanes     map[string]int   `json:"lanes,omitempty"` // the config's declared bounds, omitted when none
 }
+// GenSpec gains MaxParallel `json:"max_parallel,omitempty"`; ResolvedTemplate gains
+// Lane `json:"lane,omitempty"` — both omitted when unset (byte-stable IR).
 
 type Node struct {
     ID       string            `json:"id"`   // path-like: "task/review-cycle@2/fix"

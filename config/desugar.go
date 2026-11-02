@@ -151,7 +151,14 @@ func (d *desugarer) emitWorkflow(wfName, scope string) *IR {
 	b := &builder{made: map[string]bool{}}
 	lvl := newLevel(nil, scope, wf.Steps)
 	d.emitSteps(b, wf, wf.Steps, lvl, "workflows."+wfName+".steps", nil)
-	return &IR{IRVersion: IRVersion, Workflow: wfName, Nodes: b.nodes, Edges: b.edges}
+	ir := &IR{IRVersion: IRVersion, Workflow: wfName, Nodes: b.nodes, Edges: b.edges}
+	if len(d.cfg.Lanes) > 0 {
+		ir.Lanes = make(map[string]int, len(d.cfg.Lanes))
+		for name, n := range d.cfg.Lanes {
+			ir.Lanes[name] = n
+		}
+	}
+	return ir
 }
 
 // emitSteps emits one step list within lvl. gates are condition pieces imposed
@@ -263,11 +270,12 @@ func (d *desugarer) emitGenerate(b *builder, wf WorkflowDef, s StepDef, lvl *lev
 		ID:   nodeID,
 		Kind: KindGenerate,
 		Gen: &GenSpec{
-			Source:   g.Source,
-			Command:  src.Command,
-			Args:     append([]string(nil), src.Args...),
-			Workflow: g.Workflow,
-			Bindings: d.expandBindings(b, g.With, lvl, sp+".generate.with", nodeID, true),
+			Source:      g.Source,
+			Command:     src.Command,
+			Args:        append([]string(nil), src.Args...),
+			Workflow:    g.Workflow,
+			Bindings:    d.expandBindings(b, g.With, lvl, sp+".generate.with", nodeID, true),
+			MaxParallel: g.MaxParallel,
 		},
 		Retry:     s.Retry,
 		OnFailure: s.OnFailure,
@@ -546,6 +554,7 @@ func (d *desugarer) resolveTemplate(name, sp string) *ResolvedTemplate {
 		Overlay:       build.Overlay,
 		Pin:           build.Pin, // flat *PinDef, json "pin,omitempty"; nil ⇒ omitted ⇒ byte-identical IR
 		Identity:      resolveIdentity(t),
+		Lane:          t.Lane,
 		Resources:     t.Run.Resources,
 		Runtime:       t.Run.Runtime,
 		Env:           t.Run.Env,

@@ -93,6 +93,8 @@ type execNode struct {
 	image  string         // resolved image tag (agent nodes)
 
 	cached      bool
+	gen         string                // the generate node this instance node belongs to ("" at top level)
+	waiting     string                // the hold reason already announced on the stream ("" = none)
 	used        int                   // real failed attempts consumed across defer re-queues
 	history     []failure.AttemptInfo // real attempt history accumulated across defer re-queues
 	annotations []failure.AttemptInfo // defer/cached annotations (journal-bound)

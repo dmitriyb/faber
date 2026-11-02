@@ -29,9 +29,13 @@ type Config struct {
 	Remote      RemoteDef              `yaml:"remote,omitempty"`      // substrate: root-only
 	Credentials CredentialsDef         `yaml:"credentials,omitempty"` // substrate: root-only
 	Identities  map[string]IdentityDef `yaml:"identities,omitempty"`  // substrate: root-only
-	Images      map[string]ImageDef    `yaml:"images,omitempty"`      // library: union-merged
-	Skills      map[string]SkillDef    `yaml:"skills,omitempty"`      // library: union-merged
-	Hooks       map[string]HookDef     `yaml:"hooks,omitempty"`       // library: union-merged
+	// Lanes declares named concurrency bounds (substrate: root-only): a
+	// template that names a lane takes one of its slots per box. The bound
+	// is data in the file; faber never learns what a lane means.
+	Lanes  map[string]int      `yaml:"lanes,omitempty"`
+	Images map[string]ImageDef `yaml:"images,omitempty"` // library: union-merged
+	Skills map[string]SkillDef `yaml:"skills,omitempty"` // library: union-merged
+	Hooks  map[string]HookDef  `yaml:"hooks,omitempty"`  // library: union-merged
 	// InvokeProfiles are named agent-CLI invocation dialects (library:
 	// union-merged). The engine ships no vendor entry — only the anonymous
 	// built-in default a template without invoke: resolves to.
@@ -195,6 +199,9 @@ type TemplateDef struct {
 	Skill  string    `yaml:"skill,omitempty"`  // the /<skill> prompt token; a Skills-library ref ONLY in named mode, else free-form
 	Model  string    `yaml:"model,omitempty"`  // agent model id; REQUIRED, opaque pass-through (the box renders --model)
 	Effort string    `yaml:"effort,omitempty"` // agent effort level; REQUIRED, opaque pass-through (the box renders --effort)
+	// Lane names a declared lane whose slot every box of this template holds
+	// while it runs; "" = unbounded beyond --max-parallel.
+	Lane string `yaml:"lane,omitempty"`
 	// AgentOptional declares the template agent-skippable: its prelude may
 	// skip the agent phase via the bundle sidecar (FABER_SKIP_AGENT=1).
 	// Default false — the agent always runs; a skip request on a template
@@ -422,4 +429,7 @@ type GenerateDef struct {
 	Source   string         `yaml:"source,omitempty"`
 	Workflow string         `yaml:"workflow,omitempty"`
 	With     map[string]any `yaml:"with,omitempty"`
+	// MaxParallel bounds how many of this generate's instances hold a box
+	// slot at once, on top of the run-wide --max-parallel; 0 = unbounded.
+	MaxParallel int `yaml:"max_parallel,omitempty"`
 }

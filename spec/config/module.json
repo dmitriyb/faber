@@ -10,6 +10,13 @@
       "description": "Define the orchestrator.yaml schema as six named component libraries plus a project assembly. Libraries: images ({packages, overlay, optional pin} — a pure Nix toolset with an optional per-toolset nixpkgs pin), skills ({dir} — a SKILL.md tree), hooks ({path} — an executable), invoke_profiles (named agent-CLI invocation dialects — subcommand, prompt/skill/model/effort/budget flag names, prompt template, fixed argv tail, plus the harness's session dialect: a $HOME-relative session_dir for transcript capture and a resume_argv for session-resuming re-entry — all opaque values; the engine keeps one anonymous built-in default reproducing the previous behavior byte-for-byte and no vendor presets), templates (composition nodes referencing images/identities/skills/hooks by name, plus mandatory opaque model/effort agent pass-throughs, an optional invoke: block selecting a named profile with field-level inline overrides, run knobs, and typed inputs/output), and workflows (DAGs). The project assembly carries substrate (version, network, remote, credentials, identities) and a top-level include: list; each included file is a partial config contributing library entries, merged as the union of the named maps. Dual-mode: a template may use named references OR the current inline forms (build: {packages, overlay, pin}, hooks: {context: <path>}, skills: {dir, link}, run.identity), resolving to the same IR. The optional image/build pin is config's own PinDef (config never imports infra); when present both rev and sha256 are required. Go structs map to YAML sections with yaml tags (custom UnmarshalYAML for the StepDef union and the skills sequence-or-mapping form). The schema contains no domain-specific field names."
     },
     {
+      "id": "9bdc00533e50",
+      "preq_id": "4267f6b0c531",
+      "type": "functional",
+      "title": "Concurrency declarations",
+      "description": "Concurrency bounds are data in orchestrator.yaml, never policy in a script: a root-only substrate section lanes: {name: max} declares named bounds; a template's lane: names one, taking a lane slot per box; a generate's max_parallel: bounds that fan-out's concurrently running instances. Validation refuses a lane that is not declared, a declared lane below 1, and a negative max_parallel. Desugaring carries the lane name on the resolved template, the bound on the generate spec, and the declared lanes on the IR root, all omitted when absent so the emitted IR stays byte-identical to before the fields existed. faber learns no domain word: a lane is a user-named bound."
+    },
+    {
       "id": "255893ae16eb",
       "preq_id": "4267f6b0c531",
       "type": "functional",
@@ -68,7 +75,7 @@
       "name": "SchemaTypes",
       "description": "The Go struct tree mirroring orchestrator.yaml: Config (substrate + include + six library maps), the ImageDef/SkillDef/HookDef/InvokeProfileDef library entries (ImageDef and inline BuildDef optionally carrying a per-toolset nixpkgs PinDef; InvokeProfileDef using pointer/slice carriers so field-level absence layers while explicit emptiness stays meaningful), the dual-mode TemplateDef (named references or inline forms, plus the composable invoke: block), WorkflowDef, StepDef, ParamDef, SourceDef, binding references. Owns the params typing vocabulary, the closed set of slot-binding source forms, the named-vs-inline disambiguation rules, and the declarer-relative path convention.",
       "content": "arch_schema_types.md",
-      "implements": ["23a6be447cc8", "255893ae16eb", "8a79b4f5c699"]
+      "implements": ["23a6be447cc8", "255893ae16eb", "8a79b4f5c699", "9bdc00533e50"]
     },
     {
       "id": "c21cc21b5668",
@@ -83,7 +90,7 @@
       "name": "Desugarer",
       "description": "The frontend-to-IR compiler: resolves each dual-mode template reference (image/hooks/identity/skills, named or inline) into the existing ResolvedTemplate shape, resolves a template's invoke: block into a fully concrete ResolvedInvoke (built-in default ⊕ named profile ⊕ inline overrides; absent ⇒ nil ⇒ byte-identical IR), unrolls bounded loops into conditional chains, resolves named sub-workflow references, expands compact with: bindings into explicit typed edges, and emits the deterministic JSON IR. The resolved IR shape is preserved; the sole delta is the skills leg widening from a single {dir, link} to the resolved (name->dir) delivery set.",
       "content": "arch_desugarer.md",
-      "implements": ["014aaac22619", "0ebbdd8f836b"],
+      "implements": ["014aaac22619", "0ebbdd8f836b", "9bdc00533e50"],
       "uses": ["36547319009b", "0dd11f0c10bb"]
     },
     {

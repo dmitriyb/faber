@@ -135,6 +135,14 @@ code; these are the module-level behaviors that must hold.)
     `resume_argv` without an effective `session_dir`; an empty `resume_argv`
     token.
 
+13. **Concurrency declarations.** `lanes: {landing: 1}`, a template `lane:
+    landing`, and a generate `max_parallel: 3` validate and reach the IR
+    (`lanes` on the root, `lane` on the resolved template, `max_parallel` on
+    the generate spec); an unknown lane, `lanes.landing: 0`, and
+    `max_parallel: -1` are loader violations naming their paths; lanes count
+    as substrate; a config without the fields emits an IR carrying none of
+    the three keys.
+
 ## Edge cases
 
 - Empty `steps:` — Loader error, not a desugar panic.

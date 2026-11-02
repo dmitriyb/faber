@@ -36,6 +36,10 @@ type IR struct {
 	Workflow  string `json:"workflow"`
 	Nodes     []Node `json:"nodes"` // sorted by ID
 	Edges     []Edge `json:"edges"` // sorted by (To, ToPort, From, FromPort)
+	// Lanes carries the config's declared concurrency bounds (name -> max)
+	// so the executor needs no Config; absent when none are declared, which
+	// keeps the emitted IR byte-identical to before the field existed.
+	Lanes map[string]int `json:"lanes,omitempty"`
 }
 
 // Node is one IR graph node. IDs are path-like and human-readable
@@ -102,6 +106,9 @@ type GenSpec struct {
 	Args     []string               `json:"args,omitempty"`
 	Workflow string                 `json:"workflow"`
 	Bindings map[string]BindingDesc `json:"bindings"`
+	// MaxParallel bounds concurrently running instances of this generate
+	// (0 = only the run-wide bound applies).
+	MaxParallel int `json:"max_parallel,omitempty"`
 }
 
 // SelSpec is the post-loop selector: an alias node whose output ports mirror a
@@ -126,6 +133,7 @@ type ResolvedTemplate struct {
 	Overlay   string            `json:"overlay,omitempty"`
 	Pin       *PinDef           `json:"pin,omitempty"` // optional resolved nixpkgs pin; nil ⇒ omitted ⇒ IR byte-stable when absent
 	Identity  string            `json:"identity,omitempty"`
+	Lane      string            `json:"lane,omitempty"` // declared lane whose slot every box of this template holds
 	Resources ResourceDef       `json:"resources"`
 	Runtime   string            `json:"runtime,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`

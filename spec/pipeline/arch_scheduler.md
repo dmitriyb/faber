@@ -181,14 +181,40 @@ attempt's `RunAttempt`, the failure module's shape) and the per-attempt
 to the container runner as `RunSpec.Output`. A reader of the run directory
 sees the same timeline the sink saw.
 
+## Bounds: the semaphore, generate pools, lanes
+
+Three bounds gate a box launch, all granted in the same deterministic
+id-ordered pass and released together at settlement or defer:
+
+- the run-wide semaphore (`--max-parallel`), as before;
+- a **generate pool**: a generate step's `max_parallel: N` caps how many of
+  *its* instances run at once, one pool per generate node, created at
+  expansion — so a fan-out over twenty ready tasks can say "four at a time"
+  without bounding everything else;
+- a **lane**: the config's root-only `lanes: {name: max}` declares named
+  bounds, a template's `lane:` names one, and every box of that template
+  holds one lane slot while it runs. With `lanes: {landing: 1}` on the merge
+  template, landings within a run are strictly sequential in dependency
+  order while implement, review and fix fan out — each PR goes behind main
+  at most once. A lane is a bound on a user-named resource; faber never
+  learns what "landing" means.
+
+A node held by its pool or lane steps aside: the pass continues with the
+nodes behind it and the held node re-queues after the pass, so a full lane
+never blocks an unrelated launch. The first time a ready node is held it
+emits `step-waiting` with the reason (`slot 3 of 3`, `generate epic/tasks 4
+of 4`, `lane landing 1 of 1`), once per distinct reason, so the stream and
+a later live view can say "ready, waiting for lane landing" instead of
+nothing.
+
 ## Deferred seam
 
-Concurrency control beyond the flat `--max-parallel` semaphore is reserved: a
-scheduler that weighs host CPU, local GPU presence, and per-endpoint API rate
-classes when sizing the dispatch window. The admission gate is already the
-right choke point, so the first pass keeps the single semaphore and the seam is
-the admission decision — richer schedulers slot in without touching readiness.
+Resource-aware sizing of the dispatch window — a scheduler that weighs host
+CPU, local GPU presence, and per-endpoint API rate classes — is reserved.
+The admission gate is already the right choke point, so the seam is the
+admission decision; richer schedulers slot in without touching readiness or
+the declared bounds above.
 
 Requirements implemented: Topological parallel execution, Failure propagation
 and skip semantics, Reference workflow execution, Progress event stream,
-Deferred: concurrency control.
+Concurrency bounds, Deferred: concurrency control.

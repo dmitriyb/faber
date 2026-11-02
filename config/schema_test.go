@@ -667,3 +667,89 @@ func TestValidateIdentifierGrammars(t *testing.T) {
 		})
 	}
 }
+
+// Verifies 9bdc00533e50: lanes, a template's lane, and a generate's
+// max_parallel are schema fields that validate and reach the IR; an unknown
+// lane, a lane below 1, and a negative max_parallel are loader violations;
+// lanes are substrate (root-only across includes); absent, the IR is
+// byte-identical to before the fields existed.
+func TestSchemaConcurrencyDeclarations(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.Lanes = map[string]int{"landing": 1}
+	box := cfg.Templates["box"]
+	box.Lane = "landing"
+	cfg.Templates["box"] = box
+	cfg.Workflows["per"] = WorkflowDef{
+		Params: map[string]ParamDef{"input": {Type: "string", Required: true}},
+		Steps:  []StepDef{{ID: "one", Use: "box", With: map[string]any{"input": "${params.input}"}}},
+	}
+	wf := cfg.Workflows["flow"]
+	wf.Sources = map[string]SourceDef{"feed": {Command: "./list"}}
+	wf.Steps = append(wf.Steps, StepDef{ID: "fan", Generate: &GenerateDef{Source: "feed", Workflow: "per", With: map[string]any{"input": "${item.id}"}, MaxParallel: 3}})
+	cfg.Workflows["flow"] = wf
+	if err := Validate(cfg, nil); err != nil {
+		t.Fatalf("valid concurrency declarations rejected: %v", err)
+	}
+	ir, err := Desugar(cfg, "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ir.Lanes["landing"] != 1 {
+		t.Errorf("IR lanes = %v, want landing=1", ir.Lanes)
+	}
+	var gotLane, gotMax bool
+	for _, n := range ir.Nodes {
+		if n.Template != nil && n.Template.Lane == "landing" {
+			gotLane = true
+		}
+		if n.Gen != nil && n.Gen.MaxParallel == 3 {
+			gotMax = true
+		}
+	}
+	if !gotLane || !gotMax {
+		t.Errorf("IR lacks the lane (%v) or the generate bound (%v)", gotLane, gotMax)
+	}
+	if !cfg.hasSubstrate() {
+		t.Error("lanes must count as substrate (root-only)")
+	}
+
+	for _, tt := range []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"unknown lane", func(c *Config) { b := c.Templates["box"]; b.Lane = "ghost"; c.Templates["box"] = b }, `templates.box.lane: unknown lane "ghost"`},
+		{"lane below 1", func(c *Config) { c.Lanes["landing"] = 0 }, "lanes.landing: must be >= 1"},
+		{"negative max_parallel", func(c *Config) { c.Workflows["flow"].Steps[1].Generate.MaxParallel = -1 }, "workflows.flow.steps[1].generate.max_parallel: must be >= 1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := minimalConfig()
+			c.Lanes = map[string]int{"landing": 1}
+			b := c.Templates["box"]
+			b.Lane = "landing"
+			c.Templates["box"] = b
+			c.Workflows["per"] = cfg.Workflows["per"]
+			w := c.Workflows["flow"]
+			w.Sources = map[string]SourceDef{"feed": {Command: "./list"}}
+			w.Steps = append(w.Steps, StepDef{ID: "fan", Generate: &GenerateDef{Source: "feed", Workflow: "per", With: map[string]any{"input": "${item.id}"}}})
+			c.Workflows["flow"] = w
+			tt.mutate(c)
+			wantErrContaining(t, Validate(c, nil), tt.wantErr)
+		})
+	}
+
+	plain := minimalConfig()
+	pir, err := Desugar(plain, "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := EncodeIR(pir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{`"lanes"`, `"lane"`, `"max_parallel"`} {
+		if strings.Contains(string(raw), banned) {
+			t.Errorf("IR without declarations carries %s", banned)
+		}
+	}
+}

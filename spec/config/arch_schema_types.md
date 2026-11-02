@@ -24,6 +24,7 @@ Config
 ├── Remote       RemoteDef         gateway URL prefix + host-key policy             │ substrate
 ├── Credentials  CredentialsDef    resolver command + per-service handle modes      │ (project
 ├── Identities   map[string]IdentityDef    role name -> key material source         │  assembly)
+├── Lanes        map[string]int            named concurrency bounds (name -> max)    │
 ├── Images       map[string]ImageDef       NEW: named pure Nix toolsets            ┐┘
 ├── Skills       map[string]SkillDef       NEW: named skill definitions            │ six named
 ├── Hooks        map[string]HookDef        NEW: named hook executables             │ libraries
@@ -212,6 +213,7 @@ is unchanged.
 TemplateDef  (named-reference form)
 ├── Image     string               ref → Images        (the box's toolset)
 ├── Identity  string               ref → Identities    (one key per box)
+├── Lane      string               ref → Lanes         (one lane slot per box while it runs; "" = none)
 ├── Skill     string               ref → Skills        the PRIMARY skill the box activates (/<skill>)
 ├── Skills    []string             refs → Skills       every skill delivered into the box (superset incl. Skill)
 ├── SkillsLink string              in-box $HOME-relative discovery path (was skills.link); required when Skills is non-empty

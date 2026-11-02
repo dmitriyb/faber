@@ -52,11 +52,18 @@
       "description": "Backlog (design edge case 2): generate with an empty item set (no-op vs error, policy flag), malformed data-source output (validation error contract), and dependency cascade policy when one item's sub-workflow fails (skip dependents only vs abort the fan-out). First pass: empty set is a no-op, malformed output fails the generate node, cascade follows standard skip semantics."
     },
     {
+      "id": "f8da2202d321",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Concurrency bounds",
+      "description": "Beside the run-wide --max-parallel semaphore the scheduler honours two declared bounds: a generate's max_parallel (at most N of that generate's instances hold a box slot at once, one pool per generate node) and lanes (IR-declared name -> max; every box of a template that names a lane holds one of its slots). All three are granted together in deterministic id order before a launch and released together at settlement or defer; a held node steps aside without blocking the nodes behind it. The first time a ready node is held it emits step-waiting with the reason (slot n of m, generate <id> n of m, lane <name> n of m), once per distinct reason."
+    },
+    {
       "id": "93d829b3f3d3",
       "preq_id": "296f9fba2c0f",
       "type": "functional",
       "title": "Deferred: concurrency control",
-      "description": "Backlog (design edge case 5): a scheduler-level parallelism cap aware of host resources (CPU, local GPU) and API rate classes, replacing the first pass's simple max-parallel semaphore."
+      "description": "Backlog (design edge case 5): a scheduler-level parallelism cap aware of host resources (CPU, local GPU) and API rate classes. Declared bounds exist (Concurrency bounds: per-generate max_parallel and lanes beside --max-parallel); the resource-aware sizing of the dispatch window remains reserved."
     },
     {
       "id": "8964ddc94332",
@@ -84,9 +91,9 @@
     {
       "id": "d7f1415da14a",
       "name": "Scheduler",
-      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure and halt propagation via dependent traversal, defer(until) re-queueing, and the cooperative pause gate (the durable marker probed at scheduling points; drain-and-settle, then a paused run-end). Consults the journal for resume skips and the meter for admission. Owns the host-side run-prep seam that assembles each infra.RunSpec, including staging the resolved skills leg into the single read-only /faber/skills mount — a per-attempt copy of real files for named skills (not a symlink farm, whose targets would dangle across the bind into the container), a direct mount for the inline skills-root — and, when the per-run sessions toggle is on and the template's invocation profile names a session_dir, the per-attempt live sessions bind (<attempt>/sessions mounted read-write at $HOME/<session_dir>, host-pre-owned like the result dir) that captures the harness's native transcripts crash-safely; the same seam gives interactive re-entry its session-resuming entry (a copy of the saved session mounted over $HOME/<session_dir> and the profile's resume_argv as entry, bare shell on --shell or when nothing was saved). Emits the typed progress stream (started per attempt, settled, deferred, expanded, paused, run-ended) to the executor's event sink, journals a start record at every box attempt, and points each attempt's RunSpec.Output at the durable output.log.",
+      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure and halt propagation via dependent traversal, defer(until) re-queueing, and the cooperative pause gate (the durable marker probed at scheduling points; drain-and-settle, then a paused run-end). Consults the journal for resume skips and the meter for admission. Owns the host-side run-prep seam that assembles each infra.RunSpec, including staging the resolved skills leg into the single read-only /faber/skills mount — a per-attempt copy of real files for named skills (not a symlink farm, whose targets would dangle across the bind into the container), a direct mount for the inline skills-root — and, when the per-run sessions toggle is on and the template's invocation profile names a session_dir, the per-attempt live sessions bind (<attempt>/sessions mounted read-write at $HOME/<session_dir>, host-pre-owned like the result dir) that captures the harness's native transcripts crash-safely; the same seam gives interactive re-entry its session-resuming entry (a copy of the saved session mounted over $HOME/<session_dir> and the profile's resume_argv as entry, bare shell on --shell or when nothing was saved). Grants, beside the global semaphore, each generate's instance pool and the declared lanes in one id-ordered pass, announcing a hold once per reason. Emits the typed progress stream (started per attempt, settled, deferred, waiting, expanded, paused, run-ended) to the executor's event sink, journals a start record at every box attempt, and points each attempt's RunSpec.Output at the durable output.log.",
       "content": "arch_scheduler.md",
-      "implements": ["8879dc1597d6", "a0f44481f57b", "ae796d2a1503", "93d829b3f3d3", "8964ddc94332"],
+      "implements": ["8879dc1597d6", "a0f44481f57b", "ae796d2a1503", "93d829b3f3d3", "8964ddc94332", "f8da2202d321"],
       "uses": ["072cf2b54377", "b3b271a87136"]
     },
     {

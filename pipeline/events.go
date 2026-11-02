@@ -12,6 +12,7 @@ const (
 	EventStepStarted      EventKind = "step-started"
 	EventStepSettled      EventKind = "step-settled"
 	EventStepDeferred     EventKind = "step-deferred"
+	EventStepWaiting      EventKind = "step-waiting"
 	EventGenerateExpanded EventKind = "generate-expanded"
 	EventPauseRequested   EventKind = "pause-requested"
 	EventRunEnded         EventKind = "run-ended"
@@ -38,7 +39,7 @@ type Event struct {
 
 	// step-deferred (Until zero = re-check on the next settlement)
 	Until  time.Time `json:"until,omitempty"`
-	Detail string    `json:"detail,omitempty"` // defer detail; run-ended detail
+	Detail string    `json:"detail,omitempty"` // defer detail; step-waiting hold reason; run-ended detail
 
 	// generate-expanded
 	Items int `json:"items,omitempty"`
