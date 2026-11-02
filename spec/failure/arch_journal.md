@@ -76,7 +76,13 @@ format-tolerant; only interpretive replay refuses.
    detail}`; zero until = the re-check-on-next-settlement shape). A waiting
    state is durable state: a crash mid-wait leaves the timeline on disk
    instead of losing it with the never-settled node.
-6. **Run-end** — appended once per execution when the scheduler returns:
+6. **Start** — appended the moment a box attempt launches (`{step id,
+   attempt, started}`), the timeline's other half: a result exists only at
+   settlement, so without this a step twenty minutes into its box is
+   invisible to every journal reader. Replay exposes starts in order; a step
+   whose last start has no later result is running (or died mid-box). A start
+   keys nothing and is never a resume hit. Additive within format 1.
+7. **Run-end** — appended once per execution when the scheduler returns:
    `{status: settled|aborted|paused, failed count, finished}`. `paused` is
    the cooperative-drain ending: an operator requested a pause, every
    in-flight step settled and was journaled normally, and the scheduler
@@ -149,4 +155,5 @@ path, named by run id), no cross-run index, and no cross-run locking — the
 each other. Concurrent runs over the same items are the operator's
 responsibility until this seam is designed.
 
-Requirements implemented: Run journal; Deferred: journal store concurrency.
+Requirements implemented: Run journal; Durable step start; Deferred: journal
+store concurrency.

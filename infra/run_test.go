@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -447,5 +448,29 @@ func TestRunRejectsRelativeBindHost(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "named volume") {
 		t.Fatalf("want relative-host refusal, got %v", err)
+	}
+}
+
+// Verifies 0c82c6478856: a RunSpec.Output writer receives the streamed
+// output in full, beside the bounded tail the result carries.
+func TestRunOutputWriterTee(t *testing.T) {
+	docker := &fakeDocker{
+		runFn: func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
+			fmt.Fprintln(output, "line one")
+			fmt.Fprintln(output, "line two")
+			return 0, nil
+		},
+	}
+	var durable bytes.Buffer
+	r := NewContainerRunner(docker, testLogger())
+	res, err := r.Run(context.Background(), RunSpec{Name: "faber-x", Image: "faber/t:abc", Output: &durable})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if durable.String() != "line one\nline two\n" {
+		t.Fatalf("durable writer got %q", durable.String())
+	}
+	if string(res.Output) != durable.String() {
+		t.Fatalf("tail %q diverged from the durable copy %q", res.Output, durable.String())
 	}
 }

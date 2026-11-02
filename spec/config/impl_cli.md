@@ -332,7 +332,7 @@ Unchanged by the cobra migration, carried over from conductor nearly verbatim:
 
 ```go
 func InitLogging(level, format string, stderr io.Writer) (*slog.Logger, error) {
-    lvl := parseLevel(level) // debug|info|warn|error
+    lvl := parseLevel(level) // debug|info|warn|error; "" → warn on a TTY, info otherwise
     var h slog.Handler
     useText := format == "text" || (format == "auto" && term.IsTerminal(int(stderr.Fd())))
     if useText { h = slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: lvl}) }

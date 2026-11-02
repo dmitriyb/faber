@@ -219,7 +219,11 @@ under the old `flag.ContinueOnError` FlagSets.
 ## Logging
 
 `slog` initialized once at startup: JSON handler when stderr is not a TTY, text
-handler when it is (overridable via `--log-format`). Each module receives a child
+handler when it is (overridable via `--log-format`). The default level is
+`warn` on a terminal and `info` otherwise: on a terminal the pipeline's
+progress stream (one ASCII line per event on stderr) is the operator surface
+and slog is diagnostics only; off a terminal nobody is watching and the JSON
+lines are the record. An explicit `--log-level` beats the default either way. Each module receives a child
 logger via `logger.With("component", name)` — no global logger, no
 `slog.SetDefault` (conductor's D3, carried over). Secrets never reach the logger:
 resolver outputs and credential material are typed so they cannot be passed to

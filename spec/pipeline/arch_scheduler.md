@@ -156,6 +156,29 @@ scheduler simply keeps consuming its ready queue — instances for independent
 items run concurrently up to the semaphore; an item with deps waits on its
 predecessors' instance sinks.
 
+## Progress events
+
+The scheduler's heartbeat is data, not a log line. At the points that
+launch, settle, defer, expand, pause, or end, the scheduler emits a typed
+event — `step-started` (once per box attempt, carrying the attempt number),
+`step-settled` (every terminal state: ok, failed with reason, halted with
+reason, the skip flavors with their ancestor; plus the cached flag and the
+record's span), `step-deferred` (until, detail), `generate-expanded` (items,
+nodes), `pause-requested`, and `run-ended` (status, failed, halted, detail) —
+to the executor's injected sink. A nil sink is "no events"; the pipeline
+never renders, so what an event looks like (an ASCII line, a JSON line, a
+screen) is entirely the sink's. The sink is called from the loop goroutine
+and from box workers (attempt starts), so it must be concurrency-safe. The
+six slog lines that used to be the heartbeat remain at debug level for
+diagnostics; they are no longer the operator surface.
+
+Two durable companions make the stream reconstructible from disk alone: the
+journal's `start` record (appended by the box worker right before each
+attempt's `RunAttempt`, the failure module's shape) and the per-attempt
+`output.log` the run-prep seam opens under the attempt directory and hands
+to the container runner as `RunSpec.Output`. A reader of the run directory
+sees the same timeline the sink saw.
+
 ## Deferred seam
 
 Concurrency control beyond the flat `--max-parallel` semaphore is reserved: a
@@ -165,5 +188,5 @@ right choke point, so the first pass keeps the single semaphore and the seam is
 the admission decision — richer schedulers slot in without touching readiness.
 
 Requirements implemented: Topological parallel execution, Failure propagation
-and skip semantics, Reference workflow execution, Deferred: concurrency
-control.
+and skip semantics, Reference workflow execution, Progress event stream,
+Deferred: concurrency control.

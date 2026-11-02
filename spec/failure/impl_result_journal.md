@@ -112,7 +112,10 @@ type ResultRecord struct {
     Result    Result `json:"result"`
 }
 // CostRecord ("cost": StepID, InputHash, metering.Cost),
-// CleanupRecord ("cleanup": StepID, InputHash, OK bool, Detail) and
+// CleanupRecord ("cleanup": StepID, InputHash, OK bool, Detail),
+// StartRecord ("start": StepID, Attempt, Started — appended by the box
+// worker right before each attempt launches; replay collects them in order
+// as Replay.Starts, never into Results) and
 // RunEndRecord ("run-end": Status settled|aborted|paused, Failed, Halted,
 // Finished) mirror the shape. appendHeader owns the Format stamp; Load
 // refuses any other stamp (fail closed, no auto-migration). The name and the

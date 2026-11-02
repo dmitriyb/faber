@@ -47,6 +47,9 @@ func (f *fakeContainers) Run(ctx context.Context, spec infra.RunSpec) (infra.Run
 		raw, _ := json.Marshal(f.usage)
 		os.WriteFile(filepath.Join(resultDir, contract.UsageFile), raw, 0o644)
 	}
+	if spec.Output != nil && len(f.output) > 0 {
+		spec.Output.Write(f.output)
+	}
 	return infra.RunResult{ExitCode: 0, Output: f.output, Started: testBase, Duration: 2e9}, f.runErr
 }
 
@@ -666,5 +669,30 @@ func TestBoxRun_PerRoleGitIdentity(t *testing.T) {
 	spec = run(t, map[string]GitIdentity{"implementer": {Email: "dev@example.com"}}, "merger")
 	if _, ok := spec.Env[contract.EnvGitEmail]; ok {
 		t.Fatalf("unregistered role received a committer email: %q", spec.Env[contract.EnvGitEmail])
+	}
+}
+
+// Verifies 0c82c6478856 (run-prep side): every attempt's combined container
+// output lands durably in <attempt>/output.log, beside the result dir.
+func TestBoxRun_WritesOutputLog(t *testing.T) {
+	containers := &fakeContainers{
+		record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1},
+		output: []byte("prelude: fetch-pr ok\nagent: exit 0\n"),
+	}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	box := boxAttempt(t)
+	if _, err := boxes.RunAttempt(context.Background(), box); err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	if containers.specs[0].Output == nil {
+		t.Fatal("RunSpec.Output not set: the container runner had nowhere durable to stream")
+	}
+	path := filepath.Join(box.RunDir, "boxes", pathToken(box.NodeID), "attempt-1", OutputLogName)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("output log: %v", err)
+	}
+	if string(got) != string(containers.output) {
+		t.Errorf("output log %q, want %q", got, containers.output)
 	}
 }

@@ -91,6 +91,10 @@ acceptance environment only.
     entry `["cat", "/dev/stdin"]` echoes the exact payload bytes back through
     captured output, proving the byte stream reached the container intact.)
 
+12. **Output writer tee.** With `RunSpec.Output` set, the writer receives the
+    streamed output in full and byte-identical to the bounded tail for a
+    small output.
+
 ## Edge cases
 
 - Empty binding fragment: argv is still valid (a bare engine-only run, e.g.

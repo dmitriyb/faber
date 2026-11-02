@@ -528,3 +528,54 @@ func TestAuditRuns(t *testing.T) {
 		t.Fatalf("run-old: %+v", a)
 	}
 }
+
+// Verifies af1a4ddf11e0: start records round-trip through replay in order,
+// never key a result, and a start with no later result is the running-step
+// signature; a torn tail after a start drops only the torn line.
+func TestJournalStartRecords(t *testing.T) {
+	store := NewStore(t.TempDir(), nil)
+	j, err := store.Begin(diamondHeader("run-s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 2, 19, 4, 8, 0, time.UTC)
+	if err := j.AppendStart(StartRecord{StepID: "task/a", Attempt: 1, Started: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.AppendResult(ResultRecord{StepID: "task/a", InputHash: "hash-a", Result: okResult(`{"field":"a"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.AppendStart(StartRecord{StepID: "task/b", Attempt: 2, Started: t0.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := store.journalPath("run-s")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"kind":"start","step_id":"task/c","att`) // crash mid-append
+	f.Close()
+
+	rp, err := Load(path, nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(rp.Starts) != 2 {
+		t.Fatalf("starts %+v, want 2 (torn third dropped)", rp.Starts)
+	}
+	if rp.Starts[0].StepID != "task/a" || rp.Starts[0].Attempt != 1 || !rp.Starts[0].Started.Equal(t0) {
+		t.Errorf("start 0 = %+v", rp.Starts[0])
+	}
+	if rp.Starts[1].StepID != "task/b" || rp.Starts[1].Attempt != 2 {
+		t.Errorf("start 1 = %+v", rp.Starts[1])
+	}
+	if _, ok := rp.LastByStep["task/b"]; ok {
+		t.Error("a start must never produce a result entry")
+	}
+	if len(rp.Results) != 1 {
+		t.Errorf("results %d, want 1 (starts key nothing)", len(rp.Results))
+	}
+}

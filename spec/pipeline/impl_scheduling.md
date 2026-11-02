@@ -244,6 +244,42 @@ in `dependents` and keep executing. A `halted` settlement additionally counts
 into the scheduler's halt tally (with the halt reason), which the executor
 folds into the run-end record and the exit-code decision.
 
+## Progress events and the per-attempt output log
+
+```go
+type EventKind string // step-started | step-settled | step-deferred |
+                      // generate-expanded | pause-requested | run-ended
+type Event struct {
+    Kind EventKind; Time time.Time; Step string
+    Template string; Attempt int                         // step-started
+    Status, Reason string; Cached bool; Duration time.Duration // step-settled
+    Until time.Time; Detail string                       // step-deferred / run-ended
+    Items, Nodes int                                     // generate-expanded
+    RunID, RunStatus string; Failed, Halted int          // run-ended
+}
+type EventSink interface{ Emit(Event) }                  // concurrency-safe
+
+func (s *scheduler) emit(ev Event)   // nil sink → no-op; fills Time from the clock
+```
+
+Emission points are the existing single points of truth: `settleResult` and
+`settleSkip` (one settled event each, before `finish`), the `evDeferred`
+fold, `applyExpansion`, `pauseGate` (once, when the request latches), and the
+executor after `endRun`. The attempt start is emitted by the box worker's
+runner closure immediately before `RunAttempt`, right after it appends the
+journal's `StartRecord{StepID, Attempt: base+attempt, Started}` — a failed
+start append is logged, not fatal (the settlement's own append surfaces an
+unappendable journal). A defer-converted dispatch consumes no attempt, so its
+re-dispatch starts as attempt 1 again, exactly as its result records it.
+
+The run-prep seam (`AgentBoxes.RunAttempt`) opens
+`<attemptDir>/output.log` (`O_CREATE|O_TRUNC`, after the pre-attempt scrub)
+and sets `RunSpec.Output` to it; the container runner tees the streamed
+combined output into it beside the bounded tail and the debug forwarding.
+`LineSink` is the minimal human sink the cmd wiring attaches to stderr: one
+ASCII line per event (`HH:MM:SS  start|ok|FAIL|HALT|skip|WAIT|expand|end …`),
+box-authored text terminal-sanitized like the report's Text path.
+
 ## Journal records for skips
 
 Skip settlements append journal records with a null input hash (a skipped

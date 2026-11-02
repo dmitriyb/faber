@@ -100,6 +100,7 @@ type scheduler struct {
 	rld     *metering.RateLimitDefer
 	boxes   BoxRunner
 	images  ImageTagger
+	sink    EventSink // progress events; nil = none
 	expand  *expander
 	clock   Clock
 	log     *slog.Logger
@@ -249,7 +250,8 @@ func (s *scheduler) pauseGate() bool {
 	}
 	if s.pause != nil && s.pause() {
 		s.paused = true
-		s.log.Info("pause requested; letting in-flight steps settle, dispatching nothing new")
+		s.log.Debug("pause requested; letting in-flight steps settle, dispatching nothing new")
+		s.emit(Event{Kind: EventPauseRequested})
 	}
 	return s.paused
 }
@@ -498,9 +500,7 @@ type boxJob struct {
 // launch starts the box worker for a slot-granted agent node.
 func (s *scheduler) launch(ctx context.Context, n *execNode) {
 	n.life = nsRunning
-	// Info-level, not debug: a multi-minute box with no start line reads as a
-	// hung run; start/settle pairs are the run's heartbeat.
-	s.log.Info("step started", "step", n.n.ID, "template", templateName(n.n.Template), "attempts_used", n.used)
+	s.log.Debug("step dispatched", "step", n.n.ID, "template", templateName(n.n.Template), "attempts_used", n.used)
 	retry := n.n.Retry - n.used
 	if retry < 0 {
 		retry = 0
@@ -594,6 +594,15 @@ func (s *scheduler) boxWorker(ctx context.Context, job boxJob) {
 				return deferEscape(), nil
 			}
 		}
+		// The attempt's start is durable state like a defer is: journaled the
+		// moment it launches, so a reader sees "running since" rather than
+		// nothing until settlement. A failed append is not fatal here — the
+		// settlement's own append surfaces an unappendable journal.
+		started := s.clock.Now()
+		if err := s.journal.AppendStart(failure.StartRecord{StepID: job.id, Attempt: job.base + attempt, Started: started}); err != nil {
+			s.log.Warn("journal start record", "step", job.id, "err", err)
+		}
+		s.emit(Event{Kind: EventStepStarted, Time: started, Step: job.id, Template: templateName(job.tpl), Attempt: job.base + attempt})
 		br, runErr := s.boxes.RunAttempt(ctx, BoxAttempt{
 			RunID:    s.runID,
 			RunDir:   s.runDir,
@@ -771,7 +780,8 @@ func (s *scheduler) step(ev event) {
 		if err := s.journal.AppendDefer(failure.DeferRecord{StepID: ev.id, Until: ev.until, Detail: ev.detail}); err != nil && s.fatal == nil {
 			s.fatal = fmt.Errorf("pipeline: journal became unappendable; aborting the run: %w", err)
 		}
-		s.log.Info("step deferred", "step", ev.id, "until", ev.until, "detail", ev.detail)
+		s.log.Debug("step deferred", "step", ev.id, "until", ev.until, "detail", ev.detail)
+		s.emit(Event{Kind: EventStepDeferred, Time: now, Step: ev.id, Until: ev.until, Detail: ev.detail})
 		if ev.until.IsZero() {
 			s.waitZero = append(s.waitZero, ev.id)
 			// The settlement this defer is waiting on may already have been
@@ -868,7 +878,8 @@ func (s *scheduler) applyExpansion(ev evExpanded) {
 			s.push(id)
 		}
 	}
-	s.log.Info("generate expanded", "step", ev.id, "items", len(ev.insts), "nodes", len(newIDs))
+	s.log.Debug("generate expanded", "step", ev.id, "items", len(ev.insts), "nodes", len(newIDs))
+	s.emit(Event{Kind: EventGenerateExpanded, Step: ev.id, Items: len(ev.insts), Nodes: len(newIDs)})
 	now := s.clock.Now()
 	s.settleResult(n, failure.Result{
 		Status:  failure.StatusOK,
@@ -922,6 +933,7 @@ func (s *scheduler) settleSkip(n *execNode, state, ancestor string) {
 	if err := s.journal.AppendResult(rec); err != nil && s.fatal == nil {
 		s.fatal = fmt.Errorf("pipeline: journal became unappendable; aborting the run: %w", err)
 	}
+	s.emit(Event{Kind: EventStepSettled, Time: now, Step: n.n.ID, Status: state, Reason: ancestor})
 	s.finish(n, state)
 }
 
@@ -976,16 +988,23 @@ func (s *scheduler) settleResult(n *execNode, res failure.Result, executed bool,
 			s.fatal = fmt.Errorf("pipeline: journal became unappendable; aborting the run: %w", err)
 		}
 	}
+	ev := Event{Kind: EventStepSettled, Step: n.n.ID, Status: status, Cached: n.cached}
+	if s0, f0 := recordSpan(res); !s0.IsZero() && f0.After(s0) {
+		ev.Duration = f0.Sub(s0)
+	}
 	if status == StateFailed && res.Error != nil {
-		s.log.Info("step failed", "step", n.n.ID, "reason", res.Error.Reason, "attempts", res.Attempt)
+		ev.Reason = res.Error.Reason
+		s.log.Debug("step failed", "step", n.n.ID, "reason", res.Error.Reason, "attempts", res.Attempt)
 	}
 	if status == StateHalted && res.Halt != nil {
 		// The halt tally is recorded at the single settle point so the
 		// executor's exit decision and the run-end record cannot disagree
 		// with what was journaled.
 		s.halts = append(s.halts, HaltedStep{Step: n.n.ID, Reason: res.Halt.Reason})
-		s.log.Info("step halted", "step", n.n.ID, "reason", res.Halt.Reason)
+		ev.Reason = res.Halt.Reason
+		s.log.Debug("step halted", "step", n.n.ID, "reason", res.Halt.Reason)
 	}
+	s.emit(ev)
 	s.finish(n, status)
 }
 
@@ -1000,7 +1019,7 @@ func (s *scheduler) finish(n *execNode, status string) {
 	if status == StateFailed {
 		s.failed++
 	}
-	s.log.Info("step settled", "step", id, "status", status, "cached", n.cached)
+	s.log.Debug("step settled", "step", id, "status", status, "cached", n.cached)
 
 	if members := s.g.members[id]; len(members) > 0 && status != StateOK {
 		// A sub-workflow entry that skipped or failed takes its whole inlined
@@ -1082,6 +1101,18 @@ func (s *scheduler) propagate(root, state string) {
 		s.settleSkip(n, state, root)
 		queue = append(queue, s.g.succ[id]...)
 	}
+}
+
+// emit delivers one progress event to the sink, if any. Safe from any
+// goroutine: the sink contract requires concurrent safety.
+func (s *scheduler) emit(ev Event) {
+	if s.sink == nil {
+		return
+	}
+	if ev.Time.IsZero() {
+		ev.Time = s.clock.Now()
+	}
+	s.sink.Emit(ev)
 }
 
 func templateName(tpl *config.ResolvedTemplate) string {

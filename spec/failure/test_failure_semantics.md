@@ -105,6 +105,11 @@ StepRunner and a recording HookRunner unless a real container is stated;
     existing journals replay unchanged. `Store.Interactive` threads the
     operator's `--shell` choice into `InteractiveTarget.Shell` untouched.
 
+20. **Start records.** Append start(a,1), result(a), start(b,2), then a torn
+    start line: `Load` replays two starts in order with their fields, the
+    torn third is dropped, `Results` holds only a's record and `LastByStep`
+    has no entry for b — a start keys nothing.
+
 ## Edge cases
 
 - Agent succeeded but wrote no `result.json`: the engine's fallback record is

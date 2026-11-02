@@ -45,6 +45,10 @@ type RunSpec struct {
 	// assembler — ContainerRunner never sets that flag (see impl_run_argv.md).
 	StdinSecrets []byte
 	Entry        []string // in-container entry argv; empty runs the image default
+	// Output, when non-nil, receives the container's combined stdout+stderr
+	// as it streams — the run-prep seam points it at the attempt's durable
+	// output.log. The bounded tail and the debug forwarding happen regardless.
+	Output io.Writer
 }
 
 // MountKind selects the docker flag a Mount emits. The container starts as root
@@ -108,7 +112,11 @@ func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, err
 		}
 	}
 	out := newTailBuffer(outputCap)
-	sink := io.MultiWriter(out, slogWriter(r.logger, "step", spec.Name))
+	writers := []io.Writer{out, slogWriter(r.logger, "step", spec.Name)}
+	if spec.Output != nil {
+		writers = append(writers, spec.Output)
+	}
+	sink := io.MultiWriter(writers...)
 	var stdin io.Reader // nil unless a secrets payload rides stdin
 	if len(spec.StdinSecrets) > 0 {
 		// A *bytes.Reader, deliberately not an *os.File: os/exec then pipes it

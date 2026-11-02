@@ -59,20 +59,27 @@
       "description": "Backlog (design edge case 5): a scheduler-level parallelism cap aware of host resources (CPU, local GPU) and API rate classes, replacing the first pass's simple max-parallel semaphore."
     },
     {
+      "id": "8964ddc94332",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Progress event stream",
+      "description": "The run's heartbeat is a typed event stream, not a log line: the scheduler emits step-started (per box attempt), step-settled (every terminal state, with reason, cached flag and span), step-deferred, generate-expanded, pause-requested, and run-ended events to an injected sink (nil = none); the pipeline never renders. The heartbeat slog lines drop to debug. Every box attempt additionally streams its combined container output into <attempt>/output.log, always on, scrubbed with its attempt dir."
+    },
+    {
       "id": "b8db39a923b7",
       "preq_id": "296f9fba2c0f",
       "type": "functional",
       "title": "Deferred: observability",
-      "description": "Backlog (design edge case 8): live progress surfaces for a running workflow — step logs and traces, a status view over the journal, and inspection of an in-flight run. First pass: structured slog lines plus the post-run report."
+      "description": "Backlog (design edge case 8): live progress surfaces for a running workflow — a status view that tails the journal of an in-flight run, and inspection of a running workflow. The stream and the durable records such a view reads exist (Progress event stream; the failure module's Durable step start; the per-attempt output.log); the view itself remains reserved."
     }
   ],
   "components": [
     {
       "id": "d7f1415da14a",
       "name": "Scheduler",
-      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure and halt propagation via dependent traversal, defer(until) re-queueing, and the cooperative pause gate (the durable marker probed at scheduling points; drain-and-settle, then a paused run-end). Consults the journal for resume skips and the meter for admission. Owns the host-side run-prep seam that assembles each infra.RunSpec, including staging the resolved skills leg into the single read-only /faber/skills mount — a per-attempt copy of real files for named skills (not a symlink farm, whose targets would dangle across the bind into the container), a direct mount for the inline skills-root — and, when the per-run sessions toggle is on and the template's invocation profile names a session_dir, the per-attempt live sessions bind (<attempt>/sessions mounted read-write at $HOME/<session_dir>, host-pre-owned like the result dir) that captures the harness's native transcripts crash-safely; the same seam gives interactive re-entry its session-resuming entry (a copy of the saved session mounted over $HOME/<session_dir> and the profile's resume_argv as entry, bare shell on --shell or when nothing was saved).",
+      "description": "Readiness-driven parallel execution over the IR: in-degree tracking, deterministic ready queue, goroutine-per-step with a semaphore cap, terminal-state accounting, failure and halt propagation via dependent traversal, defer(until) re-queueing, and the cooperative pause gate (the durable marker probed at scheduling points; drain-and-settle, then a paused run-end). Consults the journal for resume skips and the meter for admission. Owns the host-side run-prep seam that assembles each infra.RunSpec, including staging the resolved skills leg into the single read-only /faber/skills mount — a per-attempt copy of real files for named skills (not a symlink farm, whose targets would dangle across the bind into the container), a direct mount for the inline skills-root — and, when the per-run sessions toggle is on and the template's invocation profile names a session_dir, the per-attempt live sessions bind (<attempt>/sessions mounted read-write at $HOME/<session_dir>, host-pre-owned like the result dir) that captures the harness's native transcripts crash-safely; the same seam gives interactive re-entry its session-resuming entry (a copy of the saved session mounted over $HOME/<session_dir> and the profile's resume_argv as entry, bare shell on --shell or when nothing was saved). Emits the typed progress stream (started per attempt, settled, deferred, expanded, paused, run-ended) to the executor's event sink, journals a start record at every box attempt, and points each attempt's RunSpec.Output at the durable output.log.",
       "content": "arch_scheduler.md",
-      "implements": ["8879dc1597d6", "a0f44481f57b", "ae796d2a1503", "93d829b3f3d3"],
+      "implements": ["8879dc1597d6", "a0f44481f57b", "ae796d2a1503", "93d829b3f3d3", "8964ddc94332"],
       "uses": ["072cf2b54377", "b3b271a87136"]
     },
     {
