@@ -32,7 +32,7 @@
   "generate": [
     {
       "node": "epic/tasks",
-      "summary": "3 items: 1 ok, 1 failed, 1 skipped",
+      "summary": "3 items: 1 ok, 1 failed, 1 not reached",
       "items": [
         {
           "id": "I-1",
@@ -91,6 +91,24 @@
               "id": "epic/tasks[I-1]/review-cycle@3/review",
               "status": "skipped-dependency",
               "ancestor": "epic/tasks[I-1]/implement"
+            }
+          ],
+          "loops": [
+            {
+              "loop": "epic/tasks[I-1]/review-cycle",
+              "bound": 3,
+              "ran": 0,
+              "status": "not-reached",
+              "iterations": null,
+              "not_reached": [
+                1,
+                3
+              ],
+              "ancestor": "epic/tasks[I-1]/implement",
+              "absent": [
+                0,
+                0
+              ]
             }
           ]
         },
@@ -158,6 +176,43 @@
               "id": "epic/tasks[I-2]/review-cycle@3/review",
               "status": "skipped-condition"
             }
+          ],
+          "loops": [
+            {
+              "loop": "epic/tasks[I-2]/review-cycle",
+              "bound": 3,
+              "ran": 1,
+              "status": "ok",
+              "iterations": [
+                {
+                  "index": 1,
+                  "status": "ok",
+                  "steps": [
+                    {
+                      "id": "epic/tasks[I-2]/review-cycle@1/review",
+                      "status": "ok",
+                      "duration": "2s",
+                      "attempts": 1,
+                      "outputs": {
+                        "verdict": "approved"
+                      }
+                    },
+                    {
+                      "id": "epic/tasks[I-2]/review-cycle@1/fix",
+                      "status": "skipped-condition"
+                    }
+                  ]
+                }
+              ],
+              "not_reached": [
+                0,
+                0
+              ],
+              "absent": [
+                0,
+                0
+              ]
+            }
           ]
         },
         {
@@ -211,6 +266,24 @@
               "id": "epic/tasks[I-3]/review-cycle@3/review",
               "status": "skipped-dependency",
               "ancestor": "epic/tasks[I-1]/implement"
+            }
+          ],
+          "loops": [
+            {
+              "loop": "epic/tasks[I-3]/review-cycle",
+              "bound": 3,
+              "ran": 0,
+              "status": "not-reached",
+              "iterations": null,
+              "not_reached": [
+                1,
+                3
+              ],
+              "ancestor": "epic/tasks[I-1]/implement",
+              "absent": [
+                0,
+                0
+              ]
             }
           ]
         }

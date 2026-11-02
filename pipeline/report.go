@@ -20,6 +20,23 @@ type RunReport struct {
 	Run      RunHeader   `json:"run"`
 	Steps    []StepLine  `json:"steps"`
 	Generate []GenRollup `json:"generate,omitempty"`
+	// Loops folds the unrolled top-level loops back into iterations ran /
+	// cap, additive beside Steps (which stays complete for machines).
+	Loops []LoopRollup `json:"loops,omitempty"`
+
+	// items is the human text's reading order: plain lines and loop
+	// rollups interleaved in dependency order; sels maps selector ids to
+	// their loops so an ancestor reads as the loop. Not serialized.
+	items []textItem
+	sels  map[string]string
+	scope string
+}
+
+// textItem is one entry of the text report's reading order: a plain step
+// line or a loop rollup.
+type textItem struct {
+	line *StepLine
+	loop *LoopRollup
 }
 
 // RunHeader is the report's run-level frame.
@@ -79,30 +96,42 @@ type GenRollup struct {
 
 // GenItem is one instance's rollup: aggregate status plus its own step lines.
 type GenItem struct {
-	ID       string     `json:"id"`
-	Status   string     `json:"status"`
-	Duration string     `json:"duration,omitempty"`
-	OK       int        `json:"ok"`
-	Failed   int        `json:"failed"`
-	Halted   int        `json:"halted,omitempty"`
-	Skipped  int        `json:"skipped"`
-	Steps    []StepLine `json:"steps"`
+	ID       string       `json:"id"`
+	Status   string       `json:"status"`
+	Duration string       `json:"duration,omitempty"`
+	OK       int          `json:"ok"`
+	Failed   int          `json:"failed"`
+	Halted   int          `json:"halted,omitempty"`
+	Skipped  int          `json:"skipped"`
+	Steps    []StepLine   `json:"steps"`
+	Loops    []LoopRollup `json:"loops,omitempty"`
+	items    []textItem
 }
 
-// RunReporter derives run reports from journal replays.
-type RunReporter struct{}
+// RunReporter derives run reports from journal replays. Targets, when set,
+// supplies the generate target IRs (by workflow name) so instance lines read
+// in the target's dependency order with its loop caps; without them an
+// instance falls back to id order and journal-observed caps.
+type RunReporter struct {
+	Targets map[string]*config.IR
+}
 
 // irNodeInfo is the reporter's join key over the IR: kind and selector shape
 // per node id, sub-workflows flattened.
 type irNodeInfo struct {
-	kind string
-	sel  *config.SelSpec
+	kind   string
+	sel    *config.SelSpec
+	target string // generate nodes: the fanned-out workflow name
 }
 
 func collectIRNodes(ir *config.IR, out map[string]irNodeInfo) {
 	for i := range ir.Nodes {
 		n := &ir.Nodes[i]
-		out[n.ID] = irNodeInfo{kind: n.Kind, sel: n.Sel}
+		info := irNodeInfo{kind: n.Kind, sel: n.Sel}
+		if n.Gen != nil {
+			info.target = n.Gen.Workflow
+		}
+		out[n.ID] = info
 		if n.Sub != nil {
 			collectIRNodes(n.Sub, out)
 		}
@@ -114,7 +143,7 @@ func collectIRNodes(ir *config.IR, out map[string]irNodeInfo) {
 // journal records under a generate-instance prefix fold into per-item rollups
 // beneath their generate node. Ordering is the IR's canonical node order —
 // sorted path-like ids — so two runs of the same config order identically.
-func (RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string) (*RunReport, error) {
+func (r RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string) (*RunReport, error) {
 	if rp == nil {
 		return nil, fmt.Errorf("pipeline: report: nil journal replay")
 	}
@@ -186,6 +215,16 @@ func (RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string)
 		report.tally(line.Status)
 		report.Steps = append(report.Steps, line)
 	}
+	bounds := loopBounds(ir)
+	sels := selectorLoops(irNodes)
+	report.sels = sels
+	// Top-level names read relative to the workflow prefix every IR id
+	// carries; a stray id without it simply renders in full.
+	report.scope = ""
+	if ir != nil && ir.Workflow != "" {
+		report.scope = ir.Workflow + "/"
+	}
+	report.items, report.Loops = orderAndRollup(report.Steps, topoOrder(ir, sortedKeys(universe)), report.scope, bounds, sels)
 
 	// Generate rollups, one per generate node in id order, items in id order.
 	for _, gen := range genIDs {
@@ -249,6 +288,25 @@ func (RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string)
 			if !start.IsZero() && finish.After(start) {
 				gi.Duration = finish.Sub(start).String()
 			}
+			// Instance ids are outside the entry IR: with the target IR at
+			// hand they read in its dependency order under the instance
+			// scope and take its loop caps; without it, id order and the
+			// journal's own caps.
+			scope := gen + "[" + itemID + "]/"
+			ids := make([]string, 0, len(gi.Steps))
+			for _, l := range gi.Steps {
+				ids = append(ids, l.ID)
+			}
+			ibounds := bounds
+			if tgt := r.Targets[irNodes[gen].target]; tgt != nil {
+				ids = instanceOrder(tgt, scope, ids)
+				ibounds = instanceBounds(tgt, scope, bounds)
+			}
+			isels := instanceSelectors(gi.Steps, rp, scope)
+			for k, v := range isels {
+				report.sels[k] = v
+			}
+			gi.items, gi.Loops = orderAndRollup(gi.Steps, ids, scope, ibounds, isels)
 			rollup.Items = append(rollup.Items, gi)
 		}
 		rollup.Summary = genSummary(rollup.Items)
@@ -268,6 +326,87 @@ func (RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath string)
 		}
 	}
 	return report, nil
+}
+
+// orderAndRollup arranges lines in reading order and folds loops: plain
+// lines keep their place, a loop takes the place of its first line.
+func orderAndRollup(lines []StepLine, order []string, scope string, bounds map[string]int, sels map[string]string) ([]textItem, []LoopRollup) {
+	byID := map[string]*StepLine{}
+	for i := range lines {
+		byID[lines[i].ID] = &lines[i]
+	}
+	ordered := make([]StepLine, 0, len(lines))
+	for _, id := range order {
+		if l, ok := byID[id]; ok {
+			ordered = append(ordered, *l)
+		}
+	}
+	plain, loops := rollupLoops(ordered, scope, bounds, sels)
+	// Interleave: walk the ordered lines; emit a plain line where it sits,
+	// and a loop where its first member sits.
+	loopAt := map[string]int{} // first member id -> loop index
+	placed := map[int]bool{}
+	for i, lp := range loops {
+		for _, l := range ordered {
+			if lo, _, ok := loopOf(l.ID, scope); ok && lo == lp.Loop {
+				loopAt[l.ID] = i
+				break
+			}
+			if sels[l.ID] == lp.Loop {
+				loopAt[l.ID] = i
+				break
+			}
+		}
+	}
+	plainSet := map[string]bool{}
+	for _, l := range plain {
+		plainSet[l.ID] = true
+	}
+	var items []textItem
+	for i := range ordered {
+		l := &ordered[i]
+		if plainSet[l.ID] {
+			items = append(items, textItem{line: l})
+			continue
+		}
+		if li, ok := loopAt[l.ID]; ok && !placed[li] {
+			placed[li] = true
+			items = append(items, textItem{loop: &loops[li]})
+		}
+	}
+	return items, loops
+}
+
+// instanceSelectors finds a generate instance's selector lines by shape:
+// an ok record whose payload the scheduler adopted from a candidate is
+// indistinguishable here, so the selector is recognized the way the
+// scheduler names it — a line whose id is a loop's prefix minus its last
+// segment plus the body step, i.e. "<prefix>/<step>" with "<prefix>/<loop>@1/<step>"
+// also present.
+func instanceSelectors(lines []StepLine, rp *failure.Replay, scope string) map[string]string {
+	ids := map[string]bool{}
+	for _, l := range lines {
+		ids[l.ID] = true
+	}
+	out := map[string]string{}
+	for _, l := range lines {
+		if _, _, isIter := loopOf(l.ID, scope); isIter {
+			continue
+		}
+		rel := strings.TrimPrefix(l.ID, scope)
+		step := rel[strings.LastIndex(rel, "/")+1:]
+		parent := scope + strings.TrimSuffix(rel, step)
+		for id := range ids {
+			if !strings.HasPrefix(id, parent) || !strings.HasSuffix(id, "/"+step) {
+				continue
+			}
+			if loop, i, ok := loopOf(id, parent); ok && i == 1 && id == loop+"@1/"+step {
+				out[l.ID] = loop
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (r *RunReport) tally(status string) {
@@ -425,7 +564,7 @@ func chooseCandidate(sel *config.SelSpec, rp *failure.Replay) string {
 }
 
 func genSummary(items []GenItem) string {
-	ok, failed, halted, skipped := 0, 0, 0, 0
+	ok, failed, halted, notNeeded, notReached := 0, 0, 0, 0, 0
 	for _, it := range items {
 		switch it.Status {
 		case StateOK:
@@ -434,8 +573,10 @@ func genSummary(items []GenItem) string {
 			failed++
 		case StateHalted:
 			halted++
+		case StateSkippedCondition:
+			notNeeded++
 		default:
-			skipped++
+			notReached++
 		}
 	}
 	parts := []string{fmt.Sprintf("%d ok", ok)}
@@ -445,117 +586,13 @@ func genSummary(items []GenItem) string {
 	if halted > 0 {
 		parts = append(parts, fmt.Sprintf("%d halted", halted))
 	}
-	if skipped > 0 {
-		parts = append(parts, fmt.Sprintf("%d skipped", skipped))
+	if notNeeded > 0 {
+		parts = append(parts, fmt.Sprintf("%d not needed", notNeeded))
+	}
+	if notReached > 0 {
+		parts = append(parts, fmt.Sprintf("%d not reached", notReached))
 	}
 	return fmt.Sprintf("%d items: %s", len(items), strings.Join(parts, ", "))
-}
-
-// Text renders the human report: stable config order, one line per step,
-// generate rollups with nested instance lines, failure blocks with the
-// handoff pointer and the re-entry command, and a run footer.
-func (r *RunReport) Text(w io.Writer) error {
-	p := func(format string, args ...any) {
-		fmt.Fprintf(w, format+"\n", args...)
-	}
-	if r.Run.Name != "" {
-		// The name is operator-authored but journal-carried; sanitize like
-		// any other journal-derived text on the Text path.
-		p("run %s (%s)  workflow %s", r.Run.RunID, sanitizeTerm(r.Run.Name), r.Run.Workflow)
-	} else {
-		p("run %s  workflow %s", r.Run.RunID, r.Run.Workflow)
-	}
-	for _, line := range r.Steps {
-		p("  %s", stepText(line))
-	}
-	for _, g := range r.Generate {
-		p("  generate %s: %s", g.Node, g.Summary)
-		for _, it := range g.Items {
-			p("    [%s] %s%s  %d ok / %d failed / %d skipped",
-				it.ID, it.Status, textDuration(it.Duration), it.OK, it.Failed, it.Skipped)
-			for _, line := range it.Steps {
-				p("      %s", stepText(line))
-			}
-		}
-	}
-	blocks := r.failureBlocks()
-	if len(blocks) > 0 {
-		p("failures:")
-		for _, b := range blocks {
-			for _, l := range b {
-				p("  %s", l)
-			}
-		}
-	}
-	halts := r.haltBlocks()
-	if len(halts) > 0 {
-		p("halted:")
-		for _, l := range halts {
-			p("  %s", l)
-		}
-	}
-	t := r.Run.Totals
-	footer := fmt.Sprintf("totals: %d ok, %d failed, %d skipped (condition), %d skipped (dependency)",
-		t.OK, t.Failed, t.SkippedCondition, t.SkippedDependency)
-	if t.Halted > 0 {
-		footer += fmt.Sprintf(", %d halted", t.Halted)
-	}
-	if t.SkippedHalt > 0 {
-		footer += fmt.Sprintf(", %d skipped (halt)", t.SkippedHalt)
-	}
-	if t.Absent > 0 {
-		footer += fmt.Sprintf(", %d absent", t.Absent)
-	}
-	if r.Run.Wall != "" {
-		footer += "; wall " + r.Run.Wall
-	}
-	p("%s", footer)
-	if r.Run.Paused {
-		p("paused: the run stopped on request; resume with: faber resume %s", r.Run.RunID)
-	}
-	if r.Run.Journal != "" {
-		p("journal: %s", r.Run.Journal)
-	}
-	return nil
-}
-
-func stepText(line StepLine) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%-19s %s", line.Status, line.ID)
-	if line.Cached {
-		sb.WriteString("  (cached)")
-	}
-	if line.AgentSkipped {
-		sb.WriteString("  (agent-skipped)")
-	}
-	if line.Duration != "" {
-		fmt.Fprintf(&sb, "  %s", line.Duration)
-	}
-	if line.Attempts > 1 {
-		fmt.Fprintf(&sb, "  attempts=%d", line.Attempts)
-	}
-	if line.Deferred > 0 {
-		fmt.Fprintf(&sb, "  deferred=%d wait=%s", line.Deferred, line.DeferredFor)
-	}
-	if line.Chose != "" {
-		fmt.Fprintf(&sb, "  chose=%s", line.Chose)
-	}
-	if line.Ancestor != "" {
-		// The ancestor is a scheduler-authored node id in both skip flavors.
-		if line.Status == StateSkippedHalt {
-			fmt.Fprintf(&sb, "  after-halt-of=%s", line.Ancestor)
-		} else {
-			fmt.Fprintf(&sb, "  after-failure-of=%s", line.Ancestor)
-		}
-	}
-	if line.Halt != nil {
-		// The halt reason is box-authored text; sanitize like any other.
-		fmt.Fprintf(&sb, "  halt=%s", sanitizeTerm(line.Halt.Reason))
-	}
-	for _, k := range sortedKeys(line.Outputs) {
-		fmt.Fprintf(&sb, "  %s=%v", sanitizeTerm(k), sanitizeTerm(fmt.Sprintf("%v", line.Outputs[k])))
-	}
-	return sb.String()
 }
 
 // sanitizeTerm strips terminal control bytes from box-derived text before it
@@ -588,13 +625,6 @@ func sanitizeTerm(s string) string {
 
 func isTermControl(r rune) bool {
 	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
-}
-
-func textDuration(d string) string {
-	if d == "" {
-		return ""
-	}
-	return "  " + d
 }
 
 // failureBlocks builds the per-failure diagnostic blocks across top-level and

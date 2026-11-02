@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-
-	"golang.org/x/term"
 )
 
 // InitLogging builds the root slog logger: JSON handler when stderr is not a
@@ -18,10 +15,7 @@ import (
 // global logger and nothing calls slog.SetDefault. Logs go to stderr; stdout
 // is for program output.
 func InitLogging(level, format string, stderr io.Writer) (*slog.Logger, error) {
-	tty := false
-	if f, ok := stderr.(*os.File); ok {
-		tty = term.IsTerminal(int(f.Fd()))
-	}
+	tty := isTerminal(stderr)
 	var lvl slog.Level
 	switch level {
 	case "":

@@ -125,9 +125,9 @@ docker anywhere in this section.
     profile without `resume_argv`.
 
 18. **Progress stream order.** The diamond under `--max-parallel 1` with a
-    recording sink yields exactly `started a, settled a, started b, settled b,
-    started c, settled c, started d, settled d, run-ended` (run id, settled,
-    0 failed); the settled event carries the record's span and the ok state;
+    recording sink yields exactly `run-started (run id, workflow), started a,
+    settled a, started b, settled b, started c, settled c, started d,
+    settled d, run-ended` (run id, settled, 0 failed); the settled event carries the record's span and the ok state;
     the journal replays four `start` records, attempt 1 each, in dispatch
     order.
 19. **Defer in the stream.** The rate-limit-then-ok script yields
@@ -136,11 +136,27 @@ docker anywhere in this section.
 20. **Failure and skip reasons in the stream.** A failed `a` settles with its
     box reason; its dependent `b` settles `skipped-dependency` with `a` as the
     reason field.
-21. **Line sink rendering.** One ASCII line per event kind in the fixed
-    column shape; a control byte in a box-authored reason renders as U+FFFD.
+21. **Text sink rendering.** A scripted epic-shaped stream (one cycle:
+    implement, one review, convergence, a deferred then failed merge, two
+    later cycles not reached) renders exactly: breadcrumbs with iteration
+    and cap, `not needed` for the guard inside the live iteration, one
+    `settled after 1 of 5` line and nothing for the unused cap, `WAIT` with
+    the until time, and at run end one `not reached` range per loop
+    (`land @2`, `cycles @2..@3`) naming the ancestor; a control byte in a
+    box-authored reason renders as U+FFFD. With colour on, only the status
+    word is wrapped, in a palette slot, and the rest of the line is
+    byte-identical. The JSON sink writes one object per event carrying the
+    run-started caps and the run-ended counts.
 22. **Output log per attempt.** The run-prep seam sets `RunSpec.Output`;
     after `RunAttempt`, `<attempt>/output.log` holds exactly the bytes the
     container streamed.
+
+23. **Loop-aware goldens.** The task-loop, exhaustion, and fan-out-cascade
+    reports render in dependency order with loops folded (`review-cycle  2
+    of up to 3  -> review@2`, `FAIL  review-cycle  3 of up to 3  exhausted`
+    with `not reached  merge  after review-cycle`, idle instance loops as
+    one line), the footer in ran / not run groups, and the JSON unchanged in
+    `steps` plus an additive `loops`; golden files pin both forms.
 
 ## Edge cases
 

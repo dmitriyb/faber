@@ -22,6 +22,7 @@ func newResumeCmd(deps Deps) *cobra.Command {
 		},
 	}
 	addCommonFlags(cmd)
+	addProgressFlags(cmd)
 	cmd.Flags().Bool("fresh", false, "restart from the journal's config without reusing step results")
 	cmd.Flags().Bool("sessions", false, "capture harness session transcripts for the remainder of the run (a run started with --sessions keeps capturing regardless)")
 	cmd.Flags().String("interactive", "", "re-enter interactively at this step id")
@@ -57,6 +58,10 @@ func runResumeE(cmd *cobra.Command, args []string, deps Deps) error {
 	reportJSON, _ := cmd.Flags().GetString("report-json")
 	if shell && interactive == "" {
 		return usageErr(errors.New("faber resume: --shell is meaningful only with --interactive <step-id>"))
+	}
+	progress, color, err := readProgressFlags(cmd, cmd.ErrOrStderr())
+	if err != nil {
+		return err
 	}
 
 	logger, err := common.logger(cmd.ErrOrStderr())
@@ -110,6 +115,7 @@ func runResumeE(cmd *cobra.Command, args []string, deps Deps) error {
 	defer stop()
 	opts := RunOptions{
 		RunID: runID, Mode: mode, InteractiveStep: interactive, InteractiveShell: shell,
+		Progress: progress, Color: color,
 		// The flag ORed with the journaled header: a capturing run keeps
 		// capturing across resume AND --fresh (the fresh path writes a new
 		// header from opts, and losing the flag on restart would silently

@@ -54,6 +54,11 @@ type RunOptions struct {
 	// ReportJSON is where the machine-readable run report goes: a file path,
 	// "-" for stdout, or empty for none.
 	ReportJSON string
+	// Progress selects the run's progress stream sink, already resolved by
+	// the CLI against the terminal: "text", "json", or "none". Color is the
+	// resolved --color decision for the text sink.
+	Progress string
+	Color    bool
 
 	// Wiring context: the CLI fills these so the integration-level Executor
 	// can assemble per-run capabilities (journal header identity, security
@@ -309,6 +314,29 @@ func addCommonFlags(cmd *cobra.Command) {
 	cmd.Flags().String("config", "orchestrator.yaml", "path to orchestrator.yaml")
 	cmd.Flags().String("log-level", "", "debug|info|warn|error (default: warn on a terminal, info otherwise)")
 	cmd.Flags().String("log-format", "auto", "auto|json|text")
+}
+
+// addProgressFlags registers --progress/--color on the run-executing
+// commands (run, resume).
+func addProgressFlags(cmd *cobra.Command) {
+	cmd.Flags().String("progress", "auto", "progress stream on stderr: auto|text|json|none (auto: text on a terminal, json otherwise)")
+	cmd.Flags().String("color", "auto", "colour the progress stream's status words: auto|always|never (auto: a terminal that is not dumb, NO_COLOR unset)")
+}
+
+// readProgressFlags resolves --progress/--color against stderr; a bad value
+// is a usage error.
+func readProgressFlags(cmd *cobra.Command, stderr io.Writer) (progress string, color bool, err error) {
+	pm, _ := cmd.Flags().GetString("progress")
+	cm, _ := cmd.Flags().GetString("color")
+	progress, err = ProgressMode(pm, stderr)
+	if err != nil {
+		return "", false, usageErr(err)
+	}
+	color, err = ColorEnabled(cm, stderr)
+	if err != nil {
+		return "", false, usageErr(err)
+	}
+	return progress, color, nil
 }
 
 // addLogFlags registers only --log-level/--log-format, for the registry

@@ -247,7 +247,7 @@ folds into the run-end record and the exit-code decision.
 ## Progress events and the per-attempt output log
 
 ```go
-type EventKind string // step-started | step-settled | step-deferred |
+type EventKind string // run-started | step-started | step-settled | step-deferred |
                       // generate-expanded | pause-requested | run-ended
 type Event struct {
     Kind EventKind; Time time.Time; Step string
@@ -255,7 +255,8 @@ type Event struct {
     Status, Reason string; Cached bool; Duration time.Duration // step-settled
     Until time.Time; Detail string                       // step-deferred / run-ended
     Items, Nodes int                                     // generate-expanded
-    RunID, RunStatus string; Failed, Halted int          // run-ended
+    RunID, Workflow, RunStatus string; Failed, Halted int // run-started / run-ended
+    Loops map[string]int                                 // loop caps: all on run-started, instances on generate-expanded
 }
 type EventSink interface{ Emit(Event) }                  // concurrency-safe
 
@@ -276,9 +277,12 @@ The run-prep seam (`AgentBoxes.RunAttempt`) opens
 `<attemptDir>/output.log` (`O_CREATE|O_TRUNC`, after the pre-attempt scrub)
 and sets `RunSpec.Output` to it; the container runner tees the streamed
 combined output into it beside the bounded tail and the debug forwarding.
-`LineSink` is the minimal human sink the cmd wiring attaches to stderr: one
-ASCII line per event (`HH:MM:SS  start|ok|FAIL|HALT|skip|WAIT|expand|end …`),
-box-authored text terminal-sanitized like the report's Text path.
+The executor emits `run-started` (run id, workflow, every loop cap off the
+IR via `loopBounds`) before scheduling; `applyExpansion` adds the spliced
+instances' caps to `generate-expanded`. The renderers are the reporter's
+(`progress.go`: `TextSink`, `JSONSink`; see `impl_conditions_reporting.md`
+and `arch_run_reporter.md`, "Progress renderers"); the cmd wiring attaches
+the one `RunOptions.Progress` names.
 
 ## Journal records for skips
 

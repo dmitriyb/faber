@@ -1,12 +1,10 @@
 run run-test  workflow task
-  ok                  task/implement  2s  branch=work/x  pr=17
-  ok                  task/merge  2s  merged=yes
-  ok                  task/review  chose=task/review-cycle@2/review  verdict=approved
-  ok                  task/review-cycle@1/fix  2s  status=pushed
-  ok                  task/review-cycle@1/review  2s  verdict=changes
-  skipped-condition   task/review-cycle@2/fix
-  ok                  task/review-cycle@2/review  2s  verdict=approved
-  skipped-condition   task/review-cycle@3/fix
-  skipped-condition   task/review-cycle@3/review
-totals: 6 ok, 0 failed, 3 skipped (condition), 0 skipped (dependency); wall 2s
+  ok           implement  2s  branch=work/x  pr=17
+  ok           review-cycle  2 of up to 3  -> review@2
+    @1  ok           review  2s  verdict=changes
+        ok           fix  2s  status=pushed
+    @2  ok           review  2s  verdict=approved
+        not needed   fix
+  ok           merge  2s  merged=yes
+ran 5 ok, 0 failed; not run 1 not needed; wall 2s
 journal: runs/run-test/journal.jsonl

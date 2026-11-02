@@ -93,5 +93,96 @@
         "verdict": "changes"
       }
     }
+  ],
+  "loops": [
+    {
+      "loop": "task/review-cycle",
+      "bound": 3,
+      "ran": 3,
+      "status": "failed",
+      "exhausted": true,
+      "iterations": [
+        {
+          "index": 1,
+          "status": "ok",
+          "steps": [
+            {
+              "id": "task/review-cycle@1/review",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "verdict": "changes"
+              }
+            },
+            {
+              "id": "task/review-cycle@1/fix",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "status": "pushed"
+              }
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "status": "ok",
+          "steps": [
+            {
+              "id": "task/review-cycle@2/review",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "verdict": "changes"
+              }
+            },
+            {
+              "id": "task/review-cycle@2/fix",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "status": "pushed"
+              }
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "status": "ok",
+          "steps": [
+            {
+              "id": "task/review-cycle@3/review",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "verdict": "changes"
+              }
+            },
+            {
+              "id": "task/review-cycle@3/fix",
+              "status": "ok",
+              "duration": "2s",
+              "attempts": 1,
+              "outputs": {
+                "status": "pushed"
+              }
+            }
+          ]
+        }
+      ],
+      "not_reached": [
+        0,
+        0
+      ],
+      "absent": [
+        0,
+        0
+      ]
+    }
   ]
 }

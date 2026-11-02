@@ -56,8 +56,21 @@ type RunReporter struct{}
 
 type RunReport struct {
     Run      RunHeader     // workflow, config/IR hash, params, totals, wall time
-    Steps    []StepLine    // canonical IR node order
-    Generate []GenRollup   // one per generate node
+    Steps    []StepLine    // canonical IR node order — complete, scheduler encodings intact
+    Generate []GenRollup   // one per generate node (items carry their own Loops)
+    Loops    []LoopRollup  // top-level loops folded back (additive)
+    items    []textItem    // unexported: the text's reading order (dependency order)
+}
+
+type LoopRollup struct {
+    Loop       string          // loop prefix id, e.g. task/review-cycle
+    Bound, Ran int             // cap (highest iteration present), iterations that executed a node
+    Status     string          // ok|failed|halted|not-reached|absent
+    Chose      string          // the selector's adopted candidate, if any
+    Exhausted  bool            // selector settled loop-exhausted
+    Iterations []LoopIteration // executed iterations only: index, status, steps, nested loops
+    NotReached [2]int          // range skipped past a failure/halt; Ancestor names the cause
+    Absent     [2]int          // range with no record
 }
 
 type StepLine struct {
@@ -83,14 +96,29 @@ walk `ir.Nodes` in canonical order emitting a `StepLine` per node (`absent`
 when no record exists), then fold lines whose IDs match a generate-instance
 prefix `gen[item]/` into per-item rollups under their `GenRollup` (aggregate
 status = failed if any failed, else skipped-dependency if any, else ok).
+Then `rollupLoops` (rollup.go) folds each scope's lines: the outermost
+`<loop>@<i>` segment after the scope groups a line into a loop and
+iteration; iterations recurse with the iteration prefix as the new scope;
+an iteration with an executed node becomes a `LoopIteration`, one without
+becomes unused cap, a not-reached range (any dependency/halt skip, first
+ancestor kept) or an absent range. Selector lines are consumed into their
+loop (`selectorLoops` maps a selector to the loop its candidates sit in;
+instance selectors are recognized by shape). `topoOrder` (edges plus
+condition reads, id tie-breaks) gives the text its reading order;
+`RunReporter.Targets` lets instances read in their target IR's order with
+its caps. The text's footer is `humanTotals`: the lines actually listed,
+an idle loop counted once, never the unused cap.
 
 Rendering is two thin functions over the same struct:
 
-- `Text(w io.Writer)` — aligned per-step lines, generate rollups with nested
-  instance lines, failure blocks (reason, detail, handoff pointer, attempts,
-  `faber resume --interactive <id>` hint), halt blocks (halting step, halt
-  reason, detail — named without the reader parsing JSON), run footer with
-  per-state totals.
+- `Text(w io.Writer)` (report_text.go) — reading-order lines in the human
+  vocabulary (`statusWord`: ok / FAIL / HALT / not needed / not reached /
+  absent, `%-12s` column), loops as `<status>  <loop>  <ran> of up to <cap>
+  [exhausted] [-> <body>@<i>]` with executed iterations nested (`@n` lead on
+  the first line), one line per idle loop, generate rollups with the same
+  folding per instance, failure blocks (reason, detail, handoff pointer,
+  attempts, `faber resume --interactive <id>` hint), halt blocks, and the
+  `ran … ; not run …` footer.
 - `JSON(w io.Writer)` — `json.Encoder` with `SetEscapeHTML(false)` over the
   struct; field order fixed, slices pre-sorted, so output is diff-stable.
 

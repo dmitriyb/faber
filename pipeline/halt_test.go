@@ -79,8 +79,8 @@ func TestScheduling_HaltStopsChainNotRun(t *testing.T) {
 		"halted:",
 		"w/b: needs-triage: ci stuck past the retry budget",
 		"1 halted",
-		"1 skipped (halt)",
-		"after-halt-of=w/b",
+		"1 not reached",
+		"after halt of b",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("report missing %q:\n%s", want, text)

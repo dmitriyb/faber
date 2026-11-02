@@ -190,6 +190,7 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 	}
 	s.registerScopes(ir)
 
+	s.emit(Event{Kind: EventRunStarted, RunID: runID, Workflow: ir.Workflow, Loops: loopBounds(ir)})
 	runErr := s.run(ctx)
 
 	// The pause drain ended the run only when undispatched nodes actually
@@ -399,7 +400,7 @@ func (e *Executor) render(runID, journalPath string, ir *config.IR, log *slog.Lo
 		log.Error("load journal for report", "err", err)
 		return nil
 	}
-	report, err := (RunReporter{}).Report(rp, ir, journalPath)
+	report, err := (RunReporter{Targets: e.Workflows}).Report(rp, ir, journalPath)
 	if err != nil {
 		log.Error("derive report", "err", err)
 		return nil

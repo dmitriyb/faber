@@ -21,6 +21,7 @@ func newRunCmd(deps Deps) *cobra.Command {
 		},
 	}
 	addCommonFlags(cmd)
+	addProgressFlags(cmd)
 	cmd.Flags().String("name", "", "human name for the run, stored in the journal header (usable as a run reference)")
 	cmd.Flags().StringArray("param", nil, "workflow param binding k=v (repeatable)")
 	cmd.Flags().StringArray("budget", nil, "budget bound unit=n (repeatable)")
@@ -50,6 +51,10 @@ func runRunE(cmd *cobra.Command, args []string, deps Deps) error {
 	if err != nil {
 		return usageErr(err)
 	}
+	progress, color, err := readProgressFlags(cmd, cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
 	supplied, err := parsePairs(paramFlags, "--param")
 	if err != nil {
 		return usageErr(err)
@@ -72,7 +77,7 @@ func runRunE(cmd *cobra.Command, args []string, deps Deps) error {
 		Name:        name,
 		Sessions:    sessions,
 		MaxParallel: maxParallel, Budgets: budgets, MeteringPath: metering,
-		ReportJSON: reportJSON,
+		ReportJSON: reportJSON, Progress: progress, Color: color,
 		ConfigPath: common.config, Workflow: workflow, Supplied: supplied,
 		Targets: targets, Config: cfg,
 	}

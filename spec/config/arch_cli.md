@@ -223,7 +223,16 @@ handler when it is (overridable via `--log-format`). The default level is
 `warn` on a terminal and `info` otherwise: on a terminal the pipeline's
 progress stream (one ASCII line per event on stderr) is the operator surface
 and slog is diagnostics only; off a terminal nobody is watching and the JSON
-lines are the record. An explicit `--log-level` beats the default either way. Each module receives a child
+lines are the record. An explicit `--log-level` beats the default either way.
+
+`run` and `resume` also take `--progress auto|text|json|none` and `--color
+auto|always|never`, resolved here against stderr before any config is read
+and carried to the executor as `RunOptions.Progress`/`Color`: auto is the
+text renderer with colour on a terminal (not `TERM=dumb`, `NO_COLOR` unset)
+and the JSON-lines sink without colour otherwise. `TERM` and `NO_COLOR` are
+the terminal's own description, the same class of fact as isatty — not faber
+configuration, which stays in explicit files. A bad value is a usage error
+(exit 2). Each module receives a child
 logger via `logger.With("component", name)` — no global logger, no
 `slog.SetDefault` (conductor's D3, carried over). Secrets never reach the logger:
 resolver outputs and credential material are typed so they cannot be passed to

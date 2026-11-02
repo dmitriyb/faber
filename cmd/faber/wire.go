@@ -241,9 +241,15 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			Supplied:   opts.Supplied,
 		},
 		Out: w.stdout,
-		// The progress stream is the operator surface: one ASCII line per
-		// event on stderr, beside (not inside) the diagnostic log.
-		Events: pipeline.NewLineSink(w.stderr),
+	}
+	// The progress stream is the operator surface, on stderr beside (not
+	// inside) the diagnostic log; the CLI resolved which sink and whether
+	// colour against the terminal.
+	switch opts.Progress {
+	case "text":
+		ex.Events = pipeline.NewTextSink(w.stderr, opts.Color)
+	case "json":
+		ex.Events = pipeline.NewJSONSink(w.stderr)
 	}
 	// The machine-readable report goes wherever --report-json points; "-"
 	// means stdout (after the human report, which also writes there). A file
