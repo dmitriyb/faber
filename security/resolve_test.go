@@ -127,13 +127,15 @@ func TestIdentityBindingResolvesViaRegistry(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 	sock := contributedSocket(t, c.Args)
-	fps := agent.keys[sock]
-	// fakeAgent labels the key by the keySource basename it was handed.
-	if len(fps) != 1 || !strings.Contains(fps[0], "located-impl") {
-		t.Fatalf("agent must hold exactly the located key, got %q", fps)
+	// fakeAgent names the key by the keySource basename it was handed.
+	if got := proxyKeyComments(t, sock); len(got) != 1 || got[0] != "located-impl" {
+		t.Fatalf("the box must see exactly the located key, got %q", got)
 	}
 	if err := c.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
+	}
+	if err := b.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 

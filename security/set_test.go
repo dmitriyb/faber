@@ -163,10 +163,21 @@ func TestPrepareFailureUnwindsPriorBindings(t *testing.T) {
 // writes no host file, so there is nothing to shred; the (Prepare-failure)
 // case additionally asserts no container ever started — test scenario 3.
 func TestTeardownAlwaysRuns(t *testing.T) {
-	assertClean := func(t *testing.T, h *harness, scratch string) {
+	// proxySock is the attempt's contributed socket ("" when assembly failed
+	// before contributing): its directory must be gone after teardown. The
+	// role agent is run-scoped — alive after the attempt, dead after Close.
+	assertClean := func(t *testing.T, h *harness, scratch, proxySock string) {
 		t.Helper()
+		if proxySock != "" {
+			if _, err := os.Stat(filepath.Dir(proxySock)); !os.IsNotExist(err) {
+				t.Fatalf("proxy socket directory %s must be removed", filepath.Dir(proxySock))
+			}
+		}
+		if err := h.set.Close(context.Background()); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
 		if live := h.agent.liveAgents(); len(live) != 0 {
-			t.Fatalf("agent leaked: %q", live)
+			t.Fatalf("agent leaked past Close: %q", live)
 		}
 		for _, sock := range h.agent.starts {
 			if _, err := os.Stat(filepath.Dir(sock)); !os.IsNotExist(err) {
@@ -193,7 +204,7 @@ func TestTeardownAlwaysRuns(t *testing.T) {
 			if err := a.Teardown(context.Background()); err != nil {
 				t.Fatalf("Teardown: %v", err)
 			}
-			assertClean(t, h, scratch)
+			assertClean(t, h, scratch, contributedSocket(t, a.Args))
 		})
 	}
 
@@ -209,7 +220,7 @@ func TestTeardownAlwaysRuns(t *testing.T) {
 		if err := a.Teardown(ctx); err != nil {
 			t.Fatalf("Teardown on cancelled ctx: %v", err)
 		}
-		assertClean(t, h, scratch)
+		assertClean(t, h, scratch, contributedSocket(t, a.Args))
 		// The detached teardown context means the agent Stop saw a live
 		// context despite the cancelled step — test edge "cancellation
 		// during teardown".
@@ -226,7 +237,7 @@ func TestTeardownAlwaysRuns(t *testing.T) {
 		h.resolver.globalErr = errBoom // credentials fail after identity spawned the agent
 		_, err := h.set.Prepare(context.Background(), implementStep(scratch))
 		errContains(t, err, "security: binding credentials")
-		assertClean(t, h, scratch)
+		assertClean(t, h, scratch, "")
 		if h.docker.runCalls != 0 {
 			t.Fatalf("no container may start after a failed assembly, got %d runs", h.docker.runCalls)
 		}
@@ -279,8 +290,12 @@ func TestRetryReassemblesFresh(t *testing.T) {
 		}
 	}()
 
-	if len(h.agent.starts) != 2 || h.agent.starts[0] == h.agent.starts[1] {
-		t.Fatalf("attempts must use distinct sockets, got %q", h.agent.starts)
+	// One role agent serves both attempts; each attempt gets its own socket.
+	if len(h.agent.starts) != 1 {
+		t.Fatalf("want one role agent across attempts, got spawns %q", h.agent.starts)
+	}
+	if a, b := contributedSocket(t, first.Args), contributedSocket(t, second.Args); a == b {
+		t.Fatalf("attempts must use distinct sockets, both %q", a)
 	}
 	if h.resolver.callCount() != 2 {
 		t.Fatalf("each attempt must invoke the resolver afresh, got %d calls", h.resolver.callCount())
@@ -304,7 +319,10 @@ func TestCancelledResolverUnwindsAgent(t *testing.T) {
 	}()
 	cancel()
 	<-done
+	if err := h.set.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	if live := h.agent.liveAgents(); len(live) != 0 {
-		t.Fatalf("cancelled assembly leaked an agent: %q", live)
+		t.Fatalf("cancelled assembly leaked an agent past Close: %q", live)
 	}
 }

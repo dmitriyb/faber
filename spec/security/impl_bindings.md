@@ -69,15 +69,27 @@ restated per binding.
   `ResolveIdentity(ctx, reg, loc, step.IdentityRole, *step.Identity)` —
   explicit path verbatim, else registry+locator (see
   `impl_role_registry.md`); an empty inline key now triggers registry
-  resolution rather than an immediate error. It then shells
-  `ssh-agent -a <ScratchDir>/agent.sock` through the exec adapter, loads the
-  one resolved key, then lists keys: 0 ⇒ error, >1 ⇒ `slog.Warn` with
-  fingerprints. When resolution pinned a fingerprint (every branch but the
-  explicit path), it then asserts the agent holds that fingerprint and fails
-  closed otherwise — a mismatched pub/private pair is caught here, not at the
-  gate. Teardown kills the agent PID and removes the socket directory,
-  independent errors joined with `errors.Join`. Resolution runs before the
-  spawn, so a role that resolves to nothing fails without leaving an agent
+  resolution rather than an immediate error. It then takes the run's
+  **role agent** for that key (`roleAgentFor`, signqueue.go, under the
+  binding's mutex): on first use it shells `ssh-agent -a <tmp>/agent.sock`
+  through the exec adapter, loads the one resolved key, then lists keys: 0
+  ⇒ error, >1 ⇒ `slog.Warn` with fingerprints; when resolution pinned a
+  fingerprint (every branch but the explicit path), it asserts the agent
+  holds that fingerprint and fails closed otherwise — a mismatched
+  pub/private pair is caught here, not at the gate — then dials the socket
+  with `agent.NewClient` and keeps the exposed keys (`exposedKeys`: the one
+  key, or the pinned one among several). Per attempt it creates a second
+  private socket dir and `serveProxy`s a `signProxy{keys, upstream,
+  queue}` on it with `agent.ServeAgent` (socket chmod 0600): `List` → the
+  exposed keys, `Sign`/`SignWithFlags` → `queue.Lock` then the upstream
+  client, `Signers` → upstream under the queue, `Add`/`Remove`/`RemoveAll`/
+  `Lock`/`Unlock` → `errAgentReadOnly`, `Extension` →
+  `agent.ErrExtensionUnsupported`. Teardown closes the listener (waiting
+  for served connections) and removes the proxy directory, independent
+  errors joined with `errors.Join`; `Close(ctx)` stops every role agent
+  (connection, process, directory) and `BindingSet.Close` forwards to any
+  binding that implements it. Resolution runs before any spawn, so a role
+  that resolves to nothing fails without leaving an agent
   behind. `SocketGroup`, when non-empty, contributes BOTH `--group-add
   <SocketGroup>` AND `-e FABER_AGENT_SOCKET_GID=<SocketGroup>` — the box's
   preamble re-adds that gid across its `setgroups` drop, which otherwise strips

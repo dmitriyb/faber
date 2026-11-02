@@ -11,13 +11,19 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
+	"crypto/ed25519"
+	"crypto/rand"
 	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/infra"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+	"net"
+	"sync/atomic"
+	"time"
 )
 
 // fakeDocker implements infra.DockerClient. Only NetworkExists is expected
@@ -62,12 +68,18 @@ func (f *fakeDocker) Kill(_ context.Context, name string) error {
 
 func (f *fakeDocker) Remove(context.Context, string) error { return nil }
 
-// fakeAgent implements AgentController, tracking per-socket keys and
-// liveness. Start drops a socket file so directory-removal assertions are
-// real.
+// fakeAgent is an in-process AgentController: Start serves a real keyring
+// over the socket with x/crypto's ServeAgent (so the proxy's protocol path
+// is exercised end to end, no binaries), AddKey mints a throwaway ed25519
+// key named by the key source's basename, and ListKeys reports the
+// `ssh-add -l`-shaped lines the binding verifies against (overridable, so
+// tests can pin or break the fingerprint join). Stops are recorded with the
+// ctx.Err() observed, and a per-sign delay plus a concurrency counter let
+// tests prove the sign queue serializes.
 type fakeAgent struct {
 	mu       sync.Mutex
-	keys     map[string][]string // socket -> fingerprints
+	keys     map[string][]string // socket -> fingerprint lines
+	rings    map[string]agent.Agent
 	running  map[string]bool
 	starts   []string
 	stops    []string
@@ -80,10 +92,14 @@ type fakeAgent struct {
 	// fingerprint. When a keySource is absent the fake synthesizes one from the
 	// basename (the path-form default, where no fingerprint is pinned).
 	fpBySource map[string]string
+
+	signDelay time.Duration // held inside every upstream Sign
+	inSign    int32
+	maxInSign int32
 }
 
 func newFakeAgent() *fakeAgent {
-	return &fakeAgent{keys: map[string][]string{}, running: map[string]bool{}}
+	return &fakeAgent{keys: map[string][]string{}, rings: map[string]agent.Agent{}, running: map[string]bool{}}
 }
 
 func (f *fakeAgent) Start(_ context.Context, socket string) (AgentHandle, error) {
@@ -93,11 +109,49 @@ func (f *fakeAgent) Start(_ context.Context, socket string) (AgentHandle, error)
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
-	if err := os.WriteFile(socket, nil, 0o600); err != nil {
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
 		return nil, err
 	}
+	ring := agent.NewKeyring()
+	f.rings[socket] = ring
 	f.running[socket] = true
-	return &fakeAgentHandle{f: f, socket: socket}, nil
+	served := &countingAgent{Agent: ring, f: f}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				_ = agent.ServeAgent(served, conn)
+			}()
+		}
+	}()
+	return &fakeAgentHandle{f: f, socket: socket, ln: ln}, nil
+}
+
+// countingAgent wraps the keyring to observe sign concurrency and to hold
+// each signature for signDelay, so an unqueued caller would overlap.
+type countingAgent struct {
+	agent.Agent
+	f *fakeAgent
+}
+
+func (c *countingAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
+	n := atomic.AddInt32(&c.f.inSign, 1)
+	for {
+		m := atomic.LoadInt32(&c.f.maxInSign)
+		if n <= m || atomic.CompareAndSwapInt32(&c.f.maxInSign, m, n) {
+			break
+		}
+	}
+	defer atomic.AddInt32(&c.f.inSign, -1)
+	if c.f.signDelay > 0 {
+		time.Sleep(c.f.signDelay)
+	}
+	return c.Agent.Sign(key, data)
 }
 
 func (f *fakeAgent) AddKey(_ context.Context, socket, keySource string) error {
@@ -111,6 +165,15 @@ func (f *fakeAgent) AddKey(_ context.Context, socket, keySource string) error {
 		line = "256 " + fp + " " + filepath.Base(keySource) + " (ED25519)"
 	}
 	f.keys[socket] = append(f.keys[socket], line)
+	if ring := f.rings[socket]; ring != nil {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return err
+		}
+		if err := ring.Add(agent.AddedKey{PrivateKey: priv, Comment: filepath.Base(keySource)}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -138,11 +201,15 @@ func (f *fakeAgent) liveAgents() []string {
 type fakeAgentHandle struct {
 	f      *fakeAgent
 	socket string
+	ln     net.Listener
 }
 
 func (h *fakeAgentHandle) Stop(ctx context.Context) error {
 	h.f.mu.Lock()
 	defer h.f.mu.Unlock()
+	if h.ln != nil {
+		_ = h.ln.Close()
+	}
 	h.f.running[h.socket] = false
 	h.f.stops = append(h.f.stops, h.socket)
 	h.f.stopCtx = append(h.f.stopCtx, ctx.Err())
@@ -298,3 +365,10 @@ func errContains(t *testing.T, err error, want string) {
 }
 
 var errBoom = errors.New("boom")
+
+// ed25519Gen mints a throwaway key pair for tests that need a key the
+// binding never loaded.
+func ed25519Gen(r io.Reader) (interface{}, interface{}, error) {
+	pub, priv, err := ed25519.GenerateKey(r)
+	return pub, priv, err
+}

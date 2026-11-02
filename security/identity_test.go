@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+
+	"golang.org/x/crypto/ssh/agent"
 )
 
 func identityBinding(agent *fakeAgent, logBuf *bytes.Buffer) *IdentityBinding {
@@ -35,6 +38,26 @@ func contributedSocket(t *testing.T, args []string) string {
 	return ""
 }
 
+// proxyKeyComments dials the contributed (proxy) socket the way a box's ssh
+// would and lists what it exposes, by key comment.
+func proxyKeyComments(t *testing.T, sock string) []string {
+	t.Helper()
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("dial proxy %s: %v", sock, err)
+	}
+	defer conn.Close()
+	keys, err := agent.NewClient(conn).List()
+	if err != nil {
+		t.Fatalf("list via proxy: %v", err)
+	}
+	var out []string
+	for _, k := range keys {
+		out = append(out, k.Comment)
+	}
+	return out
+}
+
 // Verifies e47a00273f03: after Prepare the step's agent holds exactly one
 // fingerprint — the step's own identity, not any other configured one — and
 // only the socket is forwarded (mount + SSH_AUTH_SOCK, nothing else) — test
@@ -55,15 +78,20 @@ func TestIdentityOneKeyPerBox(t *testing.T) {
 	if strings.HasPrefix(sock, scratch) {
 		t.Fatalf("socket %q must not live under the scratch dir (sun_path cap)", sock)
 	}
-	fps := agent.keys[sock]
-	if len(fps) != 1 || !strings.Contains(fps[0], "implementer") {
-		t.Fatalf("agent must hold exactly the implementer key, got %q", fps)
+	if got := proxyKeyComments(t, sock); len(got) != 1 || got[0] != "implementer" {
+		t.Fatalf("the box's agent must expose exactly the implementer key, got %q", got)
 	}
 	if err := c.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
 	}
 	if _, serr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(serr) {
 		t.Fatal("teardown must remove the socket directory")
+	}
+	if err := b.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if live := agent.liveAgents(); len(live) != 0 {
+		t.Fatalf("role agent still live after Close: %q", live)
 	}
 }
 
@@ -97,19 +125,26 @@ func TestIdentityConcurrentStepsGetDisjointAgents(t *testing.T) {
 	if sockA == sockB {
 		t.Fatal("concurrent steps must get distinct sockets")
 	}
-	if fps := agent.keys[sockA]; len(fps) != 1 || !strings.Contains(fps[0], "implementer") {
-		t.Fatalf("implement agent keys: %q", fps)
+	if got := proxyKeyComments(t, sockA); len(got) != 1 || got[0] != "implementer" {
+		t.Fatalf("implement box sees %q", got)
 	}
-	if fps := agent.keys[sockB]; len(fps) != 1 || !strings.Contains(fps[0], "merger") {
-		t.Fatalf("merge agent keys: %q", fps)
+	if got := proxyKeyComments(t, sockB); len(got) != 1 || got[0] != "merger" {
+		t.Fatalf("merge box sees %q", got)
 	}
 	for i := range contribs {
 		if err := contribs[i].Teardown(context.Background()); err != nil {
 			t.Fatalf("Teardown %d: %v", i, err)
 		}
 	}
+	// Two roles, two run-scoped agents: alive until the run closes them.
+	if live := agent.liveAgents(); len(live) != 2 {
+		t.Fatalf("want two role agents live until Close, got %q", live)
+	}
+	if err := b.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	if live := agent.liveAgents(); len(live) != 0 {
-		t.Fatalf("agents leaked: %q", live)
+		t.Fatalf("agents leaked past Close: %q", live)
 	}
 }
 
@@ -193,11 +228,14 @@ func TestIdentityTeardownAndSocketGroup(t *testing.T) {
 	if err := c.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
 	}
-	if live := agent.liveAgents(); len(live) != 0 {
-		t.Fatalf("agent still live after teardown: %q", live)
-	}
 	if _, serr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(serr) {
 		t.Fatal("teardown must remove the socket directory")
+	}
+	if err := b.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if live := agent.liveAgents(); len(live) != 0 {
+		t.Fatalf("agent still live after Close: %q", live)
 	}
 }
 

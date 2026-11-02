@@ -105,12 +105,32 @@ skip otherwise.
     file is opened by faber (only `.pub` reads and the path handed to
     `AddKey`).
 
+12. **Proxy lists and signs.** Through the contributed socket, dialled as a
+    box's ssh would (`agent.NewClient`), `List` exposes exactly the role's
+    key by comment and `Sign` yields a signature that verifies against it.
+    The fake controller serves a real in-process keyring over the socket
+    with `ServeAgent`, so the protocol path is exercised with no binaries.
+13. **Sign queue serializes.** Eight attempts of one role, each signing
+    through its own proxy concurrently while the upstream holds every
+    signature for a few milliseconds: the upstream observes at most one
+    Sign in flight, and exactly one role agent was spawned.
+14. **Proxy is read-only.** `Add`, `RemoveAll`, `Lock` are refused; `Sign`
+    with a key that is not the role's fails; `List` still shows the one
+    key afterwards.
+15. **Role agents reused and closed.** Two attempts of one role plus one of
+    another spawn exactly two agents; after the attempts' teardowns both
+    are live; `Close` stops both (and is idempotent). The binding-set
+    teardown scenarios assert the attempt's proxy directory is gone after
+    teardown and the role agents are gone after `Close`; a retry reuses the
+    role agent but gets a distinct socket.
+
 ## Edge cases
 
 - Empty BindingSet (no remote, no services, no identity, no runtime):
   empty fragment, nil-safe teardown, step still runnable.
 - NO_PROXY list order preserved exactly as declared in YAML.
-- Retry: a second attempt after a failed run gets a different socket path
-  and a fresh resolver invocation (asserted via resolver call count).
+- Retry: a second attempt after a failed run gets a different (proxy)
+  socket path on the same role agent and a fresh resolver invocation
+  (asserted via resolver call count).
 - Cancellation during teardown: the detached teardown context still kills
   the agent within its deadline.

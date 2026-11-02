@@ -24,6 +24,13 @@
       "description": "Each template declares an identity; per step, faber spawns an ephemeral ssh-agent holding exactly one key for that identity, forwards only the socket into the container (-v sock:/ssh-agent, SSH_AUTH_SOCK), and tears the agent down when the step ends. One key per container gives role isolation by construction; the private key never enters the box. Key material acquisition (file key, hardware-resident key) is resolver-supplied; the in-box prelude derives the git signing key from the forwarded agent."
     },
     {
+      "id": "1b0f6b9009af",
+      "preq_id": "4ed3587b51f5",
+      "type": "functional",
+      "title": "Serialized signing",
+      "description": "Every signature a box requests passes one process-wide queue, so a hardware token behind any number of boxes never sees two requests at once. Per role per run exactly one ssh-agent holds the role's one key (spawned on first use, verified by fingerprint as before, stopped at run end); per attempt the box receives a private Unix socket served by faber's own agent-protocol proxy (x/crypto/ssh/agent), which lists only the role's key, forwards Sign through the queue, and refuses Add, Remove, RemoveAll, Lock, Unlock and extensions. The box sees the same mount, env var and protocol as before; no key material ever enters faber's process."
+    },
+    {
       "id": "0c5bc0f678b7",
       "preq_id": "eddb5adc5adb",
       "type": "functional",
@@ -84,9 +91,9 @@
     {
       "id": "948717b7fe5b",
       "name": "IdentityBinding",
-      "description": "The ephemeral ssh-agent lifecycle: spawn with a private socket, load exactly one key for the template's identity via the resolver, contribute the socket mount and SSH_AUTH_SOCK env, and guarantee teardown on step exit.",
+      "description": "The role-scoped ssh-agent lifecycle and the per-attempt signing proxy: one agent per role per run (spawned on first use on a private socket, loaded with exactly one key via the resolver, fingerprint-verified, stopped at run end via Close), and per attempt a private proxy socket speaking the agent protocol — the role's key listed, Sign serialized through the process-wide sign queue, mutation refused — contributed as the socket mount and SSH_AUTH_SOCK env, torn down on step exit.",
       "content": "arch_identity_binding.md",
-      "implements": ["e47a00273f03"],
+      "implements": ["e47a00273f03", "1b0f6b9009af"],
       "uses": ["d212912ff029"]
     },
     {
