@@ -14,7 +14,7 @@ Faber is **mechanism, not policy**: it knows `docker build`/`docker run`, a work
 |--------|---------|------------|
 | config | orchestrator.yaml schema, typed params, desugaring to JSON IR, validation, CLI, logging | — |
 | infra | Typed subprocess actuation (docker/git/nix), Nix image build, container run primitive | config |
-| security | Run-time bindings: network (egress lock), remote (pinned gateway), identity (ephemeral ssh-agent), credential delegation | config, infra |
+| security | Run-time bindings: network (egress lock), remote (pinned gateway), identity (one ssh-agent per role, one signing proxy per step, serialized signing), credential delegation | config, infra |
 | agent | The box: fixed phase order context → prelude → agent → postlude → result, structured result extraction | config, infra, security |
 | metering | Pluggable estimate/actual budget hooks, endpoint fidelity tiers, 429-defer floor | config |
 | failure | Structured step results, on_failure cleanup, retry, run journal, resume/recovery modes | config |
@@ -35,7 +35,7 @@ Requirements titled `Deferred: …` are captured backlog (the design's open edge
 
 ## Technical Constraints
 
-- **Go standard library first**: only external deps are `yaml.v3`, `cel-go`, and `x/term`
+- **Go standard library first**: only external deps are `yaml.v3`, `cel-go`, `cobra`, `x/term`, and `x/crypto` (the ssh-agent protocol for the signing proxy)
 - **CLI actuation behind typed interfaces**: docker, git, nix, and user resolvers are invoked via `os/exec` behind clean interfaces with structured (JSON) I/O — never stdout-scraping
 - **YAML in, JSON IR out**: humans author YAML; the engine executes only the desugared, validated JSON IR
 - **Validate before run**: wiring, type, and cycle errors surface at `faber validate`, never mid-run

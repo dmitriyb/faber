@@ -266,6 +266,11 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 		ex.JSONOut = jsonBuf
 	}
 	runErr := ex.Execute(ctx, ir, params, opts, logger)
+	// The role agents outlive every attempt and die with the run; both
+	// binding sets share the one identity binding, so one close covers both.
+	if cerr := bindings.Close(context.WithoutCancel(ctx)); cerr != nil {
+		logger.Warn("close run-scoped bindings", "err", cerr)
+	}
 	if jsonBuf != nil && jsonBuf.Len() > 0 {
 		if werr := os.WriteFile(opts.ReportJSON, jsonBuf.Bytes(), 0o644); werr != nil && runErr == nil {
 			return fmt.Errorf("faber: write --report-json target: %w", werr)

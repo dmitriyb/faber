@@ -136,6 +136,21 @@ func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, err
 	}, nil
 }
 
+// Close releases run-scoped state the bindings hold beyond any one attempt
+// (today: the identity binding's role agents). The cmd wiring calls it once
+// after the run returns; it is idempotent.
+func (s *BindingSet) Close(ctx context.Context) error {
+	var errs []error
+	for _, b := range s.bindings {
+		if c, ok := b.(interface{ Close(context.Context) error }); ok {
+			if err := c.Close(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("security: close %s: %w", b.Name(), err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // namedTeardown pairs a binding's teardown hook with its name for error
 // attribution.
 type namedTeardown struct {

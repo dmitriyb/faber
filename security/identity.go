@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"sync"
 )
 
 // agentSocketPattern names the private per-spawn MkdirTemp directory the
@@ -74,6 +74,15 @@ type IdentityBinding struct {
 	agents AgentController
 	logger *slog.Logger
 
+	// roles holds the run-scoped agents, one per role (or per path-form key
+	// source), spawned on first use and stopped by Close. queue is the sign
+	// queue every proxy's Sign passes through: one signature at a time per
+	// process, so a single hardware token behind every role never meets two
+	// requests at once.
+	mu    sync.Mutex
+	roles map[string]*roleAgent
+	queue sync.Mutex
+
 	// SocketGroup, when non-empty, adds "--group-add <SocketGroup>" to the
 	// contribution — the documented escape for platforms where the forwarded
 	// socket's group ownership blocks the box's non-root user (the macOS VM
@@ -91,7 +100,8 @@ type IdentityBinding struct {
 // NewIdentityBinding wires the ephemeral-agent lifecycle to an
 // AgentController (NewAgentController for the real binaries).
 func NewIdentityBinding(agents AgentController, logger *slog.Logger) *IdentityBinding {
-	return &IdentityBinding{agents: agents, logger: childLogger(logger, "identity-binding")}
+	return &IdentityBinding{
+		roles: map[string]*roleAgent{}, agents: agents, logger: childLogger(logger, "identity-binding")}
 }
 
 // Name implements Binding.
@@ -115,81 +125,37 @@ func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribut
 	if err != nil {
 		return Contribution{}, err
 	}
-	dir, err := os.MkdirTemp("", agentSocketPattern)
+	roleKey := step.IdentityRole
+	if roleKey == "" {
+		roleKey = "path:" + keySource
+	}
+	ra, err := b.roleAgentFor(ctx, roleKey, keySource, expectFP, step.IdentityRole, step.NodeID)
 	if err != nil {
-		return Contribution{}, fmt.Errorf("create agent socket dir: %w", err)
+		return Contribution{}, err
 	}
-	sock := filepath.Join(dir, agentSocketFile)
-	if len(sock) > maxSocketPath {
-		if rerr := os.Remove(dir); rerr != nil {
-			b.logger.WarnContext(ctx, "remove socket dir after path-length refusal", "node", step.NodeID, "err", rerr)
-		}
-		return Contribution{}, fmt.Errorf(
-			"agent socket path %q is %d bytes — over the %d-byte Unix socket (sun_path) budget; point TMPDIR at a shorter directory",
-			sock, len(sock), maxSocketPath)
+	// The box's own socket: a private directory per attempt, a proxy that
+	// exposes the role's key and queues its signatures. Nothing about what
+	// the box sees — mount, env var, protocol — changed.
+	dir, sock, err := b.socketDir(ctx, step.NodeID)
+	if err != nil {
+		return Contribution{}, err
 	}
-
-	handle, err := b.agents.Start(ctx, sock)
+	closeProxy, err := serveProxy(sock, &signProxy{keys: ra.keys, upstream: ra.client, queue: &b.queue})
 	if err != nil {
 		if rerr := os.RemoveAll(dir); rerr != nil {
-			b.logger.WarnContext(ctx, "remove socket dir after failed agent spawn", "node", step.NodeID, "err", rerr)
+			b.logger.WarnContext(ctx, "remove socket dir after failed proxy listen", "node", step.NodeID, "err", rerr)
 		}
-		return Contribution{}, fmt.Errorf("spawn ssh-agent: %w", err)
+		return Contribution{}, err
 	}
 	teardown := func(ctx context.Context) error {
-		// A leaked agent is a leaked credential handle: attempt both halves
-		// independently and join, never short-circuit.
 		var errs []error
-		if err := handle.Stop(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("stop ssh-agent: %w", err))
+		if err := closeProxy(); err != nil {
+			errs = append(errs, fmt.Errorf("close agent proxy: %w", err))
 		}
 		if err := os.RemoveAll(dir); err != nil {
 			errs = append(errs, fmt.Errorf("remove socket dir: %w", err))
 		}
 		return errors.Join(errs...)
-	}
-	fail := func(err error) (Contribution, error) {
-		// Detach from step cancellation, mirroring BindingSet.teardownAll: a
-		// Prepare failing *because* the step was cancelled must still give
-		// the agent its graceful SIGTERM window instead of an immediate
-		// SIGKILL with a misleading deadline error.
-		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), teardownGrace)
-		defer cancel()
-		if terr := teardown(tctx); terr != nil {
-			b.logger.WarnContext(tctx, "teardown after failed identity setup", "node", step.NodeID, "err", terr)
-		}
-		return Contribution{}, err
-	}
-
-	if err := b.agents.AddKey(ctx, sock, keySource); err != nil {
-		return fail(fmt.Errorf("load identity key: %w", err))
-	}
-	fingerprints, err := b.agents.ListKeys(ctx, sock)
-	if err != nil {
-		return fail(fmt.Errorf("list agent keys: %w", err))
-	}
-	switch {
-	case len(fingerprints) == 0:
-		return fail(errors.New("agent holds no key after load (the key loader failed silently)"))
-	case len(fingerprints) > 1:
-		b.logger.WarnContext(ctx, "agent holds more than one key; role isolation degraded",
-			"node", step.NodeID, "fingerprints", fingerprints)
-	}
-	// The fingerprint is the entire cross-system join: the registry pins a role
-	// to a fingerprint, the gate authorizes signatures by fingerprint. Resolving
-	// a *.pub to its private counterpart trusts a naming convention, so once the
-	// key is actually loaded we confirm the agent holds the pinned fingerprint —
-	// a stale, mismatched, or planted pub/private pair fails closed here, at
-	// prepare time with a clear error, rather than late at the gate after a
-	// wasted box run. expectFP is "" only for the explicit-path branch, where no
-	// fingerprint was pinned and there is nothing to check against.
-	if expectFP != "" && !fingerprintHeld(fingerprints, expectFP) {
-		role := step.IdentityRole
-		if role == "" {
-			role = "(inline fingerprint)"
-		}
-		return fail(fmt.Errorf("identity role %q: agent loaded a key whose fingerprint is not the pinned one: expected %s, agent holds %v",
-			role, expectFP, fingerprints))
 	}
 
 	args := []string{
