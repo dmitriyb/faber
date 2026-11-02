@@ -50,6 +50,7 @@ func TestEvents_SerializedDiamondOrderAndJournalStarts(t *testing.T) {
 	want := []string{
 		"run-started",
 		"step-started:w/a", "step-settled:w/a",
+		"step-waiting:w/c", // b took the only slot; c says why it waits, once
 		"step-started:w/b", "step-settled:w/b",
 		"step-started:w/c", "step-settled:w/c",
 		"step-started:w/d", "step-settled:w/d",
@@ -69,6 +70,9 @@ func TestEvents_SerializedDiamondOrderAndJournalStarts(t *testing.T) {
 	if settled.Status != StateOK || settled.Duration != 2*time.Second || settled.Attempt != 0 {
 		t.Errorf("settled event %+v, want ok with the record's 2s span", settled)
 	}
+	if w := sink.evs[3]; w.Detail != "slot 1 of 1" {
+		t.Errorf("waiting event %+v, want detail \"slot 1 of 1\"", w)
+	}
 
 	rp, err := h.store.Load("run-test")
 	if err != nil {
@@ -77,9 +81,10 @@ func TestEvents_SerializedDiamondOrderAndJournalStarts(t *testing.T) {
 	if len(rp.Starts) != 4 {
 		t.Fatalf("journaled starts %d, want 4", len(rp.Starts))
 	}
+	wantStarts := []string{"w/a", "w/b", "w/c", "w/d"}
 	for i, rec := range rp.Starts {
-		if rec.Attempt != 1 || rec.Started.IsZero() || rec.StepID != want[2*i+1][len("step-started:"):] {
-			t.Errorf("start record %d = %+v, want attempt 1 for %s", i, rec, want[2*i+1])
+		if rec.Attempt != 1 || rec.Started.IsZero() || rec.StepID != wantStarts[i] {
+			t.Errorf("start record %d = %+v, want attempt 1 for %s", i, rec, wantStarts[i])
 		}
 	}
 }

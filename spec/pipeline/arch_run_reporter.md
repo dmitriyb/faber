@@ -112,7 +112,8 @@ cmd wiring selects from `--progress`:
   IR unrolls) and from each `generate-expanded` (the instance loops). A
   plain terminal cannot rewrite a printed line, so the sink prints at start
   and at settle only; elapsed appears at settle. The scheduler's skip
-  settlements collapse into what they mean: `not needed` for a guard inside
+  settlements collapse into what they mean: `ready  <crumb>  waiting for
+  lane landing 1 of 1` for a held node, `not needed` for a guard inside
   a live iteration, one `settled after n of cap` line when a loop converges
   (nothing for the unused cap), and one `not reached <loop> @a..@b after
   <ancestor>` range per loop at run end. Colour, when the CLI's probe allows

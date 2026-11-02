@@ -64,12 +64,13 @@ const (
 	wordRun    = "run"
 	wordEnd    = "end"
 	wordPause  = "PAUSE"
+	wordReady  = "ready"
 )
 
 // sgr is the status-word colour map: palette slots only, never 256-colour.
 var sgr = map[string]string{
 	wordOK: "32", wordFail: "1;31", wordHalt: "1;31", wordStart: "36", wordWait: "33",
-	wordNotNeeded: "90", wordNotReached: "90", wordPause: "33",
+	wordNotNeeded: "90", wordNotReached: "90", wordPause: "33", wordReady: "33",
 }
 
 func (s *TextSink) word(w string) string {
@@ -101,6 +102,8 @@ func (s *TextSink) lines(ev Event) []string {
 		return []string{s.line(ev, wordStart, s.crumb(ev.Step)+extra)}
 	case EventStepSettled:
 		return s.settledLines(ev)
+	case EventStepWaiting:
+		return []string{s.line(ev, wordReady, fmt.Sprintf("%s  waiting for %s", s.crumb(ev.Step), sanitizeTerm(ev.Detail)))}
 	case EventStepDeferred:
 		when := "until next settlement"
 		if !ev.Until.IsZero() {

@@ -121,3 +121,16 @@ func TestJSONSink_OneObjectPerEvent(t *testing.T) {
 		t.Errorf("last line %s", lines[len(lines)-1])
 	}
 }
+
+// Verifies f8da2202d321: a held node renders as ready with its hold reason.
+func TestTextSink_Waiting(t *testing.T) {
+	var sb strings.Builder
+	sink := NewTextSink(&sb, false)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sink.Emit(Event{Kind: EventRunStarted, Time: at, RunID: "r", Workflow: "w", Loops: map[string]int{}})
+	sink.Emit(Event{Kind: EventStepWaiting, Time: at, Step: "w/merge", Detail: "lane landing 1 of 1"})
+	want := "00:00:00  ready        merge  waiting for lane landing 1 of 1\n"
+	if !strings.HasSuffix(sb.String(), want) {
+		t.Errorf("got %q", sb.String())
+	}
+}

@@ -12,6 +12,7 @@ type Config struct {
     Remote      RemoteDef              `yaml:"remote"`       // substrate: root-only
     Credentials CredentialsDef         `yaml:"credentials"`  // substrate: root-only
     Identities  map[string]IdentityDef `yaml:"identities"`   // substrate: root-only
+    Lanes       map[string]int         `yaml:"lanes"`        // substrate: root-only; named concurrency bounds
     Images      map[string]ImageDef    `yaml:"images"`       // library: union-merged
     Skills      map[string]SkillDef    `yaml:"skills"`       // library: union-merged
     Hooks       map[string]HookDef     `yaml:"hooks"`        // library: union-merged
@@ -108,6 +109,7 @@ type TemplateDef struct {
     // named-reference form (new)
     Image      string   `yaml:"image"`       // ref -> Images   (xor Build)
     Identity   string   `yaml:"identity"`    // ref -> Identities (alias for Run.Identity; xor it)
+    Lane       string   `yaml:"lane"`        // ref -> Lanes; every box of the template holds one lane slot
     SkillsLink string   `yaml:"skills_link"` // in-box $HOME-relative discovery path; required when Skills is the named list
 
     // shared / inline forms
@@ -220,9 +222,10 @@ type LoopDef struct {
 }
 
 type GenerateDef struct {
-    Source   string         `yaml:"source"`
-    Workflow string         `yaml:"workflow"`
-    With     map[string]any `yaml:"with"`
+    Source      string         `yaml:"source"`
+    Workflow    string         `yaml:"workflow"`
+    With        map[string]any `yaml:"with"`
+    MaxParallel int            `yaml:"max_parallel"` // instances running at once; 0 = unbounded beyond --max-parallel
 }
 ```
 

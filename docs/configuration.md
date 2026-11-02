@@ -17,6 +17,7 @@ credentials:
   resolver: ./hooks/get-token             # opaque: get_token(service) -> stdout
   services: {agent-api: {mode: proxy, endpoint: http://token-proxy:8402}}  # mode: proxy|file|helper
 identities: {implementer: {key: ./keys/implementer}}   # one ssh-agent key per box
+lanes: {landing: 1}                      # named concurrency bounds; a template's lane: takes one slot per box
 
 # --- component libraries: named, union-merged across include: files ---
 images:
@@ -52,6 +53,7 @@ templates:
     effort: high                      # agent effort level, passed through via the profile's effort flag (required)
     invoke: {profile: goose}          # invocation dialect: a named profile ref, inline fields, or both (inline overrides field-by-field); absent = the built-in default dialect
     agent_optional: true              # optional: the prelude may skip the agent by writing FABER_SKIP_AGENT=1 into bundle.env (default false — the agent always runs)
+    lane: landing                     # optional: every box of this template holds one slot of the named lane while it runs
     hooks: {context: ./hooks/gather-context, on_failure: release}  # a bare name (library ref) or a path; also prelude (pre-agent) and postlude (post-agent, pre-result)
     inputs:  {repo: {type: string, required: true}, item: {type: string, required: true}}
     output:  {branch: {type: string, required: true}, pr: {type: int, required: true}}
@@ -67,7 +69,7 @@ workflows:
       - id: review-cycle
         loop: {max: 3, until: "steps.review.verdict == \"approved\"", steps: [ ... ]}
       - id: fan-out
-        generate: {source: items, workflow: per-item, with: {item: "${source.item}"}}
+        generate: {source: items, workflow: per-item, with: {item: "${source.item}"}, max_parallel: 4}  # max_parallel: at most 4 instances at once
       - id: merge
         use: merge
         when: "steps.review.verdict == \"approved\""
@@ -107,3 +109,5 @@ An output field a step declares is exactly what `steps.<id>.<field>` downstream 
 
 `sources.<name>` names an opaque executable (`command` + `args`, argv only — never a shell) that emits items at run time; a `generate` step fans a named workflow out over those items, deriving one instance per item and inter-instance edges from each item's own `deps` field.
 See `spec/pipeline/arch_generate_expander.md` for the expansion algorithm and node-count bound.
+
+Three bounds gate a box launch, granted together in id order: the run-wide `--max-parallel`, a generate's own `max_parallel` (its instances only), and the lane a template names. `lanes:` is a root-only substrate section of `name: max` pairs; `lanes: {landing: 1}` with `lane: landing` on the merge template makes landings strictly sequential while everything else fans out. A node held by a full pool or lane shows up on the progress stream as `ready  <step>  waiting for lane landing 1 of 1`.

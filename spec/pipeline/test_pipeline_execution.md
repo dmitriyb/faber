@@ -158,6 +158,22 @@ docker anywhere in this section.
     one line), the footer in ran / not run groups, and the JSON unchanged in
     `steps` plus an additive `loops`; golden files pin both forms.
 
+24. **Generate bound.** Four independent items under `max_parallel: 2`
+    with latency: at most two implement boxes overlap at any instant while
+    the run-wide bound is unlimited, and a `step-waiting` names the generate
+    pool.
+25. **Lane serializes.** Three templates naming `lane: landing` under
+    `lanes: {landing: 1}` plus one lane-less node: the lane boxes never
+    overlap and launch in id order, the lane-less box overlaps the first,
+    and exactly two `step-waiting` events name `lane landing 1 of 1`.
+26. **Lane released on defer.** A rate-limit defer of the lane holder lets
+    the next lane box in; the deferred box re-takes the lane and settles ok
+    on re-dispatch (two attempts, one).
+27. **Waiting on the stream.** Under `--max-parallel 1` the diamond's `c`
+    emits one `step-waiting` with `slot 1 of 1` between `b`'s start and its
+    own; the text sink renders a waiting event as `ready  <crumb>  waiting
+    for <reason>`.
+
 ## Edge cases
 
 - Empty item set: generate node settles ok, zero instances, dependents

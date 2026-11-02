@@ -244,10 +244,32 @@ in `dependents` and keep executing. A `halted` settlement additionally counts
 into the scheduler's halt tally (with the halt reason), which the executor
 folds into the run-end record and the exit-code decision.
 
+## Bounds (pools and lanes)
+
+```go
+type pool struct{ max, used int }            // free() when max <= 0 or used < max
+genPools map[string]*pool                     // generate node id -> its instance pool (GenSpec.MaxParallel > 0)
+lanes    map[string]*pool                     // IR.Lanes, name -> bound
+execNode.gen     string                       // the generate an instance node belongs to
+execNode.waiting string                       // the hold reason last announced
+func (s *scheduler) holdReason(n) string      // "" | "slot u of m" | "generate <id> u of m" | "lane <name> u of m"
+func (s *scheduler) takePools(n) / releasePools(n)   // global slot + generate pool + lane, always together
+```
+
+The drain pass pops `slotQ` in id order while the global slot is free; a
+node whose generate pool or lane is full is announced (`announceHold`, once
+per distinct reason) and set aside; held nodes re-queue after the pass.
+When the global slot is full the queue head is announced with `slot u of m`.
+`applyExpansion` tags every spliced node with its generate id and creates
+the pool when the spec declares a bound; the executor builds the lane pools
+from `IR.Lanes`. Release happens in the `evSettled`/`evDeferred` folds
+through `releasePools`, so a defer frees the lane for the next box exactly
+as it frees the semaphore.
+
 ## Progress events and the per-attempt output log
 
 ```go
-type EventKind string // run-started | step-started | step-settled | step-deferred |
+type EventKind string // run-started | step-started | step-settled | step-deferred | step-waiting |
                       // generate-expanded | pause-requested | run-ended
 type Event struct {
     Kind EventKind; Time time.Time; Step string

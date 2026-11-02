@@ -162,26 +162,28 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 	}
 
 	s := &scheduler{
-		g:       g,
-		ce:      ce,
-		scopes:  map[string]*scopeEnv{},
-		maxPar:  opts.MaxParallel,
-		events:  make(chan event),
-		done:    make(chan struct{}),
-		seed:    seed,
-		journal: seed.Journal,
-		policy:  &failure.Policy{Journal: seed.Journal, Hooks: e.Hooks, Log: log},
-		admit:   admit,
-		mcfg:    mcfg,
-		rld:     rld,
-		boxes:   e.Boxes,
-		images:  e.Images,
-		sink:    e.Events,
-		expand:  &expander{runner: e.Source, irs: e.Workflows},
-		clock:   clock,
-		log:     log,
-		runID:   runID,
-		runDir:  runDir,
+		g:        g,
+		ce:       ce,
+		scopes:   map[string]*scopeEnv{},
+		maxPar:   opts.MaxParallel,
+		genPools: map[string]*pool{},
+		lanes:    lanePools(ir.Lanes),
+		events:   make(chan event),
+		done:     make(chan struct{}),
+		seed:     seed,
+		journal:  seed.Journal,
+		policy:   &failure.Policy{Journal: seed.Journal, Hooks: e.Hooks, Log: log},
+		admit:    admit,
+		mcfg:     mcfg,
+		rld:      rld,
+		boxes:    e.Boxes,
+		images:   e.Images,
+		sink:     e.Events,
+		expand:   &expander{runner: e.Source, irs: e.Workflows},
+		clock:    clock,
+		log:      log,
+		runID:    runID,
+		runDir:   runDir,
 		// Capture is on when the run began with --sessions (the journaled
 		// header) or this invocation asked for it (resume --sessions widens a
 		// run that started without; the header itself stays immutable).
@@ -238,6 +240,15 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 		return &RunPaused{RunID: runID}
 	}
 	return nil
+}
+
+// lanePools builds the lane pools from the IR's declared bounds.
+func lanePools(lanes map[string]int) map[string]*pool {
+	out := make(map[string]*pool, len(lanes))
+	for name, n := range lanes {
+		out[name] = &pool{max: n}
+	}
+	return out
 }
 
 // RunHalted is the run-level operator-stop signal: no step failed, but at

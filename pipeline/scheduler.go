@@ -86,6 +86,12 @@ type scheduler struct {
 
 	maxPar    int // <= 0 means unlimited
 	slotsUsed int
+	// genPools bounds concurrently running instances per generate node
+	// (GenSpec.MaxParallel); lanes bounds boxes per declared lane
+	// (IR.Lanes, taken by a template's Lane). Both are granted in drain,
+	// in the same id order as the global slot, and released with it.
+	genPools map[string]*pool
+	lanes    map[string]*pool
 
 	events      chan event
 	done        chan struct{}
@@ -205,8 +211,71 @@ func (s *scheduler) push(id string) {
 	s.ready.push(id)
 }
 
+// pool is one bounded resource: a generate's instance cap or a lane.
+type pool struct {
+	max, used int
+}
+
+func (p *pool) free() bool { return p == nil || p.max <= 0 || p.used < p.max }
+
 // slotFree reports whether a box slot is available.
 func (s *scheduler) slotFree() bool { return s.maxPar <= 0 || s.slotsUsed < s.maxPar }
+
+// genPool returns the node's generate pool, nil when unbounded.
+func (s *scheduler) genPool(n *execNode) *pool {
+	if n.gen == "" {
+		return nil
+	}
+	return s.genPools[n.gen]
+}
+
+// lanePool returns the node's lane pool, nil when its template names none.
+func (s *scheduler) lanePool(n *execNode) *pool {
+	if n.n.Template == nil || n.n.Template.Lane == "" {
+		return nil
+	}
+	return s.lanes[n.n.Template.Lane]
+}
+
+// holdReason names what keeps a slot-waiting node from launching, or ""
+// when nothing does. Checked in the grant order (global, generate, lane).
+func (s *scheduler) holdReason(n *execNode) string {
+	if !s.slotFree() {
+		return fmt.Sprintf("slot %d of %d", s.slotsUsed, s.maxPar)
+	}
+	if p := s.genPool(n); !p.free() {
+		return fmt.Sprintf("generate %s %d of %d", n.gen, p.used, p.max)
+	}
+	if p := s.lanePool(n); !p.free() {
+		return fmt.Sprintf("lane %s %d of %d", n.n.Template.Lane, p.used, p.max)
+	}
+	return ""
+}
+
+// takePools and releasePools bracket a launch: the global slot plus the
+// node's generate pool and lane, always together.
+func (s *scheduler) takePools(n *execNode) {
+	s.takeSlot()
+	if p := s.genPool(n); p != nil {
+		p.used++
+	}
+	if p := s.lanePool(n); p != nil {
+		p.used++
+	}
+}
+
+func (s *scheduler) releasePools(n *execNode) {
+	s.releaseSlot()
+	if n == nil {
+		return
+	}
+	if p := s.genPool(n); p != nil && p.used > 0 {
+		p.used--
+	}
+	if p := s.lanePool(n); p != nil && p.used > 0 {
+		p.used--
+	}
+}
 
 func (s *scheduler) takeSlot() {
 	if s.maxPar > 0 {
@@ -264,15 +333,38 @@ func (s *scheduler) pauseGate() bool {
 func (s *scheduler) drain(ctx context.Context) {
 	for s.fatal == nil && !s.pauseGate() {
 		progressed := false
+		// One pass over the waiting nodes in id order: a node held by its
+		// generate pool or lane steps aside without blocking the nodes
+		// behind it; held nodes re-queue after the pass. The first time a
+		// node is held it says why on the stream.
+		var held []string
 		for len(s.slotQ) > 0 && s.slotFree() && s.fatal == nil {
 			id := s.slotQ.pop()
 			n := s.g.nodes[id]
 			if n == nil || n.life != nsSlotWait {
 				continue
 			}
-			s.takeSlot()
+			if why := s.holdReason(n); why != "" {
+				s.announceHold(n, why)
+				held = append(held, id)
+				continue
+			}
+			n.waiting = ""
+			s.takePools(n)
 			s.launch(ctx, n)
 			progressed = true
+		}
+		if !s.slotFree() {
+			// Everything still queued waits on the global slot; say so once
+			// for the head of the queue, which is the next to launch.
+			if len(s.slotQ) > 0 {
+				if n := s.g.nodes[s.slotQ[0]]; n != nil && n.life == nsSlotWait {
+					s.announceHold(n, s.holdReason(n))
+				}
+			}
+		}
+		for _, id := range held {
+			s.slotQ.push(id)
 		}
 		for len(s.ready) > 0 && s.fatal == nil {
 			id := s.ready.pop()
@@ -732,10 +824,10 @@ func (s *scheduler) step(ev event) {
 	switch ev := ev.(type) {
 	case evSettled:
 		s.outstanding--
-		if ev.slot {
-			s.releaseSlot()
-		}
 		n := s.g.nodes[ev.id]
+		if ev.slot {
+			s.releasePools(n)
+		}
 		if n == nil || n.terminal() {
 			return
 		}
@@ -754,10 +846,10 @@ func (s *scheduler) step(ev event) {
 		s.settleResult(n, res, ev.executed, ev.costs)
 	case evDeferred:
 		s.outstanding--
-		if ev.slot {
-			s.releaseSlot()
-		}
 		n := s.g.nodes[ev.id]
+		if ev.slot {
+			s.releasePools(n)
+		}
 		if n == nil || n.terminal() {
 			return
 		}
@@ -844,6 +936,16 @@ func (s *scheduler) applyExpansion(ev evExpanded) {
 		}
 		s.registerScopes(inst.ir)
 		instByID[inst.itemID] = inst
+	}
+	// Every spliced node belongs to this generate, whose instance bound (if
+	// any) is one pool shared by all of them.
+	for _, id := range newIDs {
+		if gn := s.g.nodes[id]; gn != nil {
+			gn.gen = ev.id
+		}
+	}
+	if n.n.Gen != nil && n.n.Gen.MaxParallel > 0 {
+		s.genPools[ev.id] = &pool{max: n.n.Gen.MaxParallel}
 	}
 	// Inter-instance ordering: every sink of the dep's instance orders every
 	// source of this instance. Deps outside the set were dropped upstream.
@@ -1105,6 +1207,17 @@ func (s *scheduler) propagate(root, state string) {
 		s.settleSkip(n, state, root)
 		queue = append(queue, s.g.succ[id]...)
 	}
+}
+
+// announceHold emits step-waiting once per distinct hold reason for a node
+// — the renderer's "ready, waiting for lane landing" — and never repeats
+// it on every drain pass.
+func (s *scheduler) announceHold(n *execNode, why string) {
+	if why == "" || n.waiting == why {
+		return
+	}
+	n.waiting = why
+	s.emit(Event{Kind: EventStepWaiting, Step: n.n.ID, Detail: why})
 }
 
 // emit delivers one progress event to the sink, if any. Safe from any
