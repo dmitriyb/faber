@@ -98,8 +98,22 @@ func runResumeE(cmd *cobra.Command, args []string, deps Deps) error {
 		return err
 	}
 	if hash != header.IRHash && !fresh {
-		return fmt.Errorf("faber resume: run %s was journaled against a different IR (config has changed since the run; journal %s, current %s) — fix the config back or pass --fresh to restart",
-			runID, header.IRHash, hash)
+		// A raised loop cap changes the full hash but not the cap-free key:
+		// journals that carry the key are judged by it (the store's guard
+		// additionally floors every cap at the journal's executed
+		// iterations); older journals keep the strict rule.
+		compatible := false
+		if header.IRHashCapFree != "" {
+			capFree, cerr := HashIRCapFree(cfg, header.Workflow)
+			if cerr != nil {
+				return cerr
+			}
+			compatible = capFree == header.IRHashCapFree
+		}
+		if !compatible {
+			return fmt.Errorf("faber resume: run %s was journaled against a different IR (config has changed since the run; journal %s, current %s) — fix the config back or pass --fresh to restart",
+				runID, header.IRHash, hash)
+		}
 	}
 	if deps.Executor == nil {
 		return errors.New("faber resume: execution requires the pipeline module, which is not wired into this binary yet (resume guard passed)")

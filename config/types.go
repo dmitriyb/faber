@@ -422,6 +422,12 @@ type LoopDef struct {
 	Max   int       `yaml:"max,omitempty"`
 	Until string    `yaml:"until,omitempty"`
 	Steps []StepDef `yaml:"steps,omitempty"`
+	// Expect names a sources.<name> command that prints {"count": N} — the
+	// iterations the loop is expected to need. The scheduler runs it at the
+	// loop's entry and at every iteration boundary and pauses the run when
+	// N exceeds Max, so an insufficient cap stops the run before work is
+	// wasted. Opaque: faber compares a number with a cap, nothing more.
+	Expect string `yaml:"expect,omitempty"`
 }
 
 // GenerateDef fans a named workflow out over a data source at run time.

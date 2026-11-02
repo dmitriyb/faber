@@ -266,11 +266,36 @@ from `IR.Lanes`. Release happens in the `evSettled`/`evDeferred` folds
 through `releasePools`, so a defer frees the lane for the next box exactly
 as it frees the semaphore.
 
+## The expect gate
+
+```go
+loops    map[string]config.LoopSpec // loop prefix id -> {Max, Command, Args}; entry IR + subs, instances rebased at expansion
+checked  map[string]int             // loop -> highest iteration the command ran for
+expected map[string]int             // loop -> last count
+pauseDetail string                  // the cap stop's message (run-end detail, RunPaused.Detail)
+func (s *scheduler) unexpectedIteration(id) (loop, iter, ok)  // outermost declared loop whose iteration id enters first
+func (s *scheduler) startExpect(ctx, n, loop, iter)           // worker: expander.expectCount(spec, n.env) -> evExpected
+func (s *scheduler) applyExpected(ev)                          // fold on the loop goroutine
+```
+
+`dispatch` evaluates the node's condition first, then asks
+`unexpectedIteration`; a hit parks the node (`nsRunning`, `outstanding++`)
+and runs the command host-side through the generate expander's runner
+(`expectCount`: args resolved from the node's scope like data-source args,
+stdout decoded as `{"count": N}`, N >= 0, else a contract error).
+`applyExpected` records the boundary (`checked`), then: an error settles the
+node failed with `sourceContractResult`; `count > Max` sets `paused` and
+`pauseDetail` (the pause gate then stops every grant and dispatch, the
+executor writes the detail into the run-end record and `RunPaused`), leaving
+the node undispatched for resume; otherwise the count is emitted
+(`loop-expected`, with the cap) and the node is pushed back to the ready
+heap. `evExpected` is the worker-to-loop message, like `evExpanded`.
+
 ## Progress events and the per-attempt output log
 
 ```go
 type EventKind string // run-started | step-started | step-settled | step-deferred | step-waiting |
-                      // generate-expanded | pause-requested | run-ended
+                      // loop-expected | generate-expanded | pause-requested | run-ended
 type Event struct {
     Kind EventKind; Time time.Time; Step string
     Template string; Attempt int                         // step-started

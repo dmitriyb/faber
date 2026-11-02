@@ -207,6 +207,25 @@ of 4`, `lane landing 1 of 1`), once per distinct reason, so the stream and
 a later live view can say "ready, waiting for lane landing" instead of
 nothing.
 
+## Boundary stop: the loop expectation
+
+A loop that declares `expect:` has a host-side oracle for how many
+iterations it will need — the operator's tracker, asked through an opaque
+command, the same way a generate's data source is asked for items. The
+scheduler runs it at the loop's entry, before the first iteration's first
+node dispatches, and at every iteration boundary. It sits after the node's
+own condition, so a converged loop's unused iterations never run it. The
+command prints `{"count": N}`; `N > max` pauses the run through the same
+cooperative drain an operator's pause uses — nothing further dispatches,
+in-flight steps settle and journal, the run ends `paused` (exit 4) — with
+the detail `<loop>: expected N, cap M; raise the cap and resume`. The
+operator raises `max` and resumes; the failure module's cap-tolerant resume
+accepts the raised cap and re-enters exactly at the undispatched node. A
+failing or malformed command fails the triggering node with the
+source-contract reason, cascading like any failure. Within the cap the count
+is silent on the run and loud on the stream (`loop-expected`), so a renderer
+can count iterations against the expectation instead of the cap.
+
 ## Deferred seam
 
 Resource-aware sizing of the dispatch window — a scheduler that weighs host
@@ -217,4 +236,4 @@ the declared bounds above.
 
 Requirements implemented: Topological parallel execution, Failure propagation
 and skip semantics, Reference workflow execution, Progress event stream,
-Concurrency bounds, Deferred: concurrency control.
+Concurrency bounds, Boundary stop, Deferred: concurrency control.

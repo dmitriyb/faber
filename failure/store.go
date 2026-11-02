@@ -158,15 +158,16 @@ func (s *Store) LoadHeader(runID string) (config.JournalHeader, error) {
 		return config.JournalHeader{}, fmt.Errorf("failure: run %s: first journal record is %q, want %q", runID, hdr.Kind, KindHeader)
 	}
 	return config.JournalHeader{
-		RunID:      hdr.RunID,
-		Name:       hdr.Name,
-		Sessions:   hdr.Sessions,
-		ConfigPath: hdr.ConfigPath,
-		Workflow:   hdr.Workflow,
-		Params:     hdr.Params,
-		IRHash:     hdr.IRHash,
-		Format:     hdr.Format,
-		IRVersion:  hdr.IRVersion,
+		RunID:         hdr.RunID,
+		Name:          hdr.Name,
+		Sessions:      hdr.Sessions,
+		ConfigPath:    hdr.ConfigPath,
+		Workflow:      hdr.Workflow,
+		Params:        hdr.Params,
+		IRHash:        hdr.IRHash,
+		IRHashCapFree: hdr.IRHashCapFree,
+		Format:        hdr.Format,
+		IRVersion:     hdr.IRVersion,
 	}, nil
 }
 

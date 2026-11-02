@@ -62,6 +62,32 @@ func (e *contractError) Error() string {
 
 func (e *contractError) Unwrap() error { return e.err }
 
+// expectCount runs a loop's expect command and reads {"count": N}. Failures
+// are contract errors naming the loop, exactly like a generate source.
+func (x *expander) expectCount(ctx context.Context, spec config.LoopSpec, env *scopeEnv) (int, error) {
+	if x.runner == nil {
+		return 0, &contractError{node: spec.ID, msg: "no data-source command runner is wired"}
+	}
+	args, err := resolveArgs(spec.Args, env)
+	if err != nil {
+		return 0, &contractError{node: spec.ID, msg: "resolve expect args", err: err}
+	}
+	out, err := x.runner.Run(ctx, infra.CmdSpec{Path: spec.Command, Args: args})
+	if err != nil {
+		return 0, &contractError{node: spec.ID, msg: "expect command failed", err: err}
+	}
+	var doc struct {
+		Count *int `json:"count"`
+	}
+	if err := json.Unmarshal(out.Stdout, &doc); err != nil {
+		return 0, &contractError{node: spec.ID, msg: "malformed expect output (want {\"count\": N})", err: err}
+	}
+	if doc.Count == nil || *doc.Count < 0 {
+		return 0, &contractError{node: spec.ID, msg: "malformed expect output: count must be a non-negative integer"}
+	}
+	return *doc.Count, nil
+}
+
 // expand runs the generate node's data-source command and instantiates the
 // target workflow per item, in stable input order. An empty item set returns
 // zero instances (the node settles ok as a no-op); every contract violation

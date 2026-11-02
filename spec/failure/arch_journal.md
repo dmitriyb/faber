@@ -42,8 +42,10 @@ format-tolerant; only interpretive replay refuses.
 
 1. **Header** — first line, written at run start: `{format, run id, optional
    operator-given run name, config hash, workflow name, supplied params, IR
-   hash, IR version, resolved per-template image tags, optional sessions
-   flag}`. The name
+   hash, optional cap-free IR hash, IR version, resolved per-template image
+   tags, optional sessions flag}`. The cap-free hash (`ir_hash_capfree`,
+   additive within format 1) is the IR hashed with every loop cap forced to
+   1 — the key under which a raised cap still resumes (see RecoveryModes). The name
    (`faber run --name <name>`) is identification for humans — commands that
    take a run reference resolve it by enumerating headers; it carries no
    uniqueness guarantee and never keys anything. The sessions flag
@@ -155,5 +157,5 @@ path, named by run id), no cross-run index, and no cross-run locking — the
 each other. Concurrent runs over the same items are the operator's
 responsibility until this seam is designed.
 
-Requirements implemented: Run journal; Durable step start; Deferred: journal
-store concurrency.
+Requirements implemented: Run journal; Durable step start; Compatible cap
+drift (the header key); Deferred: journal store concurrency.

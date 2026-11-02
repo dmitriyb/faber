@@ -89,8 +89,11 @@ type JournalHeader struct {
 	Workflow   string
 	Params     map[string]string
 	IRHash     string
-	Format     int // journal schema stamp (0 = pre-versioning journal)
-	IRVersion  int // IR schema the journaled hash was computed under
+	// IRHashCapFree is the cap-tolerant resume key (HashIRCapFree); "" in
+	// journals written before it existed, which then keep the full-hash rule.
+	IRHashCapFree string
+	Format        int // journal schema stamp (0 = pre-versioning journal)
+	IRVersion     int // IR schema the journaled hash was computed under
 }
 
 // JournalStore opens journaled runs (failure module). SupportedFormat is the

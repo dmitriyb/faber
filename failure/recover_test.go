@@ -449,3 +449,75 @@ func TestResumeSeedsJournaledCosts(t *testing.T) {
 		t.Fatalf("fresh seeds carry no prior costs, got %+v", fresh.Costs)
 	}
 }
+
+// loopIR is a two-node chain where b is iteration-shaped under loop "task/l"
+// with the given cap, for the cap-tolerant resume rule.
+func loopIR(cap int) *config.IR {
+	ir := &config.IR{IRVersion: 1, Workflow: "main", Nodes: []config.Node{
+		{ID: "task/a", Kind: config.KindAgent, Bindings: map[string]config.BindingDesc{}},
+	}}
+	for i := 1; i <= cap; i++ {
+		ir.Nodes = append(ir.Nodes, config.Node{ID: "task/l@" + string(rune('0'+i)) + "/b", Kind: config.KindAgent, Bindings: map[string]config.BindingDesc{}})
+	}
+	return ir
+}
+
+// Verifies e684026b4b27: with matching cap-free keys a raised cap resumes
+// although the full hash differs; a cap lowered below an executed iteration
+// is refused naming the loop; a journal without the key keeps the strict
+// rule; a differing cap-free key is still drift.
+func TestResumeCapTolerant(t *testing.T) {
+	params := map[string]string{"target": "v"}
+	executed := func(id string) ResultRecord {
+		return ResultRecord{StepID: id, InputHash: "h-" + id, Result: okResult(`{"field":"x"}`)}
+	}
+	begin := func(t *testing.T, capFree string) *Store {
+		t.Helper()
+		store := NewStore(t.TempDir(), nil)
+		j, err := store.Begin(Header{RunID: "run-c", ConfigPath: "orchestrator.yaml", Workflow: "main", Params: params,
+			IRHash: mustHashIR(t, loopIR(2)), IRHashCapFree: capFree})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rec := range []ResultRecord{executed("task/a"), executed("task/l@1/b"), executed("task/l@2/b")} {
+			if err := j.AppendResult(rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+		j.Close()
+		return store
+	}
+
+	t.Run("raised cap resumes on the cap-free key", func(t *testing.T) {
+		store := begin(t, "capfree-1")
+		seed, err := store.ResumeWith(loopIR(4), "capfree-1", "run-c", params)
+		if err != nil {
+			t.Fatalf("raised cap must resume: %v", err)
+		}
+		if _, ok := seed.Prior[Key{"task/l@2/b", "h-task/l@2/b"}]; !ok {
+			t.Error("the landed iteration must stay a journal hit")
+		}
+		seed.Journal.Close()
+	})
+	t.Run("lowered cap below executed work is refused", func(t *testing.T) {
+		store := begin(t, "capfree-1")
+		_, err := store.ResumeWith(loopIR(1), "capfree-1", "run-c", params)
+		if err == nil || !strings.Contains(err.Error(), "task/l") || !strings.Contains(err.Error(), "iteration 2") {
+			t.Fatalf("want a cap-floor refusal naming the loop and iteration, got %v", err)
+		}
+	})
+	t.Run("different cap-free key is drift", func(t *testing.T) {
+		store := begin(t, "capfree-1")
+		_, err := store.ResumeWith(loopIR(4), "capfree-other", "run-c", params)
+		if err == nil || !strings.Contains(err.Error(), "IR hash mismatch") {
+			t.Fatalf("want drift refusal, got %v", err)
+		}
+	})
+	t.Run("journal without the key keeps the strict rule", func(t *testing.T) {
+		store := begin(t, "")
+		_, err := store.ResumeWith(loopIR(4), "capfree-1", "run-c", params)
+		if err == nil || !strings.Contains(err.Error(), "IR hash mismatch") {
+			t.Fatalf("want drift refusal for an old journal, got %v", err)
+		}
+	})
+}

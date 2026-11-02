@@ -2,6 +2,7 @@ package failure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -36,6 +37,16 @@ type RunSeed struct {
 // trusted, so Resume refuses and points at fresh (--fresh). On a match it
 // returns a seed whose Prior map the scheduler consults at readiness time.
 func (s *Store) Resume(ir *config.IR, runID string, supplied map[string]string) (*RunSeed, error) {
+	return s.ResumeWith(ir, "", runID, supplied)
+}
+
+// ResumeWith is Resume with the current config's cap-free key: when the
+// journal carries one too, a differing full hash is tolerated if the
+// cap-free keys match and no loop's cap fell below an iteration the journal
+// shows executed (a selector would otherwise adopt an earlier iteration as
+// the loop's value). Raising a cap is thus a config edit plus resume; the
+// landed iterations are hits, the exhausted tail re-dispatches.
+func (s *Store) ResumeWith(ir *config.IR, capFreeHash, runID string, supplied map[string]string) (*RunSeed, error) {
 	lock, err := AcquireRunLock(s.RunDir(runID))
 	if err != nil {
 		return nil, err
@@ -67,9 +78,15 @@ func (s *Store) Resume(ir *config.IR, runID string, supplied map[string]string) 
 			runID, rp.Header.IRVersion, ir.IRVersion))
 	}
 	if hash != rp.Header.IRHash {
-		return fail(fmt.Errorf(
-			"failure: resume %s: config drift: IR hash mismatch (journal %s, current %s) — journal keys cannot be trusted; use --fresh to start over",
-			runID, rp.Header.IRHash, hash))
+		capTolerated := capFreeHash != "" && rp.Header.IRHashCapFree != "" && capFreeHash == rp.Header.IRHashCapFree
+		if !capTolerated {
+			return fail(fmt.Errorf(
+				"failure: resume %s: config drift: IR hash mismatch (journal %s, current %s) — journal keys cannot be trusted; use --fresh to start over",
+				runID, rp.Header.IRHash, hash))
+		}
+		if err := capFloor(ir, rp); err != nil {
+			return fail(fmt.Errorf("failure: resume %s: %w", runID, err))
+		}
 	}
 	if !maps.Equal(nonNil(supplied), nonNil(rp.Header.Params)) {
 		return fail(fmt.Errorf(
@@ -81,6 +98,28 @@ func (s *Store) Resume(ir *config.IR, runID string, supplied map[string]string) 
 		return fail(err)
 	}
 	return &RunSeed{Header: rp.Header, Prior: rp.Results, Costs: rp.Costs, Journal: j}, nil
+}
+
+// capFloor refuses a loop cap below the highest iteration the journal shows
+// executed for that loop: iteration ids are stable, so a raised cap keeps
+// every landed iteration a hit, but a lowered one would leave executed
+// records outside the graph and let the selector adopt an older iteration.
+func capFloor(ir *config.IR, rp *Replay) error {
+	bounds := config.LoopBounds(ir)
+	executed := map[string]int{}
+	for key, rec := range rp.Results {
+		if key.InputHash == "" || rec.Result.Status != StatusOK && rec.Result.Status != StatusFailed && rec.Result.Status != StatusHalted {
+			continue
+		}
+		config.NoteLoopBounds(executed, key.StepID)
+	}
+	var errs []error
+	for loop, n := range executed {
+		if cap, ok := bounds[loop]; ok && n > cap {
+			errs = append(errs, fmt.Errorf("loop %s: cap %d is below iteration %d, which the journal shows executed; a cap may be raised on resume, never lowered below done work", loop, cap, n))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Fresh starts a brand-new run that ignores any prior journal (--fresh):

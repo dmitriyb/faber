@@ -216,9 +216,10 @@ type StepDef struct {
 }
 
 type LoopDef struct {
-    Max   int       `yaml:"max"`
-    Until string    `yaml:"until"`
-    Steps []StepDef `yaml:"steps"`
+    Max    int       `yaml:"max"`
+    Until  string    `yaml:"until"`
+    Steps  []StepDef `yaml:"steps"`
+    Expect string    `yaml:"expect"` // sources.<name> printing {"count": N}; the Loader refuses an undeclared source
 }
 
 type GenerateDef struct {

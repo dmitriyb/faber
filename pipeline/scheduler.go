@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/dmitriyb/faber/config"
@@ -56,10 +57,21 @@ type evExpanded struct {
 
 type evWake struct{ id string }
 
+// evExpected is the result of a loop's expect command, run for the node
+// whose dispatch entered a new iteration.
+type evExpected struct {
+	id    string // the node whose dispatch triggered the check
+	loop  string
+	iter  int
+	count int
+	err   error
+}
+
 func (evSettled) isEvent()  {}
 func (evDeferred) isEvent() {}
 func (evExpanded) isEvent() {}
 func (evWake) isEvent()     {}
+func (evExpected) isEvent() {}
 
 // admissionMeter is the slice of the metering admitter the scheduler calls.
 // *metering.Admitter satisfies it; tests fake it to force adverse
@@ -92,6 +104,14 @@ type scheduler struct {
 	// in the same id order as the global slot, and released with it.
 	genPools map[string]*pool
 	lanes    map[string]*pool
+	// loops holds every loop expectation by prefix id; checked records the
+	// highest iteration each loop's command ran for; expected the last
+	// count it reported. pauseDetail is the cap stop's message when the
+	// scheduler, not the operator's marker, paused the run.
+	loops       map[string]config.LoopSpec
+	checked     map[string]int
+	expected    map[string]int
+	pauseDetail string
 
 	events      chan event
 	done        chan struct{}
@@ -398,6 +418,13 @@ func (s *scheduler) dispatch(ctx context.Context, n *execNode) {
 			return
 		}
 	}
+	// The expect gate sits after the condition: an iteration the loop no
+	// longer needs is skipped without running the command, so a converged
+	// loop costs no extra calls.
+	if loop, iter, ok := s.unexpectedIteration(id); ok {
+		s.startExpect(ctx, n, loop, iter)
+		return
+	}
 	switch n.n.Kind {
 	case config.KindSelector:
 		s.resolveSelector(n)
@@ -562,6 +589,41 @@ func (s *scheduler) resolveSelector(n *execNode) {
 	// Every candidate was skipped: the loop body never executed, so the
 	// selector has no value and skip propagates to whatever reads it.
 	s.settleSkip(n, StateSkippedCondition, "")
+}
+
+// unexpectedIteration finds the outermost loop with an expect command whose
+// iteration this node enters for the first time — the boundary the command
+// must run at before the node dispatches.
+func (s *scheduler) unexpectedIteration(id string) (loop string, iter int, ok bool) {
+	if len(s.loops) == 0 {
+		return "", 0, false
+	}
+	segs := strings.Split(id, "/")
+	for k, seg := range segs {
+		name, i, isIter := config.IterationOf(seg)
+		if !isIter {
+			continue
+		}
+		loop = strings.Join(append(append([]string{}, segs[:k]...), name), "/")
+		if _, declared := s.loops[loop]; declared && i > s.checked[loop] {
+			return loop, i, true
+		}
+	}
+	return "", 0, false
+}
+
+// startExpect runs the loop's expect command in a worker (host-side, no
+// slot) and folds the count on the loop goroutine; the node stays queued
+// (nsRunning here only means "a worker is out for it") until the verdict.
+func (s *scheduler) startExpect(ctx context.Context, n *execNode, loop string, iter int) {
+	n.life = nsRunning
+	s.outstanding++
+	spec := s.loops[loop]
+	env := n.env
+	go func() {
+		count, err := s.expand.expectCount(ctx, spec, env)
+		s.send(evExpected{id: n.n.ID, loop: loop, iter: iter, count: count, err: err})
+	}()
 }
 
 // startExpansion runs the generate node's data source in a worker (host-side
@@ -902,7 +964,48 @@ func (s *scheduler) step(ev event) {
 	case evExpanded:
 		s.outstanding--
 		s.applyExpansion(ev)
+	case evExpected:
+		s.outstanding--
+		s.applyExpected(ev)
 	}
+}
+
+// applyExpected folds a loop's expected count: a command failure fails the
+// triggering node with the source-contract reason (dependents cascade like
+// any failure); a count over the cap pauses the run at this boundary with
+// the message resume needs; otherwise the node goes back to the ready queue
+// and the boundary is recorded so the command does not run again for it.
+func (s *scheduler) applyExpected(ev evExpected) {
+	n := s.g.nodes[ev.id]
+	if n == nil || n.terminal() {
+		return
+	}
+	if ev.iter > s.checked[ev.loop] {
+		s.checked[ev.loop] = ev.iter
+	}
+	if ev.err != nil {
+		s.log.Warn("loop expect command failed", "loop", ev.loop, "err", ev.err)
+		res := sourceContractResult(ev.err)
+		now := s.clock.Now()
+		res.Timing = failure.Timing{Started: now, Finished: now}
+		s.settleResult(n, res, false, nil)
+		return
+	}
+	spec := s.loops[ev.loop]
+	s.expected[ev.loop] = ev.count
+	s.emit(Event{Kind: EventLoopExpected, Step: ev.loop, Expected: ev.count, Cap: spec.Max})
+	n.life = nsPending
+	if ev.count > spec.Max {
+		if !s.paused {
+			s.paused = true
+			s.pauseDetail = fmt.Sprintf("%s: expected %d, cap %d; raise the cap and resume", ev.loop, ev.count, spec.Max)
+			s.log.Debug("loop expectation exceeds the cap; pausing", "loop", ev.loop, "expected", ev.count, "cap", spec.Max)
+			s.emit(Event{Kind: EventPauseRequested, Detail: s.pauseDetail})
+		}
+		// The node stays undispatched: a resumed run re-enters exactly here.
+		return
+	}
+	s.push(n.n.ID)
 }
 
 // applyExpansion splices the generate node's instances into the running DAG
@@ -946,6 +1049,12 @@ func (s *scheduler) applyExpansion(ev evExpanded) {
 	}
 	if n.n.Gen != nil && n.n.Gen.MaxParallel > 0 {
 		s.genPools[ev.id] = &pool{max: n.n.Gen.MaxParallel}
+	}
+	// An instance's loops carry their expectations under the instance scope.
+	for _, inst := range ev.insts {
+		for id, l := range loopSpecs(inst.ir, ev.id+"["+inst.itemID+"]/") {
+			s.loops[id] = l
+		}
 	}
 	// Inter-instance ordering: every sink of the dep's instance orders every
 	// source of this instance. Deps outside the set were dropped upstream.

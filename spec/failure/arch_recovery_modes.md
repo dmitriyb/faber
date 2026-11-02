@@ -25,7 +25,19 @@ with `--fresh` as the escape:
 3. **IR hash and params** — the config is re-loaded and re-desugared, and the
    resulting IR hash and supplied params must match the header — the config
    pipeline is deterministic, so a mismatch means the graph changed and
-   journal keys cannot be trusted; resume refuses and points at fresh.
+   journal keys cannot be trusted; resume refuses and points at fresh. One
+   drift is compatible by design: a **raised loop cap**. The cap is baked
+   into the node count, so the full hash moves, but the header also carries
+   the cap-free key (the IR hashed with every cap forced to 1); when the
+   current config's cap-free key matches it, the full-hash mismatch is
+   tolerated, provided no loop's new cap is below the highest iteration the
+   journal shows executed for it (a selector would otherwise adopt an
+   earlier iteration as the loop's value). Iteration ids are stable, so the
+   landed iterations are hits; a loop that exhausted left every dependent as
+   a hashless skip, so the tail re-dispatches once the extended loop
+   settles. This is what makes the scheduler's boundary stop ("expected N,
+   cap M; raise the cap and resume") a round trip of one config edit.
+   Journals written before the key keep the strict rule.
 4. **Image inputs** — every reachable template's image tag is re-derived and
    compared against the header's recorded tags; a difference (a bumped
    default pin, image-schema change, or overlay edit — inputs the IR hash

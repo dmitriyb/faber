@@ -143,6 +143,13 @@ code; these are the module-level behaviors that must hold.)
     as substrate; a config without the fields emits an IR carrying none of
     the three keys.
 
+14. **Loop expectation and the cap-free key.** `expect: todo` against a
+    declared source reaches the IR's loop table (`flow/cycle`, max, the
+    command and its two args); `expect: ghost` is a loader violation naming
+    the path; `HashIRCapFree` is equal for max 3 and max 5 while `HashIR`
+    differs, and changes when a body step is renamed; an IR without
+    expectations carries no `loops` key.
+
 ## Edge cases
 
 - Empty `steps:` — Loader error, not a desugar panic.

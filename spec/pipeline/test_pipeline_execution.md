@@ -174,6 +174,22 @@ docker anywhere in this section.
     own; the text sink renders a waiting event as `ready  <crumb>  waiting
     for <reason>`.
 
+28. **Boundary stop at entry.** The task loop with `expect` returning
+    `{"count": 5}` under cap 3: implement (before the loop) runs, no
+    iteration node is dispatched or journaled, the run returns `RunPaused`
+    with `task/review-cycle: expected 5, cap 3; raise the cap and resume`,
+    the run-end record is `paused` with that detail, and the stream carries
+    `loop-expected` and `pause-requested`.
+29. **Within the cap.** `{"count": 2}`: the loop converges as usual; the
+    command ran exactly twice (entry and one boundary — never for the unused
+    cap), its args resolved from the scope's params, and two `loop-expected`
+    events carry count 2 and cap 3.
+30. **Expect failure.** A failing command or `{"items": []}` fails the
+    iteration's triggering review node with `source-contract` and merge
+    settles skipped-dependency.
+31. **Expectation on the stream.** After `loop-expected 12 of up to 45` the
+    text sink renders iteration crumbs as `cycles 3/12 (cap 45)`.
+
 ## Edge cases
 
 - Empty item set: generate node settles ok, zero instances, dependents

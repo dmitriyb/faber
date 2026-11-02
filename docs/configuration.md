@@ -67,7 +67,7 @@ workflows:
         use: implement
         with: {repo: "${params.repo}", item: "${params.item}"}
       - id: review-cycle
-        loop: {max: 3, until: "steps.review.verdict == \"approved\"", steps: [ ... ]}
+        loop: {max: 3, until: "steps.review.verdict == \"approved\"", steps: [ ... ], expect: todo}  # expect: a sources.<name> printing {"count": N}; N > max pauses the run before work is wasted
       - id: fan-out
         generate: {source: items, workflow: per-item, with: {item: "${source.item}"}, max_parallel: 4}  # max_parallel: at most 4 instances at once
       - id: merge
@@ -109,5 +109,7 @@ An output field a step declares is exactly what `steps.<id>.<field>` downstream 
 
 `sources.<name>` names an opaque executable (`command` + `args`, argv only — never a shell) that emits items at run time; a `generate` step fans a named workflow out over those items, deriving one instance per item and inter-instance edges from each item's own `deps` field.
 See `spec/pipeline/arch_generate_expander.md` for the expansion algorithm and node-count bound.
+
+A loop may name an `expect:` source — an opaque command of the workflow's `sources:` that prints `{"count": N}`, the iterations the loop is expected to need (how your tasks map to iterations is the command's business). faber runs it when the loop is entered and at every iteration boundary; if `N` exceeds `max`, the run pauses (exit 4) with `<loop>: expected N, cap M; raise the cap and resume`. Raise `max` in the config and `faber resume`: a raised cap is the one config change resume accepts without `--fresh` (the journal header carries a cap-free IR key), the landed iterations stay journal hits, and the run re-enters where it stopped. Lowering a cap below executed iterations is refused.
 
 Three bounds gate a box launch, granted together in id order: the run-wide `--max-parallel`, a generate's own `max_parallel` (its instances only), and the lane a template names. `lanes:` is a root-only substrate section of `name: max` pairs; `lanes: {landing: 1}` with `lane: landing` on the merge template makes landings strictly sequential while everything else fans out. A node held by a full pool or lane shows up on the progress stream as `ready  <step>  waiting for lane landing 1 of 1`.

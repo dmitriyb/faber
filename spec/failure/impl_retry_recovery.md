@@ -79,6 +79,10 @@ func Resume(ctx context.Context, runDir string, cfg *config.Config) (*RunSeed, e
     hdr, done, costs, err := Load(filepath.Join(runDir, "journal.jsonl"))
     // re-derive: deterministic pipeline => byte-stable IR
     ir := desugarAndCheck(cfg, hdr.Workflow)
+    // ResumeWith(ir, capFreeHash, runID, supplied): a full-hash mismatch is tolerated when
+    // capFreeHash == hdr.IRHashCapFree (both non-empty) and capFloor(ir, replay) finds no
+    // loop whose cap is below an executed iteration (config.LoopBounds vs the journal's
+    // executed ids via config.NoteLoopBounds); Resume(ir, …) is ResumeWith with "".
     if hashOf(ir) != hdr.IRHash || !maps.Equal(normParams(cfg), hdr.Params) {
         return nil, fmt.Errorf("run %s: config drift (IR/params changed); resume unsafe, use --fresh", hdr.RunID)
     }
