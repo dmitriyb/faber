@@ -14,7 +14,8 @@
 | `faber list-keys` | Print the global role→fingerprint registry |
 | `faber version` / `--version` / `-v` | Print version, commit, and build date |
 
-Common flags: `--config` (default `orchestrator.yaml`), `--log-level` (`debug`/`info`/`warn`/`error`), `--log-format` (`auto`/`json`/`text`; JSON when not a TTY).
+Common flags: `--config` (default `orchestrator.yaml`), `--log-level` (`debug`/`info`/`warn`/`error`; default `warn` on a terminal, `info` otherwise), `--log-format` (`auto`/`json`/`text`; JSON when not a TTY).
+While a run executes, stderr carries the progress stream — one ASCII line per event: `HH:MM:SS  start|ok|FAIL|HALT|skip|WAIT|expand|end  <step>  …` — separate from the diagnostic log. Each box attempt's combined container output is kept at `<run>/boxes/<step>/attempt-<n>/output.log`, and the journal records every attempt's start, so a step is visible from the moment it launches.
 `runs`/`upgrade`/`add-key`/`list-keys`/`version` touch no `orchestrator.yaml` and take no `--config` (the run store lives under `host.json`'s `state_dir`).
 Exit codes: 0 ok, 1 validation/run failure, 2 usage, 3 halted (`run`/`resume`: no step failed but at least one settled halted — the run stopped for an operator and is resumable), 4 paused (`run`/`resume`: the run ended in a cooperative pause with nothing failed or halted; failure outranks halt outranks pause).
 Run references (`resume`, `runs pause`) accept a run id or a `--name`-given name; an id always wins over an equal name, and an ambiguous name errors naming the matching ids.
@@ -26,7 +27,7 @@ Faber reads **no configuration from its process environment**. Host-side
 inputs live in two explicit files under faber's config home
 (`$XDG_CONFIG_HOME/faber/` or `~/.config/faber/`), so what a run will use is
 auditable before it runs; the effective host config is also logged at run
-start.
+start (debug level).
 
 - `roles.json` — the role registry (`faber add-key` / `faber list-keys`):
   each role's key fingerprint plus its git committer identity

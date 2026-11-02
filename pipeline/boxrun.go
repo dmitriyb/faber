@@ -22,6 +22,10 @@ import (
 	"github.com/dmitriyb/faber/security"
 )
 
+// OutputLogName is the per-attempt file under the attempt directory that
+// receives the container's combined stdout+stderr as it streams.
+const OutputLogName = "output.log"
+
 // BoxAttempt is one attempt of one agent node at the executor's box-run seam.
 // Attempt numbering is continuous across defer re-queues.
 type BoxAttempt struct {
@@ -211,6 +215,16 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		return BoxResult{}, err
 	}
 	spec.Bindings = asm.Args
+	// The attempt's combined output streams into a durable file beside its
+	// result dir — the only record of hook and phase output that outlives the
+	// bounded in-memory tail. The attempt dir was scrubbed above, so the file
+	// is this attempt's alone.
+	outFile, err := os.OpenFile(filepath.Join(attemptDir, OutputLogName), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return BoxResult{}, fmt.Errorf("pipeline: box %s: open output log: %w", box.NodeID, err)
+	}
+	defer outFile.Close()
+	spec.Output = outFile
 	// The credentials pairing is atomic: a non-empty file-mode secrets payload
 	// is copied into RunSpec.StdinSecrets and the box's stdin signal is set in
 	// the same step, never one without the other (see spec/infra/impl_run_argv.md

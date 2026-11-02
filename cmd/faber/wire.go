@@ -84,7 +84,7 @@ func wireDeps(stdout, stderr io.Writer) (config.Deps, error) {
 		Journal:   store,
 		Audit:     store,
 		Runs:      store,
-		Executor:  &wiredExecutor{stdout: stdout, docker: docker, builder: builder, store: store, host: hc},
+		Executor:  &wiredExecutor{stdout: stdout, stderr: stderr, docker: docker, builder: builder, store: store, host: hc},
 		Registry:  registryController{},
 		BuildInfo: config.BuildInfo{Version: version, Commit: commit, Date: date},
 		Installer: config.EmbeddedInstaller{},
@@ -139,6 +139,7 @@ func (registryController) ListKeys(stdout, stderr io.Writer) error {
 // sections and generate targets for it.
 type wiredExecutor struct {
 	stdout  io.Writer
+	stderr  io.Writer
 	docker  infra.DockerClient
 	builder *infra.ImageBuilder
 	store   *failure.Store
@@ -146,7 +147,7 @@ type wiredExecutor struct {
 }
 
 func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params config.Params, opts config.RunOptions, logger *slog.Logger) error {
-	logger.Info("host config", "effective", w.host.Describe(config.HostConfigPath()))
+	logger.Debug("host config", "effective", w.host.Describe(config.HostConfigPath()))
 	cfg := opts.Config
 	if cfg == nil || opts.Targets == nil {
 		return fmt.Errorf("faber: internal: executor invoked without the CLI wiring context")
@@ -240,6 +241,9 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			Supplied:   opts.Supplied,
 		},
 		Out: w.stdout,
+		// The progress stream is the operator surface: one ASCII line per
+		// event on stderr, beside (not inside) the diagnostic log.
+		Events: pipeline.NewLineSink(w.stderr),
 	}
 	// The machine-readable report goes wherever --report-json points; "-"
 	// means stdout (after the human report, which also writes there). A file

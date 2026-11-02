@@ -84,7 +84,10 @@ Live observability is reserved: step log streaming and traces, a status view
 that tails the journal of an in-flight run, and inspection of a running
 workflow. The journal-only derivation is exactly what keeps that seam cheap —
 a live view is this same reporter over a journal that hasn't stopped growing.
-The first pass ships structured slog lines during execution plus this post-run
-report, and nothing else.
+The stream and the records such a view reads now exist — the scheduler's
+typed progress events (`arch_scheduler.md`, "Progress events"), the journal's
+`start` record, and the per-attempt `output.log` — so a live view is this
+reporter plus the replay's starts over a journal that hasn't stopped growing.
+The view itself is still the reserved part.
 
 Requirements implemented: Run reporting, Deferred: observability.

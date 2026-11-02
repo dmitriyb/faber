@@ -140,7 +140,9 @@ its orphaned attempt dir).
 ```go
 func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
     out := newTailBuffer(256 << 10) // bounded capture
-    sink := io.MultiWriter(out, slogWriter(r.logger, "step", spec.Name))
+    writers := []io.Writer{out, slogWriter(r.logger, "step", spec.Name)}
+    if spec.Output != nil { writers = append(writers, spec.Output) } // the attempt's durable output.log
+    sink := io.MultiWriter(writers...)
     var stdin io.Reader // nil unless a secrets payload rides stdin
     if len(spec.StdinSecrets) > 0 {
         stdin = bytes.NewReader(spec.StdinSecrets) // written then closed by the adapter

@@ -124,6 +124,24 @@ docker anywhere in this section.
     shell: `--shell` despite a saved session, a missing/empty saved dir, a
     profile without `resume_argv`.
 
+18. **Progress stream order.** The diamond under `--max-parallel 1` with a
+    recording sink yields exactly `started a, settled a, started b, settled b,
+    started c, settled c, started d, settled d, run-ended` (run id, settled,
+    0 failed); the settled event carries the record's span and the ok state;
+    the journal replays four `start` records, attempt 1 each, in dispatch
+    order.
+19. **Defer in the stream.** The rate-limit-then-ok script yields
+    `started, deferred (until = reset), started, settled, run-ended`, both
+    starts at attempt 1 (a defer consumes no attempt), two start records.
+20. **Failure and skip reasons in the stream.** A failed `a` settles with its
+    box reason; its dependent `b` settles `skipped-dependency` with `a` as the
+    reason field.
+21. **Line sink rendering.** One ASCII line per event kind in the fixed
+    column shape; a control byte in a box-authored reason renders as U+FFFD.
+22. **Output log per attempt.** The run-prep seam sets `RunSpec.Output`;
+    after `RunAttempt`, `<attempt>/output.log` holds exactly the bytes the
+    container streamed.
+
 ## Edge cases
 
 - Empty item set: generate node settles ok, zero instances, dependents

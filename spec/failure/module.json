@@ -32,6 +32,13 @@
       "description": "Every completed step's result is journaled under the key (step-id, input-hash), where input-hash covers the step's resolved inputs, template identity, and image tag. The journal is the run's durable state: append-only records sufficient to reconstruct scheduler state and reuse prior outputs. The header may carry an optional operator-given run name (identification, never a key) and an optional sessions flag (the per-run transcript-capture toggle resume inherits), the run-end marker's status vocabulary is settled|aborted|paused, and the run directory additionally holds the durable pause marker — the cooperative stop request the scheduler re-derives from the store at its scheduling points."
     },
     {
+      "id": "af1a4ddf11e0",
+      "preq_id": "0186891639d3",
+      "type": "functional",
+      "title": "Durable step start",
+      "description": "A box attempt's start is journaled the moment it launches as a start record (step id, attempt, started), additive within format 1: replay exposes starts in journal order so any reader derives 'running since' for a step whose last start has no later result. A start keys nothing and is never a resume hit; resume semantics are unchanged."
+    },
+    {
       "id": "87f006277d2c",
       "preq_id": "0186891639d3",
       "type": "functional",
@@ -73,9 +80,9 @@
     {
       "id": "ec44f9c7b403",
       "name": "Journal",
-      "description": "The append-only run journal: (step-id, input-hash) keying, input-hash computation, record encoding, lookup for resume decisions, per-step actual-cost records, the run-end marker (settled|aborted|paused), the optional operator-given run name and the optional per-run sessions flag in the header, the durable pause marker (write for a live run, scheduling-point probe, clear on resume), and same-run process exclusivity (the advisory run lock). Owns the on-disk journal schema version (format: 1) — bumped only when record shapes change; replay fails closed on any other stamp, no auto-migration. Owns the deferred store-location/cross-run-concurrency seam.",
+      "description": "The append-only run journal: (step-id, input-hash) keying, input-hash computation, record encoding, lookup for resume decisions, per-step actual-cost records, the run-end marker (settled|aborted|paused), the per-attempt start record (the timeline's other half), the optional operator-given run name and the optional per-run sessions flag in the header, the durable pause marker (write for a live run, scheduling-point probe, clear on resume), and same-run process exclusivity (the advisory run lock). Owns the on-disk journal schema version (format: 1) — bumped only when record shapes change; replay fails closed on any other stamp, no auto-migration. Owns the deferred store-location/cross-run-concurrency seam.",
       "content": "arch_journal.md",
-      "implements": ["bff0f92afc29", "fca4912f1bbe"],
+      "implements": ["bff0f92afc29", "af1a4ddf11e0", "fca4912f1bbe"],
       "uses": ["dcfa188fa679"]
     },
     {

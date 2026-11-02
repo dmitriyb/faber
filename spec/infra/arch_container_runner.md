@@ -74,9 +74,11 @@ Start, stream, wait, return. When the run carries a `StdinSecrets` payload,
 ContainerRunner opens the container's stdin (`-i`), writes the framed JSON
 once, and closes it — a clean EOF the box reads as end-of-payload; stdin is
 otherwise unattached. Combined stdout+stderr is captured into a bounded
-buffer (returned to the caller for the failure record) and simultaneously
-streamed to the step's debug logger — the box's own machine-readable output is
-the mounted `result.json`, never its stdout. The stdin payload is never
+buffer (returned to the caller for the failure record), simultaneously
+streamed to the step's debug logger, and — when the spec carries an `Output`
+writer — tee'd in full into it (the run-prep seam points it at the attempt's
+durable `output.log`); the box's own machine-readable output is the mounted
+`result.json`, never its stdout. The stdin payload is never
 logged: it is a credential. On context cancellation
 ContainerRunner kills the container by its deterministic name, waits a bounded
 grace period, and returns the context error; because every container runs

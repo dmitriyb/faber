@@ -307,7 +307,7 @@ type commonFlags struct {
 // addCommonFlags registers --config/--log-level/--log-format on cmd.
 func addCommonFlags(cmd *cobra.Command) {
 	cmd.Flags().String("config", "orchestrator.yaml", "path to orchestrator.yaml")
-	cmd.Flags().String("log-level", "info", "debug|info|warn|error")
+	cmd.Flags().String("log-level", "", "debug|info|warn|error (default: warn on a terminal, info otherwise)")
 	cmd.Flags().String("log-format", "auto", "auto|json|text")
 }
 
@@ -318,7 +318,7 @@ func addCommonFlags(cmd *cobra.Command) {
 // subcommands (a `faber add-key --log-level debug` is not rejected), not
 // because they take effect.
 func addLogFlags(cmd *cobra.Command) {
-	cmd.Flags().String("log-level", "info", "debug|info|warn|error")
+	cmd.Flags().String("log-level", "", "debug|info|warn|error (default: warn on a terminal, info otherwise)")
 	cmd.Flags().String("log-format", "auto", "auto|json|text")
 }
 

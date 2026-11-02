@@ -61,6 +61,10 @@ type Executor struct {
 	Out     io.Writer // human report; nil skips it
 	JSONOut io.Writer // machine report; nil skips it
 	Clock   Clock     // nil means the real clock
+	// Events receives the run's typed progress stream (step starts and
+	// settlements, defers, expansions, pause, run end). nil = no events. The
+	// pipeline never renders; the sink decides what an event looks like.
+	Events EventSink
 }
 
 var _ config.Executor = (*Executor)(nil)
@@ -117,12 +121,13 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 	// including setup failures between here and the scheduler — so a
 	// `--budget` typo does not mint a run that audits unfinished forever.
 	ended := false
-	endRun := func(rec failure.RunEndRecord) {
+	endRun := func(rec failure.RunEndRecord) failure.RunEndRecord {
 		ended = true
 		rec.Finished = clock.Now()
 		if err := seed.Journal.AppendRunEnd(rec); err != nil {
 			log.Warn("append run-end marker", "err", err)
 		}
+		return rec
 	}
 	defer func() {
 		if !ended {
@@ -171,6 +176,7 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 		rld:     rld,
 		boxes:   e.Boxes,
 		images:  e.Images,
+		sink:    e.Events,
 		expand:  &expander{runner: e.Source, irs: e.Workflows},
 		clock:   clock,
 		log:     log,
@@ -204,7 +210,8 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 		end.Status = failure.RunEndPaused
 		end.Detail = "pause requested; in-flight steps settled, nothing further dispatched"
 	}
-	endRun(end)
+	end = endRun(end)
+	s.emit(Event{Kind: EventRunEnded, Time: end.Finished, RunID: runID, RunStatus: end.Status, Failed: end.Failed, Halted: end.Halted, Detail: end.Detail})
 
 	// The report runs unconditionally — whatever reached the journal is
 	// reportable, even when the run aborted mid-flight.

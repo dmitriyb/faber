@@ -36,6 +36,7 @@ const (
 	KindCost    = "cost"
 	KindCleanup = "cleanup"
 	KindDefer   = "defer"
+	KindStart   = "start"
 	KindRunEnd  = "run-end"
 )
 
@@ -115,6 +116,18 @@ type DeferRecord struct {
 	StepID string    `json:"step_id"`
 	Until  time.Time `json:"until,omitempty"`
 	Detail string    `json:"detail,omitempty"`
+}
+
+// StartRecord journals the moment a box attempt launches — the timeline's
+// other half. A result record exists only once a step settles, so without
+// this a step twenty minutes into its box is invisible to every journal
+// reader; with it, "running since" is a start with no later result. It keys
+// nothing and is never a lookup hit: resume semantics are untouched.
+type StartRecord struct {
+	Kind    string    `json:"kind"`
+	StepID  string    `json:"step_id"`
+	Attempt int       `json:"attempt"`
+	Started time.Time `json:"started"`
 }
 
 // Run-end statuses.
@@ -276,6 +289,12 @@ func (j *Journal) AppendDefer(rec DeferRecord) error {
 	return j.append(rec)
 }
 
+// AppendStart appends one box-attempt start.
+func (j *Journal) AppendStart(rec StartRecord) error {
+	rec.Kind = KindStart
+	return j.append(rec)
+}
+
 // AppendRunEnd appends the run-end marker for this execution.
 func (j *Journal) AppendRunEnd(rec RunEndRecord) error {
 	rec.Kind = KindRunEnd
@@ -342,6 +361,10 @@ type Replay struct {
 	Costs      []CostRecord
 	Cleanups   []CleanupRecord
 	Defers     []DeferRecord
+	// Starts are every journaled attempt start in journal order. A step whose
+	// last start has no later result under the same id is running (or died
+	// mid-box) — the derivation every live reader makes.
+	Starts []StartRecord
 	// End is the last run-end marker, nil when the last execution of this
 	// run never finished (the pre-upgrade guard's signal).
 	End *RunEndRecord
@@ -451,6 +474,12 @@ func Load(path string, log *slog.Logger) (*Replay, error) {
 				return nil, fmt.Errorf("failure: journal %s: line %d: defer record: %w", path, i+1, err)
 			}
 			rp.Defers = append(rp.Defers, rec)
+		case KindStart:
+			var rec StartRecord
+			if err := json.Unmarshal(line, &rec); err != nil {
+				return nil, fmt.Errorf("failure: journal %s: line %d: start record: %w", path, i+1, err)
+			}
+			rp.Starts = append(rp.Starts, rec)
 		case KindRunEnd:
 			var rec RunEndRecord
 			if err := json.Unmarshal(line, &rec); err != nil {
