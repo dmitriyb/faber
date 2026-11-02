@@ -40,18 +40,9 @@ type LoopIteration struct {
 	Loops  []LoopRollup `json:"loops,omitempty"`
 }
 
-// parseIter recognizes the desugarer's iteration segment "<loop>@<i>".
-func parseIter(seg string) (loop string, i int, ok bool) {
-	at := strings.LastIndexByte(seg, '@')
-	if at <= 0 || at == len(seg)-1 {
-		return "", 0, false
-	}
-	n, err := strconv.Atoi(seg[at+1:])
-	if err != nil || n < 1 {
-		return "", 0, false
-	}
-	return seg[:at], n, true
-}
+// parseIter recognizes the desugarer's iteration segment "<loop>@<i>"
+// (config owns the grammar).
+func parseIter(seg string) (loop string, i int, ok bool) { return config.IterationOf(seg) }
 
 // loopOf locates the outermost iteration segment of id after scope: the
 // loop's prefix id, the iteration index, and whether one exists.
@@ -72,37 +63,10 @@ func loopOf(id, scope string) (loop string, iter int, ok bool) {
 // loopBounds reads every loop's cap off the IR: the highest iteration index
 // present under each loop prefix (the desugarer unrolls every iteration, so
 // the highest present is the cap). Sub-workflow graphs are walked too.
-func loopBounds(ir *config.IR) map[string]int {
-	out := map[string]int{}
-	var walk func(*config.IR)
-	walk = func(g *config.IR) {
-		if g == nil {
-			return
-		}
-		for i := range g.Nodes {
-			noteBounds(out, g.Nodes[i].ID)
-			if g.Nodes[i].Sub != nil {
-				walk(g.Nodes[i].Sub)
-			}
-		}
-	}
-	walk(ir)
-	return out
-}
+func loopBounds(ir *config.IR) map[string]int { return config.LoopBounds(ir) }
 
-// noteBounds folds one node id's iteration segments (every nesting level)
-// into the bounds map.
-func noteBounds(out map[string]int, id string) {
-	segs := strings.Split(id, "/")
-	for k, seg := range segs {
-		if name, i, ok := parseIter(seg); ok {
-			loop := strings.Join(append(append([]string{}, segs[:k]...), name), "/")
-			if i > out[loop] {
-				out[loop] = i
-			}
-		}
-	}
-}
+// noteBounds folds one node id's iteration segments into the bounds map.
+func noteBounds(out map[string]int, id string) { config.NoteLoopBounds(out, id) }
 
 // selectorLoops maps each selector node id to the loop it coalesces, read
 // off its candidates' iteration prefix.

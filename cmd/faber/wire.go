@@ -156,6 +156,10 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 	if err != nil {
 		return fmt.Errorf("faber: hash config for the journal header: %w", err)
 	}
+	capFree, err := config.HashIRCapFree(cfg, opts.Workflow)
+	if err != nil {
+		return fmt.Errorf("faber: cap-free IR hash for the journal header: %w", err)
+	}
 
 	var resolver security.Resolver
 	if cfg.Credentials.Resolver != "" {
@@ -236,9 +240,10 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			Identities:  cfg.Identities,
 		},
 		Meta: pipeline.RunMeta{
-			ConfigPath: opts.ConfigPath,
-			ConfigHash: configHash,
-			Supplied:   opts.Supplied,
+			ConfigPath:    opts.ConfigPath,
+			ConfigHash:    configHash,
+			Supplied:      opts.Supplied,
+			IRHashCapFree: capFree,
 		},
 		Out: w.stdout,
 	}

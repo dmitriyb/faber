@@ -33,6 +33,9 @@ type RunMeta struct {
 	ConfigPath string
 	ConfigHash string
 	Supplied   map[string]string
+	// IRHashCapFree is the cap-tolerant resume key the wiring computes
+	// (config.HashIRCapFree); written into fresh headers, compared on resume.
+	IRHashCapFree string
 }
 
 // ImageChecker is the slice of the docker adapter the run preflight needs:
@@ -168,6 +171,9 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 		maxPar:   opts.MaxParallel,
 		genPools: map[string]*pool{},
 		lanes:    lanePools(ir.Lanes),
+		loops:    loopSpecs(ir, ""),
+		checked:  map[string]int{},
+		expected: map[string]int{},
 		events:   make(chan event),
 		done:     make(chan struct{}),
 		seed:     seed,
@@ -212,6 +218,9 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 	case pausedEnd:
 		end.Status = failure.RunEndPaused
 		end.Detail = "pause requested; in-flight steps settled, nothing further dispatched"
+		if s.pauseDetail != "" {
+			end.Detail = s.pauseDetail
+		}
 	}
 	end = endRun(end)
 	s.emit(Event{Kind: EventRunEnded, Time: end.Finished, RunID: runID, RunStatus: end.Status, Failed: end.Failed, Halted: end.Halted, Detail: end.Detail})
@@ -237,9 +246,38 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 		return &RunHalted{RunID: runID, Steps: s.halts}
 	}
 	if pausedEnd {
-		return &RunPaused{RunID: runID}
+		return &RunPaused{RunID: runID, Detail: s.pauseDetail}
 	}
 	return nil
+}
+
+// loopSpecs collects every loop expectation of an IR and its sub-workflow
+// graphs, keyed by loop prefix id, with the ids rebased under prefix (""
+// for the entry IR; the instance scope for a generate target, whose own
+// workflow prefix is replaced).
+func loopSpecs(ir *config.IR, prefix string) map[string]config.LoopSpec {
+	out := map[string]config.LoopSpec{}
+	var walk func(*config.IR)
+	walk = func(g *config.IR) {
+		if g == nil {
+			return
+		}
+		for _, l := range g.Loops {
+			id := l.ID
+			if prefix != "" {
+				id = prefix + strings.TrimPrefix(id, g.Workflow+"/")
+			}
+			l.ID = id
+			out[id] = l
+		}
+		for i := range g.Nodes {
+			if g.Nodes[i].Sub != nil {
+				walk(g.Nodes[i].Sub)
+			}
+		}
+	}
+	walk(ir)
+	return out
 }
 
 // lanePools builds the lane pools from the IR's declared bounds.
@@ -282,11 +320,15 @@ func (e *RunHalted) ExitCode() int { return 3 }
 // own process exit code so a supervising script branches on the code, never
 // on report text; failure (1) and halt (3) outrank it.
 type RunPaused struct {
-	RunID string
+	RunID  string
+	Detail string // "" for an operator's pause request; the loop's message for a cap stop
 }
 
-// Error names the paused run and the way back in.
+// Error names the paused run, why, and the way back in.
 func (e *RunPaused) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("pipeline: run %s paused: %s; resume with `faber resume %s`", e.RunID, e.Detail, e.RunID)
+	}
 	return fmt.Sprintf("pipeline: run %s paused on request; resume with `faber resume %s`", e.RunID, e.RunID)
 }
 
@@ -303,7 +345,7 @@ func (e *Executor) openRun(ir *config.IR, opts config.RunOptions, clock Clock) (
 		if opts.RunID == "" {
 			return nil, errors.New("pipeline: resume requires a run id")
 		}
-		seed, err := e.Store.Resume(ir, opts.RunID, e.Meta.Supplied)
+		seed, err := e.Store.ResumeWith(ir, e.Meta.IRHashCapFree, opts.RunID, e.Meta.Supplied)
 		if err != nil {
 			return nil, err
 		}
@@ -326,17 +368,18 @@ func (e *Executor) openRun(ir *config.IR, opts config.RunOptions, clock Clock) (
 			return nil, err
 		}
 		return e.Store.Fresh(failure.Header{
-			RunID:      runID,
-			Name:       opts.Name,
-			Sessions:   opts.Sessions,
-			ConfigPath: e.Meta.ConfigPath,
-			ConfigHash: e.Meta.ConfigHash,
-			Workflow:   ir.Workflow,
-			Params:     e.Meta.Supplied,
-			IRHash:     irHash,
-			IRVersion:  ir.IRVersion,
-			Images:     images,
-			Started:    clock.Now(),
+			RunID:         runID,
+			Name:          opts.Name,
+			Sessions:      opts.Sessions,
+			ConfigPath:    e.Meta.ConfigPath,
+			ConfigHash:    e.Meta.ConfigHash,
+			Workflow:      ir.Workflow,
+			Params:        e.Meta.Supplied,
+			IRHash:        irHash,
+			IRHashCapFree: e.Meta.IRHashCapFree,
+			IRVersion:     ir.IRVersion,
+			Images:        images,
+			Started:       clock.Now(),
 		})
 	default:
 		return nil, fmt.Errorf("pipeline: unknown run mode %q", opts.Mode)

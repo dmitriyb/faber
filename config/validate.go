@@ -663,6 +663,11 @@ func (v *validator) checkSteps(path string, wf WorkflowDef, steps []StepDef, see
 			if len(s.With) > 0 {
 				v.addf(sp+".with", "loop steps take no with: bindings")
 			}
+			if s.Loop.Expect != "" {
+				if _, ok := wf.Sources[s.Loop.Expect]; !ok {
+					v.addf(sp+".loop.expect", "unknown source %q", s.Loop.Expect)
+				}
+			}
 			v.checkSteps(sp+".loop.steps", wf, s.Loop.Steps, seen, stepIDsAt(s.Loop.Steps, scopeIDs))
 		case s.Generate != nil:
 			g := s.Generate

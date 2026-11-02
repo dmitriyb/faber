@@ -414,7 +414,7 @@ WorkflowDef
 | Form | Fields | Desugars to |
 |------|--------|-------------|
 | use-step | `id`, `use` (template or workflow name), `with`, `when`, `depends_on`, `retry`, `on_failure` | one `agent` or `sub-workflow` IR node |
-| loop-step | `id`, `loop {max, until, steps}` | an unrolled conditional chain (see Desugarer) |
+| loop-step | `id`, `loop {max, until, steps, expect?}` | an unrolled conditional chain (see Desugarer); `expect` names a `sources.<name>` command printing `{"count": N}` — the lever that stops a run before an insufficient cap wastes work |
 | generate-step | `id`, `generate {source, workflow, with}` | one `generate` IR node |
 
 ## The params typing vocabulary

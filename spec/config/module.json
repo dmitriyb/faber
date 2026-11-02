@@ -17,6 +17,13 @@
       "description": "Concurrency bounds are data in orchestrator.yaml, never policy in a script: a root-only substrate section lanes: {name: max} declares named bounds; a template's lane: names one, taking a lane slot per box; a generate's max_parallel: bounds that fan-out's concurrently running instances. Validation refuses a lane that is not declared, a declared lane below 1, and a negative max_parallel. Desugaring carries the lane name on the resolved template, the bound on the generate spec, and the declared lanes on the IR root, all omitted when absent so the emitted IR stays byte-identical to before the fields existed. faber learns no domain word: a lane is a user-named bound."
     },
     {
+      "id": "6fc8922b8a41",
+      "preq_id": "4267f6b0c531",
+      "type": "functional",
+      "title": "Loop expectation",
+      "description": "A loop may declare expect: <source name>, an opaque command of the enclosing workflow's sources (the same {command, args} shape generate uses) that prints {\"count\": N}, the iterations the loop is expected to need; the mapping from the user's work to iterations is the command's business. Validation refuses an undeclared source. Desugaring records a loop table entry {id, max, command, args} on the IR root for every loop that declares one, omitted otherwise (byte-stable IR). HashIRCapFree is the cap-tolerant resume key: the workflow desugared with every loop's max forced to 1 and hashed, equal across caps and different across any other change; the journal header carries it and the resume command's early guard accepts a differing full hash when the cap-free keys match."
+    },
+    {
       "id": "255893ae16eb",
       "preq_id": "4267f6b0c531",
       "type": "functional",
@@ -75,7 +82,7 @@
       "name": "SchemaTypes",
       "description": "The Go struct tree mirroring orchestrator.yaml: Config (substrate + include + six library maps), the ImageDef/SkillDef/HookDef/InvokeProfileDef library entries (ImageDef and inline BuildDef optionally carrying a per-toolset nixpkgs PinDef; InvokeProfileDef using pointer/slice carriers so field-level absence layers while explicit emptiness stays meaningful), the dual-mode TemplateDef (named references or inline forms, plus the composable invoke: block), WorkflowDef, StepDef, ParamDef, SourceDef, binding references. Owns the params typing vocabulary, the closed set of slot-binding source forms, the named-vs-inline disambiguation rules, and the declarer-relative path convention.",
       "content": "arch_schema_types.md",
-      "implements": ["23a6be447cc8", "255893ae16eb", "8a79b4f5c699", "9bdc00533e50"]
+      "implements": ["23a6be447cc8", "255893ae16eb", "8a79b4f5c699", "9bdc00533e50", "6fc8922b8a41"]
     },
     {
       "id": "c21cc21b5668",
@@ -90,7 +97,7 @@
       "name": "Desugarer",
       "description": "The frontend-to-IR compiler: resolves each dual-mode template reference (image/hooks/identity/skills, named or inline) into the existing ResolvedTemplate shape, resolves a template's invoke: block into a fully concrete ResolvedInvoke (built-in default ⊕ named profile ⊕ inline overrides; absent ⇒ nil ⇒ byte-identical IR), unrolls bounded loops into conditional chains, resolves named sub-workflow references, expands compact with: bindings into explicit typed edges, and emits the deterministic JSON IR. The resolved IR shape is preserved; the sole delta is the skills leg widening from a single {dir, link} to the resolved (name->dir) delivery set.",
       "content": "arch_desugarer.md",
-      "implements": ["014aaac22619", "0ebbdd8f836b", "9bdc00533e50"],
+      "implements": ["014aaac22619", "0ebbdd8f836b", "9bdc00533e50", "6fc8922b8a41"],
       "uses": ["36547319009b", "0dd11f0c10bb"]
     },
     {

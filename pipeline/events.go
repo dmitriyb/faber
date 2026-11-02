@@ -13,6 +13,7 @@ const (
 	EventStepSettled      EventKind = "step-settled"
 	EventStepDeferred     EventKind = "step-deferred"
 	EventStepWaiting      EventKind = "step-waiting"
+	EventLoopExpected     EventKind = "loop-expected"
 	EventGenerateExpanded EventKind = "generate-expanded"
 	EventPauseRequested   EventKind = "pause-requested"
 	EventRunEnded         EventKind = "run-ended"
@@ -51,6 +52,10 @@ type Event struct {
 	RunStatus string `json:"run_status,omitempty"` // failure.RunEndSettled|Aborted|Paused
 	Failed    int    `json:"failed,omitempty"`
 	Halted    int    `json:"halted,omitempty"`
+
+	// loop-expected: the expect command's count against the loop's cap
+	Expected int `json:"expected,omitempty"`
+	Cap      int `json:"cap,omitempty"`
 
 	// Loops carries loop caps a renderer needs to say "8/45": every loop
 	// the IR unrolls, on run-started; the instance loops a generate splices

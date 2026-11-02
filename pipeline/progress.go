@@ -25,6 +25,7 @@ type TextSink struct {
 
 	workflow string
 	bounds   map[string]int  // loop prefix -> cap
+	expected map[string]int  // loop prefix -> the expect command's last count
 	started  map[string]bool // iteration prefixes ("<loop>@<i>/") with a started node
 	maxIter  map[string]int  // loop prefix -> highest iteration that started
 	settled  map[string]bool // loops whose convergence line was printed
@@ -42,7 +43,7 @@ type nrRange struct {
 func NewTextSink(w io.Writer, color bool) *TextSink {
 	return &TextSink{
 		w: w, color: color,
-		bounds: map[string]int{}, started: map[string]bool{}, maxIter: map[string]int{},
+		bounds: map[string]int{}, expected: map[string]int{}, started: map[string]bool{}, maxIter: map[string]int{},
 		settled: map[string]bool{}, pending: map[string]*nrRange{},
 	}
 }
@@ -65,6 +66,7 @@ const (
 	wordEnd    = "end"
 	wordPause  = "PAUSE"
 	wordReady  = "ready"
+	wordExpect = "expect"
 )
 
 // sgr is the status-word colour map: palette slots only, never 256-colour.
@@ -102,6 +104,9 @@ func (s *TextSink) lines(ev Event) []string {
 		return []string{s.line(ev, wordStart, s.crumb(ev.Step)+extra)}
 	case EventStepSettled:
 		return s.settledLines(ev)
+	case EventLoopExpected:
+		s.expected[ev.Step] = ev.Expected
+		return []string{s.line(ev, wordExpect, fmt.Sprintf("%s  %d of up to %d", s.crumb(ev.Step), ev.Expected, ev.Cap))}
 	case EventStepWaiting:
 		return []string{s.line(ev, wordReady, fmt.Sprintf("%s  waiting for %s", s.crumb(ev.Step), sanitizeTerm(ev.Detail)))}
 	case EventStepDeferred:
@@ -264,7 +269,9 @@ func (s *TextSink) crumb(id string) string {
 		seg := segs[k]
 		if name, i, ok := parseIter(seg); ok {
 			loop := strings.Join(append(append([]string{}, segs[:k]...), name), "/")
-			if cap := s.bounds[loop]; cap > 0 {
+			if exp := s.expected[loop]; exp > 0 {
+				parts = append(parts, fmt.Sprintf("%s %d/%d (cap %d)", name, i, exp, s.bounds[loop]))
+			} else if cap := s.bounds[loop]; cap > 0 {
 				parts = append(parts, fmt.Sprintf("%s %d/%d", name, i, cap))
 			} else {
 				parts = append(parts, fmt.Sprintf("%s %d", name, i))

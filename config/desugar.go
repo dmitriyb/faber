@@ -54,6 +54,7 @@ func (d *desugarer) addf(path, format string, args ...any) {
 type builder struct {
 	nodes []Node
 	edges []Edge
+	loops []LoopSpec      // loops declaring an expect command
 	made  map[string]bool // node ids appended, for selector dedupe
 }
 
@@ -151,7 +152,7 @@ func (d *desugarer) emitWorkflow(wfName, scope string) *IR {
 	b := &builder{made: map[string]bool{}}
 	lvl := newLevel(nil, scope, wf.Steps)
 	d.emitSteps(b, wf, wf.Steps, lvl, "workflows."+wfName+".steps", nil)
-	ir := &IR{IRVersion: IRVersion, Workflow: wfName, Nodes: b.nodes, Edges: b.edges}
+	ir := &IR{IRVersion: IRVersion, Workflow: wfName, Nodes: b.nodes, Edges: b.edges, Loops: b.loops}
 	if len(d.cfg.Lanes) > 0 {
 		ir.Lanes = make(map[string]int, len(d.cfg.Lanes))
 		for name, n := range d.cfg.Lanes {
@@ -305,6 +306,17 @@ func (d *desugarer) unrollLoop(b *builder, wf WorkflowDef, s StepDef, lvl *level
 		d.addf(sp+".loop", "unrolling loop %q would exceed the %d-node sanity ceiling (%d body nodes x max %d)",
 			s.ID, maxUnrolledNodes, countSteps(ld.def.Steps), ld.def.Max)
 		return
+	}
+
+	if ld.def.Expect != "" {
+		src, ok := wf.Sources[ld.def.Expect]
+		if !ok {
+			d.addf(sp+".loop.expect", "unknown source %q", ld.def.Expect)
+			return
+		}
+		b.loops = append(b.loops, LoopSpec{
+			ID: lvl.prefix + "/" + s.ID, Max: ld.def.Max, Command: src.Command, Args: append([]string(nil), src.Args...),
+		})
 	}
 
 	// The loop-step's own when: applies to every iteration's nodes.

@@ -5,7 +5,7 @@
 | `faber validate` | Load, desugar, wiring-check every workflow; prove package resolution; `--emit-ir` prints the canonical IR; `--workflow name` narrows |
 | `faber build` | Build template images via Nix `dockerTools.buildLayeredImage`; `--template` narrows |
 | `faber run <workflow>` | Execute with `--name n` (a human name for the run, stored in the journal header), `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--sessions` (capture each attempt's harness session transcripts under the run dir), `--report-json path\|-`, `--progress auto\|text\|json\|none`, `--color auto\|always\|never` |
-| `faber resume <run-id\|name>` | Re-enter a journaled run; `--fresh` ignores the journal, `--sessions` turns capture on for the remainder, `--interactive <step>` reopens the failed box inside its saved session (when one exists and the profile defines `resume_argv`) or a shell, `--shell` forces the shell |
+| `faber resume <run-id\|name>` | Re-enter a journaled run; `--fresh` ignores the journal, `--sessions` turns capture on for the remainder, `--interactive <step>` reopens the failed box inside its saved session (when one exists and the profile defines `resume_argv`) or a shell, `--shell` forces the shell. A raised loop `max` is accepted without `--fresh` (see Configuration, loop `expect`) |
 | `faber runs` | List journaled runs: id, name, workflow, state (`live`/`paused`/`settled`/`aborted`/`incomplete`), started; `--json` for the same rows machine-readably |
 | `faber runs pause <run-id\|name>` | Ask a live run to pause: in-flight steps finish and journal, nothing new dispatches, the run ends `paused` (exit 4) and resumes later with `faber resume` |
 | `faber runs prune` | Delete finished, non-live run directories; paused runs are kept (resumable state) unless `--all`, which also removes paused and incomplete non-live runs; live runs are never touched |
@@ -31,7 +31,7 @@ Lower-case words are routine, upper-case (`FAIL`, `HALT`, `WAIT`, `PAUSE`) need 
 
 The post-run report on stdout uses the same vocabulary and folds loops the same way: `ok  review-cycle  2 of up to 3  -> review@2` with the executed iterations nested, `not reached  merge  after review-cycle`, and a footer of `ran N ok, M failed; not run X not needed, Y not reached`. `--report-json` keeps every node with the scheduler's own state names, plus an additive `loops` rollup.
 `runs`/`upgrade`/`add-key`/`list-keys`/`version` touch no `orchestrator.yaml` and take no `--config` (the run store lives under `host.json`'s `state_dir`).
-Exit codes: 0 ok, 1 validation/run failure, 2 usage, 3 halted (`run`/`resume`: no step failed but at least one settled halted — the run stopped for an operator and is resumable), 4 paused (`run`/`resume`: the run ended in a cooperative pause with nothing failed or halted; failure outranks halt outranks pause).
+Exit codes: 0 ok, 1 validation/run failure, 2 usage, 3 halted (`run`/`resume`: no step failed but at least one settled halted — the run stopped for an operator and is resumable), 4 paused (`run`/`resume`: the run ended in a cooperative pause with nothing failed or halted — an operator's `runs pause`, or a loop whose `expect` count exceeded its cap, named in the message; failure outranks halt outranks pause).
 Run references (`resume`, `runs pause`) accept a run id or a `--name`-given name; an id always wins over an equal name, and an ambiguous name errors naming the matching ids.
 `--help`/`-h`/`help` print usage and exit 0 at every level: `faber --help`, `faber <command> --help`, `faber help <command>`.
 

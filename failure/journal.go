@@ -69,9 +69,14 @@ type Header struct {
 	Workflow   string            `json:"workflow"`
 	Params     map[string]string `json:"params"`
 	IRHash     string            `json:"ir_hash"`
-	IRVersion  int               `json:"ir_version,omitempty"`
-	Images     map[string]string `json:"images,omitempty"`
-	Started    time.Time         `json:"started"`
+	// IRHashCapFree is the cap-tolerant resume key: the IR hashed with every
+	// loop cap forced to 1 (config.HashIRCapFree). A raised cap keeps it;
+	// anything else that changes the graph breaks it. Additive within
+	// format 1; absent in older journals, which keep the strict rule.
+	IRHashCapFree string            `json:"ir_hash_capfree,omitempty"`
+	IRVersion     int               `json:"ir_version,omitempty"`
+	Images        map[string]string `json:"images,omitempty"`
+	Started       time.Time         `json:"started"`
 }
 
 // ResultRecord journals one settled step attempt sequence: the final Result

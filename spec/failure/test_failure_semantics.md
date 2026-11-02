@@ -110,6 +110,13 @@ StepRunner and a recording HookRunner unless a real container is stated;
     torn third is dropped, `Results` holds only a's record and `LastByStep`
     has no entry for b — a start keys nothing.
 
+21. **Cap-tolerant resume.** A journal whose header carries a cap-free key
+    and whose loop `task/l` executed iterations 1 and 2 under cap 2: resuming
+    with cap 4 and the same key succeeds and keeps iteration 2 a hit;
+    resuming with cap 1 is refused naming the loop and iteration 2; a
+    different cap-free key is drift; a journal without the key refuses the
+    raised cap under the strict rule.
+
 ## Edge cases
 
 - Agent succeeded but wrote no `result.json`: the engine's fallback record is

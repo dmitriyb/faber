@@ -337,6 +337,21 @@ func TestCLIResumeGuard(t *testing.T) {
 		}
 	})
 
+	t.Run("cap-free key tolerates a raised cap", func(t *testing.T) {
+		capFree, err := HashIRCapFree(loadRef(t), "task")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := header
+		h.IRHash = "0000000000000000" // the full hash moved (a raised cap)…
+		h.IRHashCapFree = capFree     // …but the cap-free key did not
+		exec := &fakeExecutor{}
+		code, _, stderr := runCLI(t, Deps{Journal: fakeJournal{h}, Executor: exec}, "resume", "r-1")
+		if code != 0 || !exec.called || exec.opts.Mode != "resume" {
+			t.Fatalf("a matching cap-free key must resume, got %d (%+v): %s", code, exec.opts, stderr)
+		}
+	})
+
 	t.Run("matching hash resumes", func(t *testing.T) {
 		h := header
 		h.IRHash = goodHash

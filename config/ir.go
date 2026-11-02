@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -40,6 +41,70 @@ type IR struct {
 	// so the executor needs no Config; absent when none are declared, which
 	// keeps the emitted IR byte-identical to before the field existed.
 	Lanes map[string]int `json:"lanes,omitempty"`
+	// Loops lists every loop of this graph that declares an expect command:
+	// its prefix id, its cap, and the opaque command. Absent when none does.
+	Loops []LoopSpec `json:"loops,omitempty"`
+}
+
+// LoopSpec is one loop's expectation: run Command (args resolved from the
+// loop's scope at run time, like a generate source) at the loop's entry and
+// at every iteration boundary; {"count": N} with N > Max pauses the run.
+type LoopSpec struct {
+	ID      string   `json:"id"` // the loop's prefix id, e.g. epic/cycles
+	Max     int      `json:"max"`
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+}
+
+// IterationOf recognizes the desugarer's iteration segment "<loop>@<i>" of
+// a node id, the one place the id grammar's loop shape is decoded: the
+// executor's loop bounds, the reporter's rollups, and resume's cap floor all
+// read ids through it.
+func IterationOf(segment string) (loop string, i int, ok bool) {
+	at := strings.LastIndexByte(segment, '@')
+	if at <= 0 || at == len(segment)-1 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(segment[at+1:])
+	if err != nil || n < 1 {
+		return "", 0, false
+	}
+	return segment[:at], n, true
+}
+
+// LoopBounds reads every loop's cap off an IR: the highest iteration index
+// present under each loop prefix (the desugarer unrolls every iteration, so
+// the highest present is the cap), sub-workflow graphs included.
+func LoopBounds(ir *IR) map[string]int {
+	out := map[string]int{}
+	var walk func(*IR)
+	walk = func(g *IR) {
+		if g == nil {
+			return
+		}
+		for i := range g.Nodes {
+			NoteLoopBounds(out, g.Nodes[i].ID)
+			if g.Nodes[i].Sub != nil {
+				walk(g.Nodes[i].Sub)
+			}
+		}
+	}
+	walk(ir)
+	return out
+}
+
+// NoteLoopBounds folds one node id's iteration segments (every nesting
+// level) into the bounds map.
+func NoteLoopBounds(out map[string]int, id string) {
+	segs := strings.Split(id, "/")
+	for k, seg := range segs {
+		if name, i, ok := IterationOf(seg); ok {
+			loop := strings.Join(append(append([]string{}, segs[:k]...), name), "/")
+			if i > out[loop] {
+				out[loop] = i
+			}
+		}
+	}
 }
 
 // Node is one IR graph node. IDs are path-like and human-readable
@@ -306,6 +371,42 @@ func HashIR(ir *IR) (string, error) {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// HashIRCapFree is the resume key that tolerates a raised loop cap: the
+// hash of the workflow desugared with every loop's max forced to 1. Two
+// configs that differ only in caps share it; anything else that differs — a
+// template, a guard, an edge — still changes it. The cap is not a field in
+// the IR but the node count, the selector's candidates, and the iteration
+// edges, so "exclude the cap" has to be this projection, not a field drop.
+func HashIRCapFree(cfg *Config, workflow string) (string, error) {
+	flat := *cfg
+	flat.Workflows = make(map[string]WorkflowDef, len(cfg.Workflows))
+	for name, wf := range cfg.Workflows {
+		w := wf
+		w.Steps = capSteps(wf.Steps)
+		flat.Workflows[name] = w
+	}
+	ir, err := Desugar(&flat, workflow)
+	if err != nil {
+		return "", err
+	}
+	return HashIR(ir)
+}
+
+// capSteps deep-copies a step list with every loop's max set to 1.
+func capSteps(steps []StepDef) []StepDef {
+	out := make([]StepDef, len(steps))
+	for i, s := range steps {
+		out[i] = s
+		if s.Loop != nil {
+			l := *s.Loop
+			l.Max = 1
+			l.Steps = capSteps(s.Loop.Steps)
+			out[i].Loop = &l
+		}
+	}
+	return out
 }
 
 // canonicalize sorts nodes and edges (recursively through sub-workflow graphs)

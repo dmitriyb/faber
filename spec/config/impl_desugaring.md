@@ -11,7 +11,13 @@ type IR struct {
     Nodes     []Node           `json:"nodes"` // sorted by ID
     Edges     []Edge           `json:"edges"` // sorted by (To, ToPort)
     Lanes     map[string]int   `json:"lanes,omitempty"` // the config's declared bounds, omitted when none
+    Loops     []LoopSpec       `json:"loops,omitempty"` // loops declaring expect: {id, max, command, args}
 }
+// IterationOf(segment) decodes "<loop>@<i>" — the one decoder of the id grammar's loop
+// shape (executor bounds, reporter rollups, resume's cap floor); LoopBounds(ir) reads
+// every loop's cap as the highest iteration present. HashIRCapFree(cfg, workflow) is the
+// cap-tolerant resume key: Desugar over a copy of the config with every loop's Max set to
+// 1 (capSteps, recursive), then HashIR — equal across caps, different across anything else.
 // GenSpec gains MaxParallel `json:"max_parallel,omitempty"`; ResolvedTemplate gains
 // Lane `json:"lane,omitempty"` — both omitted when unset (byte-stable IR).
 

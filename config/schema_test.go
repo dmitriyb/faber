@@ -753,3 +753,64 @@ func TestSchemaConcurrencyDeclarations(t *testing.T) {
 		}
 	}
 }
+
+// Verifies 6fc8922b8a41: a loop's expect names a declared source and reaches
+// the IR's loop table; an unknown source is a violation; HashIRCapFree is
+// equal across caps and different across any other change; an IR without
+// expectations carries no loop table.
+func TestSchemaLoopExpectAndCapFreeHash(t *testing.T) {
+	withLoop := func(max int, expect string) *Config {
+		c := minimalConfig()
+		wf := c.Workflows["flow"]
+		wf.Sources = map[string]SourceDef{"todo": {Command: "./count", Args: []string{"--subject", "${params.subject}"}}}
+		wf.Steps = append(wf.Steps, StepDef{ID: "cycle", Loop: &LoopDef{Max: max, Until: "true", Expect: expect, Steps: []StepDef{
+			{ID: "inner", Use: "box", With: map[string]any{"input": "x"}},
+		}}})
+		c.Workflows["flow"] = wf
+		return c
+	}
+	cfg := withLoop(3, "todo")
+	if err := Validate(cfg, nil); err != nil {
+		t.Fatalf("valid expect rejected: %v", err)
+	}
+	ir, err := Desugar(cfg, "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ir.Loops) != 1 || ir.Loops[0].ID != "flow/cycle" || ir.Loops[0].Max != 3 || ir.Loops[0].Command != "./count" || len(ir.Loops[0].Args) != 2 {
+		t.Errorf("loop table = %+v", ir.Loops)
+	}
+	wantErrContaining(t, Validate(withLoop(3, "ghost"), nil), `workflows.flow.steps[1].loop.expect: unknown source "ghost"`)
+
+	h3, err := HashIRCapFree(withLoop(3, "todo"), "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h5, err := HashIRCapFree(withLoop(5, "todo"), "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h3 != h5 {
+		t.Error("cap-free hash must not change with the cap")
+	}
+	full3, _ := HashIR(ir)
+	ir5, _ := Desugar(withLoop(5, "todo"), "flow")
+	full5, _ := HashIR(ir5)
+	if full3 == full5 {
+		t.Error("the full hash must change with the cap (the cap-free key exists for a reason)")
+	}
+	changed := withLoop(3, "todo")
+	changed.Workflows["flow"].Steps[1].Loop.Steps[0].ID = "other"
+	hc, err := HashIRCapFree(changed, "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hc == h3 {
+		t.Error("a changed body step must change the cap-free hash")
+	}
+	plain, _ := Desugar(withLoop(3, ""), "flow")
+	raw, _ := EncodeIR(plain)
+	if strings.Contains(string(raw), `"loops"`) {
+		t.Error("an IR without expectations must carry no loop table")
+	}
+}
