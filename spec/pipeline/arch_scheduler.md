@@ -160,11 +160,13 @@ predecessors' instance sinks.
 
 The scheduler's heartbeat is data, not a log line. At the points that
 launch, settle, defer, expand, pause, or end, the scheduler emits a typed
-event — `step-started` (once per box attempt, carrying the attempt number),
+event — `run-started` (run id, workflow, and every loop's cap, so a renderer
+can say "8/45"), `step-started` (once per box attempt, carrying the attempt number),
 `step-settled` (every terminal state: ok, failed with reason, halted with
 reason, the skip flavors with their ancestor; plus the cached flag and the
 record's span), `step-deferred` (until, detail), `generate-expanded` (items,
-nodes), `pause-requested`, and `run-ended` (status, failed, halted, detail) —
+nodes, and the spliced instances' loop caps), `pause-requested`, and
+`run-ended` (status, failed, halted, detail) —
 to the executor's injected sink. A nil sink is "no events"; the pipeline
 never renders, so what an event looks like (an ASCII line, a JSON line, a
 screen) is entirely the sink's. The sink is called from the loop goroutine

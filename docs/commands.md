@@ -4,7 +4,7 @@
 |---|---|
 | `faber validate` | Load, desugar, wiring-check every workflow; prove package resolution; `--emit-ir` prints the canonical IR; `--workflow name` narrows |
 | `faber build` | Build template images via Nix `dockerTools.buildLayeredImage`; `--template` narrows |
-| `faber run <workflow>` | Execute with `--name n` (a human name for the run, stored in the journal header), `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--sessions` (capture each attempt's harness session transcripts under the run dir), `--report-json path\|-` |
+| `faber run <workflow>` | Execute with `--name n` (a human name for the run, stored in the journal header), `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--sessions` (capture each attempt's harness session transcripts under the run dir), `--report-json path\|-`, `--progress auto\|text\|json\|none`, `--color auto\|always\|never` |
 | `faber resume <run-id\|name>` | Re-enter a journaled run; `--fresh` ignores the journal, `--sessions` turns capture on for the remainder, `--interactive <step>` reopens the failed box inside its saved session (when one exists and the profile defines `resume_argv`) or a shell, `--shell` forces the shell |
 | `faber runs` | List journaled runs: id, name, workflow, state (`live`/`paused`/`settled`/`aborted`/`incomplete`), started; `--json` for the same rows machine-readably |
 | `faber runs pause <run-id\|name>` | Ask a live run to pause: in-flight steps finish and journal, nothing new dispatches, the run ends `paused` (exit 4) and resumes later with `faber resume` |
@@ -15,7 +15,21 @@
 | `faber version` / `--version` / `-v` | Print version, commit, and build date |
 
 Common flags: `--config` (default `orchestrator.yaml`), `--log-level` (`debug`/`info`/`warn`/`error`; default `warn` on a terminal, `info` otherwise), `--log-format` (`auto`/`json`/`text`; JSON when not a TTY).
-While a run executes, stderr carries the progress stream — one ASCII line per event: `HH:MM:SS  start|ok|FAIL|HALT|skip|WAIT|expand|end  <step>  …` — separate from the diagnostic log. Each box attempt's combined container output is kept at `<run>/boxes/<step>/attempt-<n>/output.log`, and the journal records every attempt's start, so a step is visible from the moment it launches.
+While a run executes, stderr carries the progress stream, separate from the diagnostic log. On a terminal it is one ASCII line per event, the step named as a breadcrumb with iteration and cap:
+
+```
+19:04:08  start        cycles 1/45 > implement
+19:07:08  ok           cycles 1/45 > implement  2m53s
+19:11:08  not needed   cycles 1/45 > review-cycle 1/5 > fix
+19:11:08  ok           cycles 1/45 > review-cycle  settled after 1 of 5
+19:14:08  FAIL         cycles 1/45 > land 1/2 > merge  1m0s  agent-failed
+19:14:08  not reached  cycles @2..@3  after cycles 1/45 > land 1/2 > merge
+19:14:08  end          run 20260902-170408-d0feb66b: settled, 1 failed
+```
+
+Lower-case words are routine, upper-case (`FAIL`, `HALT`, `WAIT`, `PAUSE`) need attention. Iterations a loop never needed are not listed; steps past a failure collapse into one `not reached` range per loop. Colour, when the terminal allows it, touches the status word only and uses the terminal theme's own 16 colours (`--color never` or `NO_COLOR` turns it off). Off a terminal, or with `--progress json`, the same events are JSON lines; `--progress none` silences the stream. Each box attempt's combined container output is kept at `<run>/boxes/<step>/attempt-<n>/output.log`, and the journal records every attempt's start, so a step is visible from the moment it launches.
+
+The post-run report on stdout uses the same vocabulary and folds loops the same way: `ok  review-cycle  2 of up to 3  -> review@2` with the executed iterations nested, `not reached  merge  after review-cycle`, and a footer of `ran N ok, M failed; not run X not needed, Y not reached`. `--report-json` keeps every node with the scheduler's own state names, plus an additive `loops` rollup.
 `runs`/`upgrade`/`add-key`/`list-keys`/`version` touch no `orchestrator.yaml` and take no `--config` (the run store lives under `host.json`'s `state_dir`).
 Exit codes: 0 ok, 1 validation/run failure, 2 usage, 3 halted (`run`/`resume`: no step failed but at least one settled halted — the run stopped for an operator and is resumable), 4 paused (`run`/`resume`: the run ended in a cooperative pause with nothing failed or halted; failure outranks halt outranks pause).
 Run references (`resume`, `runs pause`) accept a run id or a `--name`-given name; an id always wins over an equal name, and an ambiguous name errors naming the matching ids.

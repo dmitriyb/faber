@@ -1,9 +1,6 @@
 package pipeline
 
 import (
-	"fmt"
-	"io"
-	"sync"
 	"time"
 )
 
@@ -11,6 +8,7 @@ import (
 type EventKind string
 
 const (
+	EventRunStarted       EventKind = "run-started"
 	EventStepStarted      EventKind = "step-started"
 	EventStepSettled      EventKind = "step-settled"
 	EventStepDeferred     EventKind = "step-deferred"
@@ -24,33 +22,39 @@ const (
 // start, defer, expand, pause, or end; the executor's sink decides what they
 // look like. Fields not meaningful for a kind are zero.
 type Event struct {
-	Kind EventKind
-	Time time.Time
-	Step string // node id; empty for run-level events
+	Kind EventKind `json:"kind"`
+	Time time.Time `json:"time"`
+	Step string    `json:"step,omitempty"` // node id; empty for run-level events
 
 	// step-started
-	Template string
-	Attempt  int
+	Template string `json:"template,omitempty"`
+	Attempt  int    `json:"attempt,omitempty"`
 
 	// step-settled
-	Status   string // StateOK|StateFailed|StateHalted|skip states
-	Reason   string // failure reason or halt reason
-	Cached   bool
-	Duration time.Duration
+	Status   string        `json:"status,omitempty"` // StateOK|StateFailed|StateHalted|skip states
+	Reason   string        `json:"reason,omitempty"` // failure reason, halt reason, or a skip's ancestor
+	Cached   bool          `json:"cached,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
 
 	// step-deferred (Until zero = re-check on the next settlement)
-	Until  time.Time
-	Detail string // defer detail; run-ended detail
+	Until  time.Time `json:"until,omitempty"`
+	Detail string    `json:"detail,omitempty"` // defer detail; run-ended detail
 
 	// generate-expanded
-	Items int
-	Nodes int
+	Items int `json:"items,omitempty"`
+	Nodes int `json:"nodes,omitempty"`
 
-	// run-ended
-	RunID     string
-	RunStatus string // failure.RunEndSettled|Aborted|Paused
-	Failed    int
-	Halted    int
+	// run-started, run-ended
+	RunID     string `json:"run_id,omitempty"`
+	Workflow  string `json:"workflow,omitempty"`
+	RunStatus string `json:"run_status,omitempty"` // failure.RunEndSettled|Aborted|Paused
+	Failed    int    `json:"failed,omitempty"`
+	Halted    int    `json:"halted,omitempty"`
+
+	// Loops carries loop caps a renderer needs to say "8/45": every loop
+	// the IR unrolls, on run-started; the instance loops a generate splices
+	// in, on generate-expanded. Keyed by loop prefix id.
+	Loops map[string]int `json:"loops,omitempty"`
 }
 
 // EventSink receives progress events. Emit is called from the scheduler's
@@ -58,91 +62,4 @@ type Event struct {
 // must be safe for concurrent use. A nil sink is "no events".
 type EventSink interface {
 	Emit(Event)
-}
-
-// LineSink is the minimal human sink: one ASCII line per event, no colour,
-// so the stream is visible end to end before a real renderer exists.
-type LineSink struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-// NewLineSink writes one line per event to w.
-func NewLineSink(w io.Writer) *LineSink { return &LineSink{w: w} }
-
-// Emit implements EventSink.
-func (s *LineSink) Emit(ev Event) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	fmt.Fprintln(s.w, formatEventLine(ev))
-}
-
-// formatEventLine renders one event as "HH:MM:SS  <word>  <step>  <extra>".
-// Box-derived text (reasons, details) is terminal-sanitized exactly like the
-// report's Text path.
-func formatEventLine(ev Event) string {
-	ts := ev.Time.Format("15:04:05")
-	switch ev.Kind {
-	case EventStepStarted:
-		extra := ""
-		if ev.Attempt > 1 {
-			extra = fmt.Sprintf("  attempt %d", ev.Attempt)
-		}
-		return fmt.Sprintf("%s  start   %s%s", ts, ev.Step, extra)
-	case EventStepSettled:
-		word := settleWord(ev.Status)
-		var sb []byte
-		sb = fmt.Appendf(sb, "%s  %-7s %s", ts, word, ev.Step)
-		if ev.Duration > 0 {
-			sb = fmt.Appendf(sb, "  %s", ev.Duration.Round(time.Second))
-		}
-		if ev.Cached {
-			sb = fmt.Appendf(sb, "  (cached)")
-		}
-		if ev.Reason != "" {
-			sb = fmt.Appendf(sb, "  %s", sanitizeTerm(ev.Reason))
-		}
-		return string(sb)
-	case EventStepDeferred:
-		if ev.Until.IsZero() {
-			return fmt.Sprintf("%s  WAIT    %s  until next settlement  %s", ts, ev.Step, sanitizeTerm(ev.Detail))
-		}
-		return fmt.Sprintf("%s  WAIT    %s  until %s  %s", ts, ev.Step, ev.Until.Format("15:04:05"), sanitizeTerm(ev.Detail))
-	case EventGenerateExpanded:
-		return fmt.Sprintf("%s  expand  %s  %d items, %d nodes", ts, ev.Step, ev.Items, ev.Nodes)
-	case EventPauseRequested:
-		return fmt.Sprintf("%s  PAUSE   run: in-flight steps settle, nothing new dispatches", ts)
-	case EventRunEnded:
-		var sb []byte
-		sb = fmt.Appendf(sb, "%s  end     run %s: %s", ts, ev.RunID, ev.RunStatus)
-		if ev.Failed > 0 {
-			sb = fmt.Appendf(sb, ", %d failed", ev.Failed)
-		}
-		if ev.Halted > 0 {
-			sb = fmt.Appendf(sb, ", %d halted", ev.Halted)
-		}
-		if ev.Detail != "" {
-			sb = fmt.Appendf(sb, "  %s", sanitizeTerm(ev.Detail))
-		}
-		return string(sb)
-	}
-	return fmt.Sprintf("%s  %s  %s", ts, ev.Kind, ev.Step)
-}
-
-// settleWord maps a terminal state onto the stream's status vocabulary:
-// lower-case for the routine, upper-case for what needs the eye.
-func settleWord(status string) string {
-	switch status {
-	case StateOK:
-		return "ok"
-	case StateFailed:
-		return "FAIL"
-	case StateHalted:
-		return "HALT"
-	case StateSkippedCondition:
-		return "skip"
-	case StateSkippedDependency, StateSkippedHalt:
-		return "skip"
-	}
-	return status
 }

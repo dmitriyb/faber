@@ -135,7 +135,7 @@ func TestGenerate_FanOutCascade(t *testing.T) {
 			t.Errorf("%s names ancestor %q, want %q", id, rec.Result.Error.Detail, root)
 		}
 	}
-	if !strings.Contains(h.text.String(), "3 items: 1 ok, 1 failed, 1 skipped") {
+	if !strings.Contains(h.text.String(), "3 items: 1 ok, 1 failed, 1 not reached") {
 		t.Errorf("rollup summary missing from report:\n%s", h.text.String())
 	}
 }

@@ -879,7 +879,11 @@ func (s *scheduler) applyExpansion(ev evExpanded) {
 		}
 	}
 	s.log.Debug("generate expanded", "step", ev.id, "items", len(ev.insts), "nodes", len(newIDs))
-	s.emit(Event{Kind: EventGenerateExpanded, Step: ev.id, Items: len(ev.insts), Nodes: len(newIDs)})
+	caps := map[string]int{}
+	for _, id := range newIDs {
+		noteBounds(caps, id)
+	}
+	s.emit(Event{Kind: EventGenerateExpanded, Step: ev.id, Items: len(ev.insts), Nodes: len(newIDs), Loops: caps})
 	now := s.clock.Now()
 	s.settleResult(n, failure.Result{
 		Status:  failure.StatusOK,

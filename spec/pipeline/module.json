@@ -66,6 +66,13 @@
       "description": "The run's heartbeat is a typed event stream, not a log line: the scheduler emits step-started (per box attempt), step-settled (every terminal state, with reason, cached flag and span), step-deferred, generate-expanded, pause-requested, and run-ended events to an injected sink (nil = none); the pipeline never renders. The heartbeat slog lines drop to debug. Every box attempt additionally streams its combined container output into <attempt>/output.log, always on, scrubbed with its attempt dir."
     },
     {
+      "id": "46b463750d77",
+      "preq_id": "296f9fba2c0f",
+      "type": "functional",
+      "title": "Human run vocabulary",
+      "description": "Human renderings — the report's text form and the progress stream — never use the scheduler's skip encodings. A loop reads as iterations ran of up to its cap (iterations past convergence are unused cap, not listed), a guard-false step inside an executed iteration is not needed, steps past a failure or halt are not reached with the ancestor and the range; status words are lower-case for the routine and upper-case for what needs the eye (FAIL, HALT, WAIT); text is plain ASCII, one cell per character, in dependency order. The report folds loops into rollups (journal plus IR, selector-independent: the cap is the highest iteration present) beside the complete per-node list the JSON keeps. The progress renderer folds node ids into breadcrumbs with iteration and cap, prints at start and settle only, collapses unused cap and not-reached iterations into one line per loop, and colours the status word alone from the 16 palette slots when the terminal allows; a JSON-lines sink serves machines."
+    },
+    {
       "id": "b8db39a923b7",
       "preq_id": "296f9fba2c0f",
       "type": "functional",
@@ -99,9 +106,9 @@
     {
       "id": "433118dc3ddb",
       "name": "RunReporter",
-      "description": "Aggregates the settled run from the journal into the human summary and JSON report: stable ordering, per-step lines, generate-item rollups, failure diagnostics with handoff pointers, halt blocks naming the halting step and reason, and the paused-run flag and footer (a paused run reads as deliberately incomplete, naming the resume command). Owns the deferred live-observability seam.",
+      "description": "Aggregates the settled run from the journal into the human summary and JSON report: stable ordering, per-step lines, generate-item rollups, failure diagnostics with handoff pointers, halt blocks naming the halting step and reason, and the paused-run flag and footer (a paused run reads as deliberately incomplete, naming the resume command). Folds unrolled loops back into rollups (iterations ran of up to cap, executed iterations nested, not-reached ranges) for the human text, which reads in dependency order with the human vocabulary (ok / FAIL / HALT / not needed / not reached) while the JSON keeps every node; owns the progress renderers over the scheduler's event stream — the breadcrumb text sink with palette-only colour and the JSON-lines sink. Owns the deferred live-observability seam.",
       "content": "arch_run_reporter.md",
-      "implements": ["990c3d8a7888", "b8db39a923b7"]
+      "implements": ["990c3d8a7888", "46b463750d77", "b8db39a923b7"]
     }
   ],
   "impl_sections": [

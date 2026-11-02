@@ -635,3 +635,41 @@ func TestCLIVersion(t *testing.T) {
 		t.Fatalf("got code %d, stdout %q, stderr %q; want stdout %q", code, stdout, stderr, want)
 	}
 }
+
+// Verifies 67c77533453d: --progress/--color resolve against the terminal
+// (a buffer is not one: auto means json and no colour), explicit values are
+// honoured, and unknown values are usage errors before any config is read.
+func TestCLIProgressAndColorFlags(t *testing.T) {
+	var buf bytes.Buffer
+	if m, err := ProgressMode("auto", &buf); err != nil || m != "json" {
+		t.Errorf("auto progress off a terminal = %q, %v; want json", m, err)
+	}
+	for _, m := range []string{"text", "json", "none"} {
+		if got, err := ProgressMode(m, &buf); err != nil || got != m {
+			t.Errorf("ProgressMode(%q) = %q, %v", m, got, err)
+		}
+	}
+	if _, err := ProgressMode("sometimes", &buf); err == nil {
+		t.Error("unknown --progress accepted")
+	}
+	if on, err := ColorEnabled("auto", &buf); err != nil || on {
+		t.Errorf("auto colour off a terminal = %v, %v; want false", on, err)
+	}
+	if on, _ := ColorEnabled("always", &buf); !on {
+		t.Error("always must enable colour even off a terminal")
+	}
+	if on, _ := ColorEnabled("never", &buf); on {
+		t.Error("never must disable colour")
+	}
+	if _, err := ColorEnabled("rainbow", &buf); err == nil {
+		t.Error("unknown --color accepted")
+	}
+	code, _, stderr := runCLI(t, Deps{}, "run", "task", "--progress", "sometimes")
+	if code != 2 || !strings.Contains(stderr, "--progress") {
+		t.Fatalf("want exit 2 naming --progress, got %d: %s", code, stderr)
+	}
+	code, _, stderr = runCLI(t, Deps{}, "resume", "run-1", "--color", "rainbow")
+	if code != 2 || !strings.Contains(stderr, "--color") {
+		t.Fatalf("want exit 2 naming --color, got %d: %s", code, stderr)
+	}
+}

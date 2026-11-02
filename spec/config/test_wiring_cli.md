@@ -122,6 +122,11 @@ param checking.
     used as an id unchanged. An executor error with `ExitCode() 4` maps to
     process exit 4 through the generic contract.
 
+16. **Progress and colour flags.** Off a terminal, auto resolves to json
+    and no colour; text/json/none and always/never are honoured; an unknown
+    `--progress` or `--color` on `run`/`resume` exits 2 naming the flag,
+    before any config is read.
+
 ## Edge cases
 
 - Unknown `--param name=v` (not in params interface): rejected, listing declared

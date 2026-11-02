@@ -1,14 +1,14 @@
 run run-test  workflow task
-  ok                  task/implement  2s  branch=work/x  pr=17
-  skipped-dependency  task/merge  after-failure-of=task/review
-  failed              task/review
-  ok                  task/review-cycle@1/fix  2s  status=pushed
-  ok                  task/review-cycle@1/review  2s  verdict=changes
-  ok                  task/review-cycle@2/fix  2s  status=pushed
-  ok                  task/review-cycle@2/review  2s  verdict=changes
-  ok                  task/review-cycle@3/fix  2s  status=pushed
-  ok                  task/review-cycle@3/review  2s  verdict=changes
+  ok           implement  2s  branch=work/x  pr=17
+  FAIL         review-cycle  3 of up to 3  exhausted
+    @1  ok           review  2s  verdict=changes
+        ok           fix  2s  status=pushed
+    @2  ok           review  2s  verdict=changes
+        ok           fix  2s  status=pushed
+    @3  ok           review  2s  verdict=changes
+        ok           fix  2s  status=pushed
+  not reached  merge  after review-cycle
 failures:
   task/review: loop-exhausted: all 3 iterations of step "review" executed without the loop's until condition settling
-totals: 7 ok, 1 failed, 0 skipped (condition), 1 skipped (dependency); wall 2s
+ran 7 ok, 1 failed; not run 1 not reached; wall 2s
 journal: runs/run-test/journal.jsonl

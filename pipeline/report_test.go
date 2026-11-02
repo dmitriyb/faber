@@ -19,7 +19,7 @@ func renderStable(t *testing.T, h *harness, ir *config.IR, runID string) (string
 	if err != nil {
 		t.Fatalf("load journal: %v", err)
 	}
-	report, err := (RunReporter{}).Report(rp, ir, "runs/"+runID+"/journal.jsonl")
+	report, err := (RunReporter{Targets: h.exec.Workflows}).Report(rp, ir, "runs/"+runID+"/journal.jsonl")
 	if err != nil {
 		t.Fatalf("report: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestReport_JournalOnlyReconstruction(t *testing.T) {
 func TestReport_SelectorChoseAndTotals(t *testing.T) {
 	h, ir := settledTaskLoop(t)
 	text, _ := renderStable(t, h, ir, "run-test")
-	if !strings.Contains(text, "chose=task/review-cycle@2/review") {
+	if !strings.Contains(text, "review-cycle  2 of up to 3  -> review@2") {
 		t.Errorf("selector line does not name its candidate:\n%s", text)
 	}
 	rp, err := h.store.Load("run-test")
@@ -228,7 +228,7 @@ func TestReport_BoxAuthoredSkipReasonStaysFailed(t *testing.T) {
 	if report.Run.Totals.SkippedCondition != 0 {
 		t.Errorf("Totals.SkippedCondition = %d, want 0", report.Run.Totals.SkippedCondition)
 	}
-	if !strings.Contains(text, "failed              w/a") {
+	if !strings.Contains(text, "FAIL         a") {
 		t.Errorf("text report does not show w/a failed:\n%s", text)
 	}
 	_ = jsonOut
