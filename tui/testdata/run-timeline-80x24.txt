@@ -1,20 +1,20 @@
 run   20260902-170408-d0feb66b   FAILED   task   it~ started 19:04   wall 15m00s
   now   nothing running   failed at review-cycle 2/3 > review   next: resume
 --------------------------------------------------------------------------------
-TIMELINE   +/- zoom                      | STEP
+TIMELINE   whole run   +/- zoom          | STEP
 ---------------------------------------- | -------------------------------------
-                      19:04              |
-  implement           iiii               | review-cycle 1/3
-  > review-cycle@1       rrrrrfffff      |
-  review-cycle@2                  XXXX   |   select a step for its details
+                      19:04:08           |
+  > implement         ####               | implement
+  review-cycle@1 >       rrrrrfffff      |   status    ok
+  review-cycle@2 >                XXXX   |   attempt   1
+                                         |   duration  3m00s
+  56s per column   letters: step initial |   outputs   branch=work/x  pr=17
                                          |
-  56s per column   letters: step initial |
-                                         |
-                                         |
-                                         |
-                                         | OUTPUT
+                                         |   history   2 attempts of this step i
+                                         |     p50     3m00s
+                                         | OUTPUT   attempt 1   output.log
                                          | -------------------------------------
-                                         |
+                                         |   no output captured
                                          |
                                          |
                                          |

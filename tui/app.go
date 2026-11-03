@@ -41,12 +41,14 @@ type model struct {
 	run     *RunView
 	rows    []row
 	sel     int
-	frows   []frow // the flow view's rows
-	fsel    int    // the flow cursor
-	trows   []trow // the timeline's rows: iterations, and the attempts of opened ones
-	tsel    int    // the timeline cursor
-	tzoom   int    // the timeline zoom exponent (columns x 2^tzoom)
-	view    string // "tree" | "flow" | "timeline"
+	frows   []frow   // the flow view's rows
+	fsel    int      // the flow cursor
+	trows   []trow   // the timeline's rows at the current level
+	tsel    int      // the timeline cursor
+	tpath   []string // the timeline's drill-down: the prefix of each level entered
+	tback   []int    // the cursor to restore when leaving each level
+	tzoom   int      // the timeline zoom exponent (columns x 2^tzoom)
+	view    string   // "tree" | "flow" | "timeline"
 	follow  bool
 	filter  string
 	open    map[string]bool
@@ -84,7 +86,10 @@ func (m *model) selectedRow() *row {
 		}
 		t := m.trows[m.tsel]
 		if t.iter {
-			return &row{id: t.id, kind: "iter", name: t.group}
+			return &row{id: t.id, kind: "iter", name: t.name}
+		}
+		if t.deeper {
+			return &row{id: t.id, kind: "item", name: t.name}
 		}
 		for i := range m.rows {
 			if m.rows[i].id == t.id && m.rows[i].kind == "step" {
@@ -113,6 +118,26 @@ func (m *model) selectedRow() *row {
 		return nil
 	}
 	return &m.rows[m.sel]
+}
+
+// tprefix is the id prefix of the timeline's current level: the run's
+// workflow at the top, else the group last entered.
+func (m *model) tprefix() string {
+	if len(m.tpath) > 0 {
+		return m.tpath[len(m.tpath)-1]
+	}
+	return m.run.Replay.Header.Workflow + "/"
+}
+
+// timelineUp leaves the current level, the cursor back on the row entered.
+func (m *model) timelineUp() {
+	if len(m.tpath) == 0 {
+		return
+	}
+	m.tpath = m.tpath[:len(m.tpath)-1]
+	m.tsel = m.tback[len(m.tback)-1]
+	m.tback = m.tback[:len(m.tback)-1]
+	m.rebuildRows()
 }
 
 // nextProblem moves the current view's cursor to the next FAIL, HALT or
@@ -278,7 +303,7 @@ func (m *model) refresh(ctx context.Context) {
 
 func (m *model) rebuildRows() {
 	m.frows = flowRows(m.run, m.preview, m.now())
-	m.trows = timelineRows(m.run, m.open, m.now())
+	m.trows = timelineRows(m.run, m.tprefix(), m.now())
 	if m.tsel >= len(m.trows) {
 		m.tsel = max(0, len(m.trows)-1)
 	}
@@ -317,9 +342,9 @@ func (m *model) rebuildRows() {
 			}
 		}
 		if len(m.run.Running) > 0 {
-			g := groupKey(m.run.Running[0].Step, m.run.Replay.Header.Workflow)
+			running := m.run.Running[0].Step
 			for i, tr := range m.trows {
-				if tr.group == g && !tr.sub {
+				if tr.id == running || (tr.deeper && strings.HasPrefix(running, tr.id)) {
 					m.tsel = i
 				}
 			}
@@ -377,6 +402,7 @@ func (m *model) openRun(id string) {
 	}
 	m.run = v
 	m.quitCmd = ""
+	m.tpath, m.tback, m.tsel = nil, nil, 0
 	m.preview = false
 	m.screen = "run"
 	m.sel = 0
@@ -551,6 +577,8 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		return m.handleWorkflow(ctx, k)
 	}
 	switch {
+	case (k.name == "esc" || k.r == 0x7f || k.r == 0x08) && m.view == "timeline" && len(m.tpath) > 0:
+		m.timelineUp() // a level up comes before leaving the run
 	case k.r == 'q' || k.name == "esc":
 		if r := m.selectedRow(); r != nil {
 			if line, ok := m.lineOf(r.id); ok && line.Error != nil && line.Error.Handoff != "" {
@@ -598,14 +626,14 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 			m.tzoom--
 		}
 	case k.name == "enter":
-		if m.view == "timeline" && m.tsel < len(m.trows) && m.trows[m.tsel].sub {
-			// closing from inside: the cursor lands on the iteration row
-			t := m.trows[m.tsel]
-			for m.tsel > 0 && m.trows[m.tsel].sub {
-				m.tsel--
+		if m.view == "timeline" {
+			if m.tsel < len(m.trows) && m.trows[m.tsel].deeper {
+				m.follow = false
+				m.tpath = append(m.tpath, m.trows[m.tsel].id)
+				m.tback = append(m.tback, m.tsel)
+				m.tsel = 0
+				m.rebuildRows()
 			}
-			m.open[groupPrefixOf(m.run, t.group)] = false
-			m.rebuildRows()
 			break
 		}
 		if r := m.selectedRow(); r != nil && r.kind == "iter" {

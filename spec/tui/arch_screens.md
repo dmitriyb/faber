@@ -101,19 +101,24 @@ over OUTPUT, and the footer.
   journal's state in the status column, `running` on the live step, and
   the cursor skips frame edges. The same rows draw the workflow preview
   with `x5` for the cap and no status column.
-- **timeline**: one row per outermost iteration (`review-cycle@2`) or
-  top-level step, a bar of the executed attempts' step initials (`X` for a
-  failure) coloured by status on an axis scaled to the width, the running
-  step extended to now. A column keeps the first letter written into it,
-  so a short step is never hidden by the long one after it at a coarse
-  scale. The timeline has its own cursor over its rows and the selected
-  row is the selection bar. Enter opens an iteration in place: its
-  executed attempts follow as indented rows, each a solid bar on the same
-  axis, and the cursor walks into them, so STEP and OUTPUT follow the
-  attempt; enter on an attempt closes the iteration with the cursor back
-  on its row. Open and closed is the same map the tree folds by. `+`/`-`
-  zoom the columns by powers of two, the window centred on the selected
-  row.
+- **timeline**: one level at a time, drilled down by id prefix. At the
+  top, one row per outermost iteration (`review-cycle@2`) or top-level
+  step; a group's bar is the executed attempts' step initials (`X` for a
+  failure) coloured by status, a step's a solid bar, on an axis scaled to
+  the level's own span and the width, the running step extended to now. A
+  column keeps the first letter written into it, so a short step is never
+  hidden by the long one after it at a coarse scale. Enter on a group (an
+  iteration, a generate instance, a sub-workflow — anything with attempts
+  under it, marked `>`) replaces the rows with that group's own, on its
+  own axis, so a twenty-minute cycle fills the width and its steps are
+  wide bars; nesting goes as deep as the ids do. The breadcrumb above the
+  axis carries the full path (`cycles 21/45 > review-cycle 1/3`), and one
+  dim line draws the parent's bar with this level's window marked, so the
+  place in the whole run stays visible. Esc or backspace goes one level
+  up with the cursor back on the row entered; esc at the top leaves the
+  run. The timeline has its own cursor, the selected row is the selection
+  bar, STEP and OUTPUT follow a selected step. `+`/`-` zoom the columns
+  by powers of two within a level, the window centred on the selected row.
 - **STEP**: breadcrumb, status, reason or since, attempt, duration, usually,
   outputs, then the error, handoff, re-enter command (`printed on q`), or
   the halt. **OUTPUT**: the newest attempt's `output.log` tail,
@@ -122,7 +127,7 @@ over OUTPUT, and the footer.
 Keys: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
 `n` the next FAIL/HALT/WAIT — each on the cursor of the view shown — `/` a filter over id, name and status, `f`
 toggles follow (selection on the newest running step, else the first
-problem), `enter` opens or closes an iteration, `t`/`w`/`l` switch tree, workflow, timeline,
+problem), `enter` opens or closes an iteration (on the timeline: drills into a group; esc or backspace comes up), `t`/`w`/`l` switch tree, workflow, timeline,
 `q` returns to Home — and, with a failed step selected, remembers its
 re-enter command (or the run's resume command) to print on stdout when the
 view exits.

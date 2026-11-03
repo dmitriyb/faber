@@ -15,7 +15,7 @@ type model struct {            // re-derived from the store at every tick/key
     run *RunView; preview bool
     rows []row; sel int                   // tree
     frows []frow; fsel int                // flow
-    trows []trow; tsel, tzoom int         // timeline: iterations, and the attempts of opened ones
+    trows []trow; tsel, tzoom int; tpath []string; tback []int   // timeline: the current level's rows, the prefixes drilled into, the cursors to restore
     view string; follow bool; filter string; open map[string]bool; selLines []string
     prompt *prompt; quitCmd, status string; bellNext bool
 }
@@ -44,7 +44,8 @@ outputTail(runDir, nodeID, attempt, n) []string   // pipeline.AttemptDir + Outpu
 crumb(id, workflow, bounds) string                // the stream's breadcrumb
 treeRows(v, open, now) []row                      // ReadingOrder folded; row{indent,status,name,dur,note,id,kind,since}
 flowRows(v, preview, now) []frow                  // structure from iteration 1, state from the current iteration
-timelineRows(v, open, now) []trow                 // one row per outermost iteration or top-level step; an opened iteration's attempts under it
+timelineRows(v, prefix, now) []trow               // one level: attempts under prefix grouped by their next id segment (group = enterable, else a step)
+levelSpan(v, prefix, now) (t0, t1, ok)            // the axis of a level
 ```
 
 `row.kind` is `step | loop | iter | range | gen | item`; only step rows

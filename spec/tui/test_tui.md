@@ -56,12 +56,13 @@ docker. The screens are rendered into frames and compared colour-stripped.
    absent under `…:20be39bb9bb7`, Home prints `MISSING  faber build
    20be39bb9bb7`.
 
-10. **Timeline cursor, letters, zoom.** Rows are `implement`,
-    `review-cycle@1`, `review-cycle@2`; `j` twice selects iteration 2 and
-    marks its row; enter opens it in place (`review` follows as an
-    indented row), `j` selects that attempt and STEP reads `review-cycle
-    2/3 > review`, enter on the attempt closes the iteration with the
-    cursor back on its row; at a 12-column scale the
+10. **Timeline cursor, letters, zoom, drill-down.** Rows are `implement`,
+    `review-cycle@1`, `review-cycle@2` under `whole run`; `j` twice
+    selects iteration 2 and marks its row; enter drills in: `review` is
+    the only row, the breadcrumb reads `review-cycle 2/3   esc up`, the
+    parent bar says `in task`, STEP reads `review-cycle 2/3 > review`;
+    esc comes back up with the cursor on iteration 2, and esc at the top
+    leaves the run; at a 12-column scale the
     3-minute implement keeps its letter beside the review that follows;
     `+` and `-` zoom in and out and the legend says `zoom x2`.
 11. **History as a distribution.** The store's `review` attempts give
@@ -86,10 +87,12 @@ docker. The screens are rendered into frames and compared colour-stripped.
     unchanged; appending a record to a journal bumps it, the history
     follows, and the new step's attempt appears in it.
 
-17. **Timeline opens in place.** Forty-five iterations of three steps:
-    enter on `cycles@21` adds its three attempts under its row, `j` twice
-    selects `review`, and a 24-row pane shows the iteration and its
-    selected attempt without overflowing.
+17. **Timeline drills down.** Forty-five iterations each holding a
+    nested `review-cycle`: enter on `cycles@21` shows `implement
+    review-cycle@1 merge` on its own axis, enter on the nested iteration
+    shows `review fix` with the path `cycles 21/45 > review-cycle 1/3`
+    and the parent bar `in cycles@21`, a 24-row pane does not overflow,
+    and backspace twice returns to the top with the cursor on row 21.
 
 ## Edge cases
 

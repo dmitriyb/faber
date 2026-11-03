@@ -1,14 +1,14 @@
 run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandbox                                                                                                                          started 19:04   wall 15m00s
   now   nothing running   failed at review-cycle 2/3 > review   next: resume
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-TIMELINE   +/- zoom                                                                          | STEP
+TIMELINE   whole run   +/- zoom                                                              | STEP
 -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------
-                      19:04           19:07           19:11           19:14           19:1   |
-  > implement         iiiiiiiiiiiiii                                                         | implement
-  review-cycle@1                   rrrrrrrrrrrrrrrrrrrfffffffffffffffffffffff                |   status    ok
-  review-cycle@2                                                            XXXXXXXXXXXXXX   |   attempt   1
+                      19:04:08        19:07:39        19:11:11        19:14:43        19:1   |
+  > implement         ##############                                                         | implement
+  review-cycle@1 >                 rrrrrrrrrrrrrrrrrrrfffffffffffffffffffffff                |   status    ok
+  review-cycle@2 >                                                          XXXXXXXXXXXXXX   |   attempt   1
                                                                                              |   duration  3m00s
-  13s per column   letters: step initial   X failed   zoom x1   enter open/close iteration   |   outputs   branch=work/x  pr=17
+  13s per column   letters: step initials, X failed, # one step   zoom x1                    |   outputs   branch=work/x  pr=17
                                                                                              |
                                                                                              |   history   2 attempts of this step in the store
                                                                                              |     p50     3m00s
