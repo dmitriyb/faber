@@ -160,7 +160,10 @@ func timelinePane(st style, m *model, w, h int) []string {
 			plain[i] = ' '
 		}
 		for _, s := range byGroup[g] {
-			ch := string(leaf(s.id)[0])
+			ch := "?"
+			if l := leaf(s.id); l != "" {
+				ch = l[:1]
+			}
 			if s.status == "FAIL" || s.status == "HALT" {
 				ch = "X"
 			}

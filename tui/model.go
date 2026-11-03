@@ -46,12 +46,66 @@ type Project struct {
 	cfg       *config.Config
 	irs       map[string]*config.IR // every workflow desugared, for the reporter's targets
 	stats     map[string]Stats      // the store's per-step history, for the preview
+	mtime     time.Time             // the config file's mtime this was derived from
+}
+
+// irCache keeps each config path's desugared workflows, re-derived when
+// the file's mtime moves, so a run's IR is not re-validated per tick.
+type irCache struct {
+	entries map[string]*irEntry
+}
+
+type irEntry struct {
+	mtime time.Time
+	irs   map[string]*config.IR
+	err   error
+}
+
+func newIRCache() *irCache { return &irCache{entries: map[string]*irEntry{}} }
+
+// get returns every workflow of the config at path, desugared, or the
+// load/validate error. A relative path is unknown: it was journaled as
+// typed in some other working directory and must not be resolved here.
+func (c *irCache) get(path string) (map[string]*config.IR, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("config path %q is relative in the journal; the run's project cannot be identified from here", path)
+	}
+	mt := configMTime(path)
+	if e := c.entries[path]; e != nil && e.mtime.Equal(mt) {
+		return e.irs, e.err
+	}
+	e := &irEntry{mtime: mt}
+	cfg, viols, err := config.Load(path)
+	if err != nil {
+		e.err = err
+	} else if err := config.Validate(cfg, viols); err != nil {
+		e.err = err
+	} else {
+		e.irs = map[string]*config.IR{}
+		for name := range cfg.Workflows {
+			if ir, err := config.Desugar(cfg, name); err == nil {
+				e.irs[name] = ir
+			}
+		}
+	}
+	c.entries[path] = e
+	return e.irs, e.err
+}
+
+// configMTime is the config file's mtime, zero when it cannot be read:
+// the key that decides whether a project or a run's IR is re-derived.
+func configMTime(path string) time.Time {
+	st, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime()
 }
 
 // loadProject runs the same pipeline `faber validate` runs and asks the
 // image probe about every template.
 func loadProject(ctx context.Context, path string, probe ImageProbe) *Project {
-	p := &Project{Path: path}
+	p := &Project{Path: path, mtime: configMTime(path)}
 	cfg, viols, err := config.Load(path)
 	if err != nil {
 		p.Err = err
@@ -120,60 +174,101 @@ type RunRow struct {
 	bounds                    map[string]int // journal-observed loop caps, for the crumb
 }
 
-// runState is the `faber runs` state vocabulary, re-derived from the same
-// audit facts (live wins, then incomplete, then the run-end status).
-func runState(a config.RunAudit) string {
+// runState is the `faber runs` state word, from the CLI's own derivation,
+// with the two refinements the view adds: live is a badge (LIVE), and a
+// settled run reads ok or FAILED by its failed count.
+func runState(a config.RunAudit, rp *failure.Replay) string {
+	state := config.RunState(a)
 	switch {
-	case a.Live:
+	case state == "live":
 		return "LIVE"
-	case !a.Complete:
-		return "incomplete"
-	case a.EndStatus != "":
-		return a.EndStatus
-	default:
-		return "settled"
+	case state == failure.RunEndSettled && rp != nil && rp.End != nil && rp.End.Failed > 0:
+		return "FAILED"
+	case state == failure.RunEndSettled:
+		return "ok"
 	}
+	return state
+}
+
+// replayCache keeps one replay per run and re-reads a journal only when
+// its size or mtime moved: the one-hertz tick then costs a stat per run,
+// not a replay per run. version counts changes, so dependents (the
+// store-wide history) recompute only when something new was journaled.
+type replayCache struct {
+	store   *failure.Store
+	entries map[string]*cacheEntry
+	version int
+}
+
+type cacheEntry struct {
+	size  int64
+	mtime time.Time
+	rp    *failure.Replay
+}
+
+func newReplayCache(store *failure.Store) *replayCache {
+	return &replayCache{store: store, entries: map[string]*cacheEntry{}}
+}
+
+// get returns the run's replay, re-reading it only when the journal
+// changed on disk.
+func (c *replayCache) get(id string) (*failure.Replay, error) {
+	path := filepath.Join(c.store.RunDir(id), "journal.jsonl")
+	st, err := os.Stat(path)
+	if err != nil {
+		delete(c.entries, id)
+		return nil, err
+	}
+	if e := c.entries[id]; e != nil && e.size == st.Size() && e.mtime.Equal(st.ModTime()) {
+		return e.rp, nil
+	}
+	rp, err := c.store.Load(id)
+	if err != nil {
+		return nil, err
+	}
+	c.entries[id] = &cacheEntry{size: st.Size(), mtime: st.ModTime(), rp: rp}
+	c.version++
+	return rp, nil
 }
 
 // loadRuns lists every run, newest first, with the replay-derived facts.
-func loadRuns(store *failure.Store, now time.Time) []RunRow {
-	audits, err := store.AuditRuns()
+// A store that cannot be listed is an error the screen shows, never an
+// empty table.
+func loadRuns(cache *replayCache, now time.Time) ([]RunRow, error) {
+	audits, err := cache.store.AuditRuns()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var rows []RunRow
 	for _, a := range audits {
-		row := RunRow{ID: a.RunID, Name: a.Name, Workflow: a.Workflow, State: runState(a), Started: a.Started}
-		if hdr, err := store.LoadHeader(a.RunID); err == nil {
-			row.ConfigPath = hdr.ConfigPath
+		rp, rerr := cache.get(a.RunID)
+		row := RunRow{ID: a.RunID, Name: a.Name, Workflow: a.Workflow, State: runState(a, rp), Started: a.Started}
+		if rerr != nil {
+			row.State = "unreadable"
+			rows = append(rows, row)
+			continue
 		}
-		if rp, err := store.Load(a.RunID); err == nil {
-			row.Wall = wallOf(rp, a.Live, now)
-			if rp.End != nil {
-				row.Failed = rp.End.Failed
-				if rp.End.Failed > 0 && row.State == failure.RunEndSettled {
-					row.State = "FAILED"
-				} else if row.State == failure.RunEndSettled {
-					row.State = "ok"
+		row.ConfigPath = rp.Header.ConfigPath
+		row.Wall = wallOf(rp, a.Live, now)
+		if rp.End != nil {
+			row.Failed = rp.End.Failed
+		}
+		if a.Live {
+			if r := rp.Running(); len(r) > 0 {
+				row.Now = r[0].StepID
+				row.bounds = map[string]int{}
+				for id := range rp.LastByStep {
+					config.NoteLoopBounds(row.bounds, id)
 				}
-			}
-			if a.Live {
-				if r := running(rp, now); len(r) > 0 {
-					row.Now = r[0].Step
-					row.bounds = map[string]int{}
-					for id := range rp.LastByStep {
-						config.NoteLoopBounds(row.bounds, id)
-					}
-					for _, s := range rp.Starts {
-						config.NoteLoopBounds(row.bounds, s.StepID)
-					}
+				for _, s := range rp.Starts {
+					config.NoteLoopBounds(row.bounds, s.StepID)
 				}
 			}
 		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Started.After(rows[j].Started) })
-	return rows
+	return rows, nil
 }
 
 // wallOf is the run's wall clock: start to the newest record (or to now
@@ -202,29 +297,20 @@ func wallOf(rp *failure.Replay, live bool, now time.Time) time.Duration {
 	return last.Sub(rp.Header.Started)
 }
 
-// Running is one step whose last start has no later result: running, or
-// dead mid-box if the run is not live.
+// Running is the view's name for failure.RunningStep: a step whose last
+// start has no later result — running, or dead mid-box if the run is not
+// live. The derivation lives on the replay, shared with every reader.
 type Running struct {
 	Step    string
 	Attempt int
 	Since   time.Time
 }
 
-// running derives in-flight steps from the journal alone: the newest start
-// per step with no result finished after it.
-func running(rp *failure.Replay, now time.Time) []Running {
-	last := map[string]failure.StartRecord{}
-	for _, s := range rp.Starts {
-		last[s.StepID] = s
-	}
+func runningOf(rp *failure.Replay) []Running {
 	var out []Running
-	for id, s := range last {
-		if rec, ok := rp.LastByStep[id]; ok && !rec.Result.Timing.Finished.Before(s.Started) {
-			continue
-		}
-		out = append(out, Running{Step: id, Attempt: s.Attempt, Since: s.Started})
+	for _, r := range rp.Running() {
+		out = append(out, Running{Step: r.StepID, Attempt: r.Attempt, Since: r.Since})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Since.After(out[j].Since) })
 	return out
 }
 
@@ -236,20 +322,14 @@ type Stats struct {
 	N             int
 }
 
-// stats computes the per-leaf-step-name distributions. Keyed by the id's
-// last segment because that is what repeats across loops, instances, and
-// runs.
-func stats(store *failure.Store) map[string]Stats {
-	audits, err := store.AuditRuns()
-	if err != nil {
-		return nil
-	}
+// stats computes the per-leaf-step-name distributions over every replay
+// the cache holds. Keyed by the id's last segment because that is what
+// repeats across loops, instances, and runs. Recomputed when the cache's
+// version moves (a journal grew), never per tick.
+func stats(cache *replayCache) map[string]Stats {
 	samples := map[string][]time.Duration{}
-	for _, a := range audits {
-		rp, err := store.Load(a.RunID)
-		if err != nil {
-			continue
-		}
+	for _, e := range cache.entries {
+		rp := e.rp
 		for key, rec := range rp.Results {
 			if key.InputHash == "" || rec.Result.Status != failure.StatusOK {
 				continue
@@ -285,27 +365,22 @@ type RunView struct {
 	Err     error // the config could not be re-derived; the journal still shows
 }
 
-// loadRun replays the journal, re-derives the IR from the header's config
-// (the way resume does), and reports; a config that no longer loads leaves
-// the IR nil and the report journal-only.
-func loadRun(store *failure.Store, id string, st map[string]Stats, now time.Time) (*RunView, error) {
-	rp, err := store.Load(id)
+// loadRun replays the journal (through the cache), re-derives the IR from
+// the header's config the way resume does (through the IR cache), and
+// reports; a config that no longer loads, or a relative journaled path,
+// leaves the IR nil and the report journal-only with the reason on Err.
+func loadRun(cache *replayCache, irs *irCache, id string, st map[string]Stats, now time.Time) (*RunView, error) {
+	_ = now
+	rp, err := cache.get(id)
 	if err != nil {
 		return nil, err
 	}
+	store := cache.store
 	v := &RunView{ID: id, Replay: rp, Live: store.RunLive(id), RunDir: store.RunDir(id), Stats: st}
-	var targets map[string]*config.IR
-	if cfg, viols, err := config.Load(rp.Header.ConfigPath); err != nil {
-		v.Err = err
-	} else if err := config.Validate(cfg, viols); err != nil {
-		v.Err = err
+	targets, cerr := irs.get(rp.Header.ConfigPath)
+	if cerr != nil {
+		v.Err = cerr
 	} else {
-		targets = map[string]*config.IR{}
-		for name := range cfg.Workflows {
-			if ir, err := config.Desugar(cfg, name); err == nil {
-				targets[name] = ir
-			}
-		}
 		v.IR = targets[rp.Header.Workflow]
 	}
 	report, err := (pipeline.RunReporter{Targets: targets}).Report(rp, v.IR, filepath.Join(v.RunDir, "journal.jsonl"))
@@ -313,7 +388,7 @@ func loadRun(store *failure.Store, id string, st map[string]Stats, now time.Time
 		return nil, err
 	}
 	v.Report = report
-	v.Running = running(rp, now)
+	v.Running = runningOf(rp)
 	v.Bounds = config.LoopBounds(v.IR)
 	for id := range rp.LastByStep {
 		config.NoteLoopBounds(v.Bounds, id)
@@ -325,8 +400,8 @@ func loadRun(store *failure.Store, id string, st map[string]Stats, now time.Time
 }
 
 // previewWorkflow builds a RunView over the IR alone — an empty replay
-// reported through the same reporter — so the Run screen's tree and graph
-// show a workflow's compute graph before any run exists. Every line is
+// reported through the same reporter — so the Run screen's tree and flow
+// show a workflow before any run exists. Every line is
 // "absent", which the preview renders as structure rather than state.
 func previewWorkflow(p *Project, name string) (*RunView, error) {
 	if p == nil || p.cfg == nil {
@@ -346,6 +421,9 @@ func previewWorkflow(p *Project, name string) (*RunView, error) {
 
 // outputTail reads the last n lines of an attempt's output.log.
 func outputTail(runDir, nodeID string, attempt, n int) []string {
+	if n <= 0 {
+		return nil
+	}
 	raw, err := os.ReadFile(filepath.Join(pipeline.AttemptDir(runDir, nodeID, attempt), pipeline.OutputLogName))
 	if err != nil {
 		return nil
@@ -389,6 +467,7 @@ func sortedKeys[V any](m map[string]V) []string {
 // crumb folds a node id into the breadcrumb the progress stream uses:
 // root segment dropped, iterations as "name i/cap".
 func crumb(id, workflow string, bounds map[string]int) string {
+	id = strings.TrimSuffix(id, "/") // an iteration prefix names the iteration, not a child
 	if id == "" {
 		return ""
 	}

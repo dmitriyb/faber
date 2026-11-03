@@ -3,12 +3,14 @@
 ## What it is
 
 The two screens of the live view and the model they read. Three rules keep
-the view honest and bound its scope: it shows nothing the CLI cannot show
-(every screen is a command rendered live — `validate`, the preflight,
-`runs`, the report), it does nothing the CLI cannot do (every action is a
-`faber` command, spawned or named), and it holds no state the journal does
-not (every tick and keystroke rebuilds the model from the store, so a crash
-loses a cursor position).
+the view honest and bound its scope: it shows nothing the store, the
+reporter and the IR cannot answer (every screen is a reading of what
+`validate`, the preflight, `runs` and the report read — never a guess
+about what the engine is doing), it does nothing the CLI cannot do (every
+action is a `faber` command, spawned or named), and it holds no state the
+journal does not (every tick and keystroke re-derives the model from the
+store — journals by stat, replayed only when they grew — so a crash loses
+a cursor position).
 
 ## The model
 
@@ -48,15 +50,19 @@ image table (`ok built`, `MISSING faber build`, `not checked`). The runs
 pane is the `faber runs` table with wall and a `now` column (the live run's
 breadcrumb), folding to id / state / now under a hundred columns; the
 selection is a full reverse-video row. Below: `now` (the running step with
-elapsed and median), `last` (the newest settlement), `next` (what the run
-waits on). The image table names the tag hash a missing image was looked
-up under, so "MISSING" is checkable against `docker image ls`. Keys: `tab`
-(or left/right) moves the focus between the runs and the workflows pane;
+elapsed and p50), `last` (the newest settlement) — computed on refresh,
+never while drawing. A quiet live run gets no `next` line: the journal
+cannot say what the scheduler waits on, so the view does not guess. The
+image table names the tag hash a missing image was looked up under, so
+"MISSING" is checkable against `docker image ls`. Keys: `tab` (or
+left/right) moves the focus between the runs and the workflows pane;
 `j`/`k` move within it; enter opens the selected run, or — with the
 workflows pane focused — the selected workflow's preview; `r` prompts `run
-<workflow> [k=v …]` and spawns the child; `p` pauses a live run (and refuses, with a message, a
-run that is not live — no marker is written); `R` spawns the resume; `q`
-quits. Prune, upgrade and key management stay CLI-only.
+<workflow> [k=v …]` and spawns the child; `p` pauses a live run (and
+refuses, with a message, a run that is not live — no marker is written);
+`R` spawns the resume (and refuses a live run, which holds its own lock);
+`q` quits. The footer lists every key the screen answers to. Prune,
+upgrade and key management stay CLI-only.
 
 ## Run
 
@@ -80,8 +86,12 @@ over OUTPUT, and the footer.
   to keep it visible.
 - **flow**: the workflow as the author wrote it, vertical. Steps are
   lines in dependency order, each with its facts in fixed columns: `if …`
-  for a guard (step references rewritten to leaf names, the unrolled
-  loop gate dropped), `after …` for a `depends_on`. A loop is a frame:
+  for a guard (the author's condition whole, step references rewritten
+  to leaf names — the structure is read from iteration 1, which carries
+  no loop gate), `after …` for a `depends_on` (an edge out of a selector
+  is the loop's plumbing and is not one). A sub-workflow is a group row
+  naming its workflow with the body one level in, no frame, since it
+  does not repeat. A loop is a frame:
   `+- name  x5  until …  ---+` opening it, its body indented inside, and
   `+-----^` closing it — the `^` is the repeat. A generate is a line
   naming its source, target and bound, with its instances side by side
@@ -106,7 +116,7 @@ over OUTPUT, and the footer.
   terminal-sanitized.
 
 Keys: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
-`n` the next FAIL/HALT/WAIT, `/` a filter over id, name and status, `f`
+`n` the next FAIL/HALT/WAIT — each on the cursor of the view shown — `/` a filter over id, name and status, `f`
 toggles follow (selection on the newest running step, else the first
 problem), `enter` opens or closes an iteration, `t`/`w`/`l` switch tree, workflow, timeline,
 `q` returns to Home — and, with a failed step selected, remembers its
@@ -116,7 +126,7 @@ view exits.
 ## Workflow preview
 
 Enter on a workflow opens the Run screen's views over the IR alone: an
-empty replay reported through the same reporter, so the tree and the graph
+empty replay reported through the same reporter, so the tree and the flow
 show the flow before any run exists — loops as frames with their cap and
 exit, their body listed once (nested loops framed the same way, in
 dependency order), generate nodes, sub-workflows — with no status column,
@@ -130,8 +140,16 @@ starts this workflow through the same prompt as Home, `q` returns.
 ## Liveness
 
 A one-hertz tick reloads the store and redraws; so does every keystroke. A
+journal is replayed only when its size or mtime moved; the history is
+recomputed only when some journal was; the project reloads when the
+config's mtime moved, and the images are re-probed on a slow cadence. A
 run started by another process is watched the same way, the run lock being
-what makes it LIVE. The bell rings once per newly seen FAIL or HALT step and
+what makes it LIVE. A store that cannot be listed shows its error on the
+status row over the last good table. Ctrl-C and Ctrl-D arrive as bytes in
+raw mode and quit like `q`; SIGTERM and SIGHUP cancel the loop's context,
+so the terminal is restored on every exit path. A run whose config no
+longer loads still renders from its journal, with the reason on the strip
+and an empty flow. The bell rings once per newly seen FAIL or HALT step and
 once when the watched run pauses — one byte the terminal turns into a
 notification, so the operator can leave the window.
 
@@ -139,7 +157,8 @@ notification, so the operator can leave the window.
 
 `r` and `R` spawn `faber run <wf> --param k=v … --config <path> --progress
 json` / `faber resume <id> --progress json` in their own session with
-stdout and stderr appended to `<state>/logs/<sub>-<timestamp>.log`; the
+stdout and stderr appended to `<state>/logs/<sub>-<timestamp>-<pid>.log`
+(nanosecond timestamp, so two spawns never share a file); the
 view reports the exact command and the log path and sees the run through
 the journal within a tick. Closing the view never stops a run.
 

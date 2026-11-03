@@ -8,6 +8,9 @@ package tui
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/dmitriyb/faber/config"
@@ -48,6 +51,11 @@ func New(o Options) *UI {
 // quits, then prints the selected command on stdout (if any) so it sits on
 // the next prompt line.
 func (u *UI) Run(ctx context.Context, uo config.UIOptions) error {
+	// A kill must restore the terminal: raw mode has no ISIG, so Ctrl-C
+	// arrives as a byte (handled as quit), while SIGTERM and SIGHUP cancel
+	// the context, which ends the loop and runs the deferred restore.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
 	app := newApp(u.opts, uo)
 	return app.loop(ctx)
 }

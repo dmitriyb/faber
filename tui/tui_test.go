@@ -321,7 +321,7 @@ func TestColourIsAdditive(t *testing.T) {
 // Verifies 38b440a94d4c: the key reader decodes CSI arrows, enter, a lone
 // escape, and plain runes.
 func TestReadKeys(t *testing.T) {
-	in := strings.NewReader("j\x1b[A\r\x1b[6~q")
+	in := strings.NewReader("j\x1b[A\r\x1b[6~\x1bq")
 	out := make(chan key, 8)
 	readKeys(in, out)
 	var got []string
@@ -332,7 +332,7 @@ func TestReadKeys(t *testing.T) {
 			got = append(got, string(k.r))
 		}
 	}
-	if want := "j up enter pgdn q"; strings.Join(got, " ") != want {
+	if want := "j up enter pgdn esc q"; strings.Join(got, " ") != want {
 		t.Errorf("keys %q, want %q", strings.Join(got, " "), want)
 	}
 }
@@ -537,5 +537,162 @@ func TestTickDoesNotMoveCursors(t *testing.T) {
 	m.refresh(context.Background())
 	if m.fsel != before {
 		t.Errorf("tick moved the flow cursor from %d to %d", before, m.fsel)
+	}
+}
+
+// Verifies a22951c98fe3: an action is a detached faber child — the
+// spawned command, its arguments, and the log file the view names are
+// what the operator can reproduce by hand.
+func TestSpawnIsAFaberChild(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	exe := filepath.Join(dir, "faber")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\necho spawned\n"
+	if err := os.WriteFile(exe, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	abs, _ := filepath.Abs(refConfig)
+	m := newApp(Options{Store: store, Now: func() time.Time { return fixed }, Executable: exe, LogDir: filepath.Join(dir, "logs")},
+		config.UIOptions{ConfigPath: abs})
+	m.refresh(context.Background())
+	status := m.spawn("run", "task", "--param", "repo=x")
+	if !strings.HasPrefix(status, "started: faber run task --param repo=x --config "+abs+" --progress json") {
+		t.Fatalf("status %q", status)
+	}
+	logPath := strings.TrimSuffix(strings.TrimPrefix(status[strings.Index(status, "(log "):], "(log "), ")")
+	var args []byte
+	for i := 0; i < 100; i++ { // the child is detached; wait for its output
+		if b, err := os.ReadFile(argsFile); err == nil && len(b) > 0 {
+			args = b
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if want := "run\ntask\n--param\nrepo=x\n--config\n" + abs + "\n--progress\njson\n"; string(args) != want {
+		t.Errorf("child args %q, want %q", args, want)
+	}
+	for i := 0; i < 100; i++ {
+		if b, _ := os.ReadFile(logPath); strings.Contains(string(b), "spawned") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("child output not in the named log %s", logPath)
+}
+
+// Verifies a22951c98fe3: resume on a live run is refused with a message —
+// the run holds its own lock, and a child would only report that.
+func TestResumeRefusedOnLive(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	m.runSel = 0 // the live run sorts first
+	if m.selectedRun().State != "LIVE" {
+		t.Fatalf("expected the live run selected, got %+v", m.selectedRun())
+	}
+	m.handle(context.Background(), key{r: 'R'})
+	if !strings.Contains(m.status, "is live") {
+		t.Errorf("resume on a live run: status %q", m.status)
+	}
+}
+
+// Verifies 38b440a94d4c: Ctrl-C and Ctrl-D arrive as bytes in raw mode
+// and end the view like q; a 9-row terminal and an empty store render
+// without panicking.
+func TestQuitKeysAndTinyScreens(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	for _, r := range []rune{0x03, 0x04} {
+		if m.handle(context.Background(), key{r: r}) {
+			t.Errorf("key %#x did not quit", r)
+		}
+	}
+	m.openRun("20260902-170408-d0feb66b")
+	for _, view := range []string{"tree", "flow", "timeline"} {
+		m.view = view
+		m.rebuildRows()
+		for _, size := range [][2]int{{80, 9}, {40, 12}, {221, 51}} {
+			if f := m.render(size[0], size[1]); len(f.rows) != size[1] {
+				t.Errorf("%s at %dx%d: %d rows", view, size[0], size[1], len(f.rows))
+			}
+		}
+	}
+	empty := failure.NewStore(t.TempDir(), nil)
+	e := testModel(t, empty)
+	if f := e.render(80, 24); !strings.Contains(f.plain(), "no runs") {
+		t.Errorf("empty store: expected 'no runs' on Home:\n%s", f.plain())
+	}
+	if f := e.render(80, 9); len(f.rows) != 9 {
+		t.Errorf("empty store at 80x9: %d rows", len(f.rows))
+	}
+}
+
+// Verifies f392ecd71cd1: a run whose config no longer loads still shows
+// its journal — the tree from the report, the reason on the header strip
+// — with the flow view honest about having no IR.
+func TestRunWithoutConfig(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	// a third run whose header points at a config that is gone
+	id := "20260920-100000-deadbeef"
+	hdr := failure.Header{RunID: id, ConfigPath: filepath.Join(t.TempDir(), "gone.yaml"), Workflow: "task",
+		Params: map[string]string{"repo": "sandbox", "item": "I-9"}, IRHash: "x", IRVersion: 1, Started: t0}
+	j, err := store.Begin(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.AppendResult(failure.ResultRecord{StepID: "task/implement", InputHash: "h1", Result: okRes(t0, t0.Add(time.Minute), `{"branch":"b"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	m := testModel(t, store)
+	m.openRun(id)
+	if m.run == nil || m.run.IR != nil || m.run.Err == nil {
+		t.Fatalf("expected a journal-only view with Err set, got IR=%v err=%v", m.run != nil && m.run.IR != nil, m.run != nil && m.run.Err != nil)
+	}
+	m.view = "tree"
+	m.rebuildRows()
+	plain := m.render(160, 30).plain()
+	if !strings.Contains(plain, "implement") || !strings.Contains(plain, "config:") {
+		t.Errorf("journal-only run: expected the step and the config reason:\n%s", plain)
+	}
+	m.view = "flow"
+	m.rebuildRows()
+	if plain := m.render(160, 30).plain(); !strings.Contains(plain, "nothing to show") {
+		t.Errorf("flow without IR must say so:\n%s", plain)
+	}
+}
+
+// Verifies f392ecd71cd1: the store is read by stat on a tick — a journal
+// that did not grow is not replayed again, one that grew is, and the
+// history follows the cache version.
+func TestReplayCacheByStat(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	v1 := m.cache.version
+	m.refresh(context.Background())
+	if m.cache.version != v1 {
+		t.Errorf("a quiet tick bumped the cache version %d -> %d", v1, m.cache.version)
+	}
+	id := "20260902-170408-d0feb66b"
+	j, err := store.Reopen(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.AppendResult(failure.ResultRecord{StepID: "task/merge", InputHash: "h9", Result: okRes(fixed.Add(-time.Minute), fixed, `{"status":"done"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	m.refresh(context.Background())
+	if m.cache.version == v1 {
+		t.Error("an appended record did not bump the cache version")
+	}
+	if m.statsVer != m.cache.version {
+		t.Errorf("stats at version %d, cache at %d", m.statsVer, m.cache.version)
+	}
+	if _, ok := m.stats["merge"]; !ok {
+		t.Errorf("the new attempt is missing from the history: %v", m.stats)
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 // renderRun draws the Run screen: header, the now/next strip, the chosen
-// left view (tree, graph, timeline) beside STEP and OUTPUT, keys below.
+// left view (tree, flow, timeline) beside STEP and OUTPUT, keys below.
 func renderRun(f *frame, st style, m *model) {
 	w, h := f.w, f.h
 	v := m.run
@@ -26,8 +26,15 @@ func renderRun(f *frame, st style, m *model) {
 		hdr += "   " + k + "=" + v.Replay.Header.Params[k]
 	}
 	right := fmt.Sprintf("started %s   wall %s", v.Replay.Header.Started.Local().Format("15:04"), durText(int(wallOf(v.Replay, v.Live, now).Seconds())))
+	if room := w - vis(right) - 1; vis(hdr) > room { // params can outgrow the width; colour is dropped with the overflow
+		hdr = trunc(stripSGR(hdr), room)
+	}
 	f.put(0, pad(hdr, w-vis(right))+right)
-	f.put(1, m.nowStrip(st))
+	strip := m.nowStrip(st)
+	if v.IR == nil && v.Err != nil {
+		strip = pad(strip, w/2) + st.status("FAIL") + " " + st.dim(trunc("config: "+v.Err.Error(), w/2-6))
+	}
+	f.put(1, strip)
 	f.put(2, st.rule(w))
 	leftW := w * 42 / 100
 	if leftW < 40 {
@@ -55,7 +62,7 @@ func renderRun(f *frame, st style, m *model) {
 	f.put(h-1, footer(st, w, m.runKeys(), "= faber runs + report"))
 }
 
-// renderWorkflow draws the preview: the compute graph (or the folded
+// renderWorkflow draws the preview: the flow (or the folded
 // structure) on the left, the params and the selected node on the right.
 func renderWorkflow(f *frame, st style, m *model) {
 	w, h := f.w, f.h
@@ -365,7 +372,7 @@ func outputPane(st style, m *model, w, h int) []string {
 	}
 	attempt := lastAttempt(m.run.Replay, r.id)
 	out = append(out, title+fmt.Sprintf("   attempt %d   ", attempt)+st.dim("output.log"), st.rule(w))
-	lines := outputTail(m.run.RunDir, r.id, attempt, h-3)
+	lines := outputTail(m.run.RunDir, r.id, attempt, max(0, h-3))
 	if len(lines) == 0 {
 		out = append(out, "  "+st.dim("no output captured"))
 	}
@@ -382,20 +389,20 @@ func padRows(rows []string, h int) []string {
 	return rows[:h]
 }
 
-// sanitize strips terminal controls from box-derived text, like the
-// report's Text path.
+// sanitize keeps box-derived text inside the renderer's contract: plain
+// printable ASCII, one byte per cell. Controls and anything wider become
+// '?', since a double-width rune would break every column after it.
 func sanitize(s string) string {
 	var sb strings.Builder
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			if r == '\t' {
-				sb.WriteString("    ")
-				continue
-			}
-			sb.WriteRune('�')
-			continue
+		switch {
+		case r == '\t':
+			sb.WriteString("    ")
+		case r < 0x20 || r >= 0x7f:
+			sb.WriteByte('?')
+		default:
+			sb.WriteRune(r)
 		}
-		sb.WriteRune(r)
 	}
 	return sb.String()
 }

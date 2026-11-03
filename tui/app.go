@@ -24,13 +24,19 @@ type model struct {
 	now    func() time.Time
 	screen string // "home" | "run"
 
-	project *Project
-	runs    []RunRow
-	runSel  int
-	wfSel   int
-	focus   string // Home: "runs" | "workflows"
-	stats   map[string]Stats
-	preview bool // the Run screen is a static workflow preview (no journal)
+	project  *Project
+	runs     []RunRow
+	runSel   int
+	wfSel    int
+	focus    string // Home: "runs" | "workflows"
+	stats    map[string]Stats
+	preview  bool // the Run screen is a static workflow preview (no journal)
+	cache    *replayCache
+	irs      *irCache
+	statsVer int      // the cache version the stats were computed at (-1 = never)
+	selLines []string // Home's now/last lines for the selected run, computed in refresh
+	ticks    int
+	loadErr  string // the last store error, shown instead of an empty table
 
 	run     *RunView
 	rows    []row
@@ -60,7 +66,8 @@ type prompt struct {
 }
 
 func newApp(o Options, uo config.UIOptions) *model {
-	return &model{opts: o, uo: uo, st: style{color: uo.Color}, now: o.Now, screen: "home", focus: "runs", view: "tree", follow: true, open: map[string]bool{}, alerted: map[string]bool{}}
+	return &model{opts: o, uo: uo, st: style{color: uo.Color}, now: o.Now, screen: "home", focus: "runs", view: "tree", follow: true,
+		open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
 }
 
 func (m *model) selectedRun() *RunRow {
@@ -106,6 +113,41 @@ func (m *model) selectedRow() *row {
 		return nil
 	}
 	return &m.rows[m.sel]
+}
+
+// nextProblem moves the current view's cursor to the next FAIL, HALT or
+// WAIT after it, wrapping.
+func (m *model) nextProblem() {
+	problem := func(status string) bool { return status == "FAIL" || status == "HALT" || status == "WAIT" }
+	switch m.view {
+	case "flow":
+		for i := 1; i <= len(m.frows); i++ {
+			j := (m.fsel + i) % len(m.frows)
+			if f := m.frows[j]; f.kind == "step" && problem(f.status) {
+				m.fsel = j
+				return
+			}
+		}
+	case "timeline":
+		for i := 1; i <= len(m.tgroups); i++ {
+			j := (m.tsel + i) % len(m.tgroups)
+			prefix, _ := groupPrefix(m.run, m.tgroups[j])
+			for _, r := range m.rows {
+				if strings.HasPrefix(r.id, prefix) && r.kind == "step" && problem(r.status) {
+					m.tsel = j
+					return
+				}
+			}
+		}
+	default:
+		for i := 1; i <= len(m.rows); i++ {
+			j := (m.sel + i) % len(m.rows)
+			if r := m.rows[j]; r.kind == "step" && problem(r.status) {
+				m.sel = j
+				return
+			}
+		}
+	}
 }
 
 // moveDown / moveUp move whichever cursor the view shows; the flow cursor
@@ -162,50 +204,73 @@ func (m *model) otherRuns() int {
 	return n
 }
 
-// selectedRunLines are Home's now / last / next lines for the selection.
-func (m *model) selectedRunLines() []string {
+// selectedRunLines are Home's now / last lines for the selection, as the
+// last refresh computed them. Rendering never loads.
+func (m *model) selectedRunLines() []string { return m.selLines }
+
+// computeSelectedLines derives the selection's now and last lines from a
+// cached replay. Nothing is written about what a quiet live run waits on:
+// the journal cannot say, so the view does not guess.
+func (m *model) computeSelectedLines() {
+	m.selLines = nil
 	sel := m.selectedRun()
 	if sel == nil {
-		return nil
+		return
 	}
-	v, err := loadRun(m.opts.Store, sel.ID, m.stats, m.now())
+	v, err := loadRun(m.cache, m.irs, sel.ID, m.stats, m.now())
 	if err != nil {
-		return []string{"  " + m.st.dim(err.Error())}
+		m.selLines = []string{"  " + m.st.dim(err.Error())}
+		return
 	}
-	saved := m.run
+	saved, savedRows := m.run, m.rows
 	m.run = v
 	m.rows = treeRows(v, m.open, m.now())
 	lines := []string{m.nowStrip(m.st)}
 	if last := m.lastSettled(); last != "" {
 		lines = append(lines, "  last  "+m.st.ident(crumb(last, v.Replay.Header.Workflow, v.Bounds))+"   "+m.st.status(m.stateOf(last)))
 	}
-	if v.Live && len(v.Running) == 0 {
-		lines = append(lines, "  next  "+m.st.dim("waiting for a slot, a lane, or a defer window"))
-	}
-	m.run = saved
-	return lines
+	m.run, m.rows = saved, savedRows
+	m.selLines = lines
 }
 
-// refresh reloads everything the current screen shows.
+// probeEvery is how many ticks pass between image re-probes: a docker
+// call per template is not a per-second cost.
+const probeEvery = 30
+
+// refresh reloads what changed: the project when its file moved, the
+// images on a slow cadence, every journal by stat (replayed only when it
+// grew), the history when a journal grew, and the open run.
 func (m *model) refresh(ctx context.Context) {
-	if m.project == nil {
+	m.ticks++
+	if m.project == nil || !m.project.mtime.Equal(configMTime(m.uo.ConfigPath)) || m.ticks%probeEvery == 0 {
 		m.project = loadProject(ctx, m.uo.ConfigPath, m.opts.Images)
 	}
-	if m.stats == nil {
-		m.stats = stats(m.opts.Store)
+	runs, err := loadRuns(m.cache, m.now())
+	if err != nil {
+		m.loadErr = err.Error()
+	} else {
+		m.loadErr = ""
+		m.runs = runs
 	}
-	if m.project != nil && m.project.stats == nil {
-		m.project.stats = m.stats
+	if m.cache.version != m.statsVer {
+		m.stats = stats(m.cache)
+		m.statsVer = m.cache.version
 	}
-	m.runs = loadRuns(m.opts.Store, m.now())
+	m.project.stats = m.stats
 	if m.runSel >= len(m.runs) {
 		m.runSel = len(m.runs) - 1
 	}
 	if m.runSel < 0 {
 		m.runSel = 0
 	}
+	if m.screen == "home" {
+		m.computeSelectedLines()
+	}
 	if m.screen == "run" && m.run != nil && !m.preview {
-		if v, err := loadRun(m.opts.Store, m.run.ID, m.stats, m.now()); err == nil {
+		v, err := loadRun(m.cache, m.irs, m.run.ID, m.stats, m.now())
+		if err != nil {
+			m.status = "run " + m.run.ID + ": " + err.Error()
+		} else {
 			m.run = v
 			m.rebuildRows()
 		}
@@ -306,12 +371,13 @@ func (m *model) bells() {
 
 // openRun switches to the Run screen on a run id.
 func (m *model) openRun(id string) {
-	v, err := loadRun(m.opts.Store, id, m.stats, m.now())
+	v, err := loadRun(m.cache, m.irs, id, m.stats, m.now())
 	if err != nil {
 		m.status = err.Error()
 		return
 	}
 	m.run = v
+	m.quitCmd = ""
 	m.preview = false
 	m.screen = "run"
 	m.sel = 0
@@ -319,7 +385,7 @@ func (m *model) openRun(id string) {
 }
 
 // openWorkflow switches to the Workflow screen: the Run screen's views
-// over the IR alone, nothing journaled — the compute graph before a run.
+// over the IR alone, nothing journaled — the flow before a run.
 func (m *model) openWorkflow(name string) {
 	v, err := previewWorkflow(m.project, name)
 	if err != nil {
@@ -350,15 +416,17 @@ func (m *model) render(w, h int) *frame {
 		f.put(h-1, m.st.chrome(m.prompt.label)+" "+m.prompt.text+"_")
 	} else if m.status != "" {
 		f.put(h-2, m.st.dim(trunc(m.status, w)))
+	} else if m.loadErr != "" {
+		f.put(h-2, m.st.status("FAIL")+" "+m.st.dim(trunc("store: "+m.loadErr, w-5)))
 	}
 	return f
 }
 
 func (m *model) homeKeys() [][2]string {
 	if m.focus == "workflows" {
-		return [][2]string{{"enter", "preview workflow"}, {"tab", "runs"}, {"r", "run workflow"}, {"q", "quit"}}
+		return [][2]string{{"enter", "preview workflow"}, {"tab", "runs"}, {"j/k", "move"}, {"r", "run workflow"}, {"q", "quit"}}
 	}
-	return [][2]string{{"enter", "open run"}, {"tab", "workflows"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
+	return [][2]string{{"enter", "open run"}, {"tab", "workflows"}, {"j/k", "move"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
 }
 
 func (m *model) workflowKeys() [][2]string {
@@ -372,6 +440,9 @@ func (m *model) runKeys() [][2]string {
 // handle applies one key; it returns false when the app should exit.
 func (m *model) handle(ctx context.Context, k key) bool {
 	m.status = ""
+	if k.r == 0x03 || k.r == 0x04 { // raw mode delivers Ctrl-C and Ctrl-D as bytes
+		return false
+	}
 	if m.prompt != nil {
 		switch {
 		case k.name == "esc":
@@ -450,6 +521,10 @@ func (m *model) handleHome(ctx context.Context, k key) bool {
 		}
 	case k.r == 'R':
 		if sel := m.selectedRun(); sel != nil {
+			if sel.State == "LIVE" {
+				m.status = "resume: run " + sel.ID + " is live; it holds its own lock"
+				break
+			}
 			m.status = m.spawn("resume", sel.ID)
 		}
 	case k.r == 'r':
@@ -495,19 +570,17 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		m.moveUp()
 	case k.name == "pgdn":
 		m.follow = false
-		m.sel = min(m.sel+10, len(m.rows)-1)
+		for i := 0; i < 10; i++ {
+			m.moveDown()
+		}
 	case k.name == "pgup":
 		m.follow = false
-		m.sel = max(m.sel-10, 0)
+		for i := 0; i < 10; i++ {
+			m.moveUp()
+		}
 	case k.r == 'n':
 		m.follow = false
-		for i := 1; i <= len(m.rows); i++ {
-			j := (m.sel + i) % len(m.rows)
-			if r := m.rows[j]; r.kind == "step" && (r.status == "FAIL" || r.status == "HALT" || r.status == "WAIT") {
-				m.sel = j
-				break
-			}
-		}
+		m.nextProblem()
 	case k.r == 'f':
 		m.follow = !m.follow
 		m.rebuildRows()
@@ -544,7 +617,7 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 }
 
 // handleWorkflow is the preview's key set: move, open iterations, switch
-// tree/graph, start the workflow, back.
+// tree/flow, start the workflow, back.
 func (m *model) handleWorkflow(ctx context.Context, k key) bool {
 	switch {
 	case k.r == 'q' || k.name == "esc":
@@ -595,7 +668,7 @@ func (m *model) spawn(sub string, args ...string) string {
 	if err := os.MkdirAll(m.opts.LogDir, 0o755); err != nil {
 		return "spawn: " + err.Error()
 	}
-	logPath := filepath.Join(m.opts.LogDir, fmt.Sprintf("%s-%s.log", sub, m.now().Format("20060102-150405")))
+	logPath := filepath.Join(m.opts.LogDir, fmt.Sprintf("%s-%s-%d.log", sub, m.now().Format("20060102-150405.000000000"), os.Getpid()))
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return "spawn: " + err.Error()

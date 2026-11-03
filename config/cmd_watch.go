@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -31,6 +32,9 @@ func runWatchE(cmd *cobra.Command, args []string, deps Deps) error {
 		return usageErr(errors.New("faber watch: needs a terminal on stdin and stdout (pipe-friendly surfaces are `faber runs` and `--progress json`)"))
 	}
 	configPath, _ := cmd.Flags().GetString("config")
+	if abs, err := filepath.Abs(configPath); err == nil {
+		configPath = abs
+	}
 	colorMode, _ := cmd.Flags().GetString("color")
 	color, err := ColorEnabled(colorMode, cmd.ErrOrStderr())
 	if err != nil {

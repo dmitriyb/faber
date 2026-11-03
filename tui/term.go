@@ -35,6 +35,7 @@ func readKeys(r io.Reader, out chan<- key) {
 			}
 			b, _ := br.ReadByte()
 			if b != '[' {
+				br.UnreadByte() // a lone escape followed by a key: both are keys
 				out <- key{name: "esc"}
 				continue
 			}

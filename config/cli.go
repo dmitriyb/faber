@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -268,8 +269,9 @@ func NewRootCmd(deps Deps) *cobra.Command {
 				// scrapes faber's output ever meets a screen.
 				if deps.UI != nil && isTerminal(cmd.OutOrStdout()) && isTerminal(os.Stdin) {
 					color, _ := ColorEnabled("auto", cmd.ErrOrStderr())
+					configPath, _ := filepath.Abs("orchestrator.yaml")
 					return deps.UI.Run(cmd.Context(), UIOptions{
-						ConfigPath: "orchestrator.yaml", Color: color,
+						ConfigPath: configPath, Color: color,
 						Stdin: os.Stdin, Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr(),
 					})
 				}

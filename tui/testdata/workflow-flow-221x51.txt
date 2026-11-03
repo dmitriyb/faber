@@ -48,4 +48,4 @@ FLOW                                                                            
                                                                                                                                      |
                                                                                                                                      |
                                                                                                                                      |
-j/k move   t/w tree workflow   enter expand   r run this workflow   q back   ? all keys                                                                                                  = faber validate --emit-ir, rendered
+j/k move   t/w tree workflow   enter expand   r run this workflow   q back                                                                                                               = faber validate --emit-ir, rendered

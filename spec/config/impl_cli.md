@@ -143,6 +143,7 @@ all errors aggregated; if --emit-ir: canonical IR bytes to cmd.OutOrStdout() (on
 ### runRunE (config/cmd_run.go)
 
 ```
+configPath := filepath.Abs(--config)     # the journal header records an absolute path: resume and watch re-derive from any directory
 runEntry(configPath, workflow, params)   # shared with resume, see below
 construct: journal (fresh run id), meter (from --budget), bindings, runner
 deps.Executor.Execute(ctx, ir, params, opts, logger)

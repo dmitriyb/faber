@@ -11,9 +11,9 @@ docker. The screens are rendered into frames and compared colour-stripped.
   1 failed) with an `output.log` for the failed review; one live (implement
   ok, review@1 started four minutes ago, the run lock held by the test).
 - A fixed clock.
-- Goldens under `testdata/`: `home`, `run-tree`, `run-graph`,
-  `run-timeline`, `run-live` at 221×51 and 80×24 (`UPDATE_GOLDEN=1`
-  regenerates). The four design mock-ups the screens were settled against
+- Goldens under `testdata/`: `home`, `run-tree`, `run-flow`,
+  `run-timeline`, `run-live` at 221×51 and 80×24, and `workflow-flow`,
+  `workflow-tree` at 221×51 (`UPDATE_GOLDEN=1` regenerates). The four design mock-ups the screens were settled against
   live in the proposal's history; the goldens are the renderer's own.
 
 ## Scenarios
@@ -37,8 +37,8 @@ docker. The screens are rendered into frames and compared colour-stripped.
 5. **Colour is additive.** The colour-stripped coloured frame equals the
    plain render; `FAIL`, `STEPS`, and identifiers carry their slots; no
    256-colour sequence appears.
-6. **Key decoder.** `j`, CSI up, CR, CSI 6~, `q` decode to `j up enter
-   pgdn q`.
+6. **Key decoder.** `j`, CSI up, CR, CSI 6~, a lone ESC, `q` decode to
+   `j up enter pgdn esc q` — the key after a lone escape is not eaten.
 7. **Flow rows.** On the failed run the flow reads `implement ok`, the
    `review-cycle` frame at `2 of up to 3` with `until review.verdict ==
    "approved"`, inside it `review FAIL` and `fix` with `if review.verdict
@@ -50,7 +50,7 @@ docker. The screens are rendered into frames and compared colour-stripped.
    (and the runs pane keeps only a dim marker, so one row is highlighted);
    enter on `task` opens the preview; its flow and tree frames at 221×51
    match their goldens; rows carry `review-cycle||up to 3 iterations` with the
-   body steps once and no status words; `j` moves the graph cursor; `q`
+   body steps once and no status words; `j` moves the flow cursor; `q`
    returns home.
 9. **Missing image names its tag.** With a probe that reports every image
    absent under `…:20be39bb9bb7`, Home prints `MISSING  faber build
@@ -65,9 +65,29 @@ docker. The screens are rendered into frames and compared colour-stripped.
     n=2, p50 3m, p90 and p99 4m; a run's STEP shows `p50 … p90 … p99 …
     over 2 attempts in the store`; the preview rows carry `p50 … p90 …`.
 
+12. **Spawn is a faber child.** With `Options.Executable` pointing at a
+    script, `r` runs `faber run task --param repo=x --config <abs>
+    --progress json` detached; the script sees exactly those arguments and
+    its output lands in the log the status line names.
+13. **Resume refused on a live run.** `R` on the LIVE row sets a status
+    naming the run and spawns nothing.
+14. **Quit keys and tiny screens.** Bytes 0x03 and 0x04 end the view like
+    `q`; every view renders at 80×9, 40×12 and 221×51 with exactly that
+    many rows; an empty store renders Home with `no runs in the store yet`
+    and at 80×9.
+15. **A run without its config.** A third run whose header names a config
+    that is gone opens with `Err` set and no IR: the tree still lists its
+    steps, the strip carries `config: …`, and the flow says `nothing to
+    show`.
+16. **Replay cache by stat.** A quiet tick leaves the cache version
+    unchanged; appending a record to a journal bumps it, the history
+    follows, and the new step's attempt appears in it.
+
 ## Edge cases
 
-- Narrow terminals: the runs table folds its columns and the footer drops
-  the CLI equivalent rather than overflowing.
-- A config that no longer loads: the run still renders from the journal
-  with an error line, no IR.
+- Narrow terminals: the runs table folds its columns, the header is cut
+  before the right-hand facts, and the footer drops the CLI equivalent
+  rather than overflowing.
+- A config that no longer loads: scenario 15.
+- Output tails: controls and non-ASCII render as `?`; a zero-height pane
+  reads nothing.

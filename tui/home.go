@@ -168,7 +168,7 @@ func footer(st style, w int, keys [][2]string, equiv string) string {
 	for _, k := range keys {
 		parts = append(parts, st.chrome(k[0])+" "+k[1])
 	}
-	left := strings.Join(parts, "   ") + "   " + st.chrome("?") + " all keys"
+	left := strings.Join(parts, "   ")
 	if vis(left)+vis(equiv)+2 > w {
 		return left
 	}

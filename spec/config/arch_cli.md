@@ -230,7 +230,9 @@ view through the `UI` seam on `Deps` (the tui module; config never imports
 it). Both need stdin and stdout to be terminals: off one, bare `faber` stays
 the usage error — nothing that scrapes faber's output ever meets a screen —
 and `watch` refuses with exit 2 naming `faber runs` and `--progress json`.
-Without a UI wired, `watch` is a structured operational error.
+Without a UI wired, `watch` is a structured operational error. `watch`
+absolutises `--config` as `run` does, and `RunState(RunAudit)` is exported
+so the view and `faber runs` speak one state vocabulary.
 
 `run` and `resume` also take `--progress auto|text|json|none` and `--color
 auto|always|never`, resolved here against stderr before any config is read

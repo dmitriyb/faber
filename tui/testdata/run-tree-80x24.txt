@@ -1,4 +1,4 @@
-run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandboxstarted
+run   20260902-170408-d0feb66b   FAILED   task   it~ started 19:04   wall 15m00s
   now   nothing running   failed at review-cycle 2/3 > review   next: resume
 --------------------------------------------------------------------------------
 STEPS                                    | STEP

@@ -81,12 +81,28 @@ func flowRows(v *RunView, preview bool, now time.Time) []frow {
 		}
 	}
 	walkSel(ir)
-	// ordering edges within one scope: depends_on
+	nodes := map[string]*config.Node{}
+	var walkNodes func(*config.IR)
+	walkNodes = func(g *config.IR) {
+		for i := range g.Nodes {
+			nodes[g.Nodes[i].ID] = &g.Nodes[i]
+			if g.Nodes[i].Sub != nil {
+				walkNodes(g.Nodes[i].Sub)
+			}
+		}
+	}
+	walkNodes(ir)
+	// ordering edges within one scope: the author's depends_on. An edge out
+	// of a selector is the loop's own plumbing and says nothing an author
+	// wrote.
 	after := map[string]string{}
 	var walkEdges func(*config.IR)
 	walkEdges = func(g *config.IR) {
 		for _, e := range g.Edges {
 			if !e.IsOrdering() {
+				continue
+			}
+			if from := nodes[e.From]; from != nil && from.Kind == config.KindSelector {
 				continue
 			}
 			if scopeOf(e.From) == scopeOf(e.To) {
@@ -100,17 +116,6 @@ func flowRows(v *RunView, preview bool, now time.Time) []frow {
 		}
 	}
 	walkEdges(ir)
-	nodes := map[string]*config.Node{}
-	var walkNodes func(*config.IR)
-	walkNodes = func(g *config.IR) {
-		for i := range g.Nodes {
-			nodes[g.Nodes[i].ID] = &g.Nodes[i]
-			if g.Nodes[i].Sub != nil {
-				walkNodes(g.Nodes[i].Sub)
-			}
-		}
-	}
-	walkNodes(ir)
 	running := map[string]Running{}
 	for _, r := range v.Running {
 		running[r.Step] = r
@@ -218,9 +223,24 @@ func flowRows(v *RunView, preview bool, now time.Time) []frow {
 				}
 				continue
 			}
+			if n.Kind == config.KindSubWorkflow && n.Sub != nil {
+				r := frow{kind: "sub", depth: depth, id: stateID, name: leaf(n.ID), guard: "workflow " + n.Sub.Workflow}
+				if n.When != nil {
+					if g := guardCEL(n.When.CEL); g != "" {
+						r.guard = "if " + g + "  " + r.guard
+					}
+				}
+				if a := after[n.ID]; a != "" {
+					r.after = "after " + a
+				}
+				r.status, r.dur, r.since = stateOf(stateID)
+				out = append(out, r)
+				body(n.ID+"/", stateID+"/", depth+1)
+				continue
+			}
 			r := frow{kind: "step", depth: depth, id: stateID, name: leaf(n.ID)}
 			if n.When != nil {
-				if g := guardCEL(n.When.CEL, scope); g != "" {
+				if g := guardCEL(n.When.CEL); g != "" {
 					r.guard = "if " + g
 				}
 			}
@@ -328,37 +348,11 @@ func itemsRow(v *RunView, gen string, depth int) []frow {
 var stepRef = regexp.MustCompile(`steps\["([^"]+)"\]`)
 
 // guardCEL renders a node's guard for humans: step references become
-// leaf names (steps["bead/review-cycle@1/review"].verdict -> review.verdict),
-// and the loop gate an unrolled iteration carries in front of the author's
-// own condition (!(until@i-1) && (…)) is dropped.
-func guardCEL(cel, scope string) string {
-	s := strings.TrimSpace(cel)
-	if strings.HasPrefix(s, "!(") {
-		// "!(gate) && (own)" -> own; a bare "!(gate)" is the gate alone
-		depth, end := 0, -1
-		for i, r := range s {
-			if r == '(' {
-				depth++
-			}
-			if r == ')' {
-				depth--
-				if depth == 0 {
-					end = i
-					break
-				}
-			}
-		}
-		if end > 0 {
-			rest := strings.TrimSpace(s[end+1:])
-			if strings.HasPrefix(rest, "&&") {
-				s = strings.TrimSpace(strings.TrimPrefix(rest, "&&"))
-				s = strings.TrimSuffix(strings.TrimPrefix(s, "("), ")")
-			} else {
-				return ""
-			}
-		}
-	}
-	return leafCEL(s)
+// leaf names (steps["bead/review-cycle@1/review"].verdict -> review.verdict).
+// The structure is read from iteration 1, which carries no loop gate, so
+// the author's condition is shown whole — a leading !(…) is theirs.
+func guardCEL(cel string) string {
+	return leafCEL(strings.TrimSpace(cel))
 }
 
 // leafCEL rewrites steps["<id>"] references to the step's leaf name.
