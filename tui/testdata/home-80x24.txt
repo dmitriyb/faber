@@ -1,0 +1,24 @@
+faber   /workspace/faber/config/testdata/reference.yaml                 19:49:08
+--------------------------------------------------------------------------------
+PROJECT                              | RUNS   this config
+------------------------------------ | -----------------------------------------
+                                     |
+  workflow    params                 |   run id                   state     now
+  epic        group=<required>  repo |   20260915-180538-4fc8c4f3 LIVE      revi
+  task        item=<required>  repo= |   20260902-170408-d0feb66b FAILED
+                                     |
+  config      ok  valid              |
+                                     |
+  image             state            |
+  fix               not checked      |
+  implement         not checked      |
+  merge             not checked      |
+  review            not checked      |
+                                     |
+--------------------------------------------------------------------------------
+SELECTED   20260915-180538-4fc8c4f3   task   started 2026-09-02 19:29   LIVE
+  now   review-cycle 1/3 > review   running  4m00s   usually 4m00s
+  last  implement   ok
+
+
+enter open run   r run workflow   p pause   R resume   q quit   ? all keys

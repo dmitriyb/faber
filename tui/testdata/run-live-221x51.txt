@@ -1,0 +1,51 @@
+run   20260915-180538-4fc8c4f3   LIVE   task   item=I-1   repo=sandbox                                                                                                                            started 19:29   wall 20m00s
+  now   review-cycle 1/3 > review   running  4m00s   usually 4m00s
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+STEPS                                                                                        | STEP
+-------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------
+  step                        status       duration                                          |
+  implement                   ok           16m00s                                            | implement
+  review-cycle                absent                                                         |   status    ok
+  merge                       absent                                                         |   attempt   1
+                                                                                             |   duration  16m00s
+                                                                                             |   usually   16m00s   median across the store
+                                                                                             |   outputs   branch=work/y  pr=18
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             | OUTPUT   attempt 1   output.log
+                                                                                             | ------------------------------------------------------------------------------------------------------------------------------
+                                                                                             |   no output captured
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+j/k move   n next problem   / filter   t/g/l tree graph timeline   f follow   q back   ? all keys                                                                                                       = faber runs + report

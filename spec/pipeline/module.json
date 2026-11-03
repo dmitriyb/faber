@@ -91,7 +91,7 @@
       "preq_id": "296f9fba2c0f",
       "type": "functional",
       "title": "Deferred: observability",
-      "description": "Backlog (design edge case 8): live progress surfaces for a running workflow — a status view that tails the journal of an in-flight run, and inspection of a running workflow. The stream and the durable records such a view reads exist (Progress event stream; the failure module's Durable step start; the per-attempt output.log); the view itself remains reserved."
+      "description": "Backlog (design edge case 8), now mostly delivered: the status view over the journal of an in-flight run is the tui module (Live observability). What remains reserved is tracing — per-step traces beyond output.log and the session transcripts."
     }
   ],
   "components": [

@@ -688,3 +688,33 @@ func TestCLIProgressAndColorFlags(t *testing.T) {
 		t.Fatalf("want exit 2 naming --color, got %d: %s", code, stderr)
 	}
 }
+
+type fakeUI struct {
+	called bool
+	opts   UIOptions
+}
+
+func (f *fakeUI) Run(ctx context.Context, opts UIOptions) error {
+	f.called = true
+	f.opts = opts
+	return nil
+}
+
+// Verifies 67c77533453d: off a terminal, bare faber stays the usage error
+// even with a UI wired, and `faber watch` refuses with exit 2 naming the
+// pipe-friendly surfaces; without a UI wired, watch is a structured error.
+func TestCLIWatchNeedsTerminal(t *testing.T) {
+	ui := &fakeUI{}
+	code, _, stderr := runCLI(t, Deps{UI: ui})
+	if code != 2 || !strings.Contains(stderr, "usage: faber") || ui.called {
+		t.Fatalf("bare faber off a terminal: code %d, ui called %v: %s", code, ui.called, stderr)
+	}
+	code, _, stderr = runCLI(t, Deps{UI: ui}, "watch")
+	if code != 2 || !strings.Contains(stderr, "needs a terminal") || ui.called {
+		t.Fatalf("watch off a terminal: code %d: %s", code, stderr)
+	}
+	code, _, stderr = runCLI(t, Deps{}, "watch")
+	if code != 1 || !strings.Contains(stderr, "tui module") {
+		t.Fatalf("watch without a UI: code %d: %s", code, stderr)
+	}
+}

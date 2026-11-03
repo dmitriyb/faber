@@ -1,0 +1,51 @@
+run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandbox                                                                                                                          started 19:04   wall 15m00s
+  now   nothing running   failed at review-cycle 2/3 > review   next: resume
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TIMELINE                                                                                     | STEP
+-------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------
+                    19:04           19:08           19:11           19:15                    |
+  implement         iiiiiiiiiiiii                                                            | review-cycle 2/3 > review
+  review-cycle@1                rrrrrrrrrrrrrrrrffffffffffffffffffffff                       |   status    FAIL
+  review-cycle@2                                                     XXXXXXXXXXXXX           |   reason    agent-failed
+                                                                                             |   attempt   1
+  14s per column   letters: step initial   X failed                                          |   duration  3m00s
+                                                                                             |   usually   4m00s   median across the store
+review-cycle 2/3  by attempt                                                                 |
+  review              ############################################################## 3m00s   | error
+                                                                                             |   agent exited 1
+                                                                                             |
+                                                                                             | handoff
+                                                                                             |   boxes/x/attempt-1/result/handoff.json
+                                                                                             |
+                                                                                             | re-enter   printed on q
+                                                                                             |   faber resume 20260902-170408-d0feb66b \
+                                                                                             |     --interactive task/review-cycle@2/review
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             | OUTPUT   attempt 1   output.log
+                                                                                             | ------------------------------------------------------------------------------------------------------------------------------
+                                                                                             | prelude: fetch-pr #17 ok
+                                                                                             | agent: claude --print ... started
+                                                                                             | agent: exit 1
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+j/k move   n next problem   / filter   t/g/l tree graph timeline   f follow   q back   ? all keys                                                                                                       = faber runs + report

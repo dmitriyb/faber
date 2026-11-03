@@ -20,6 +20,7 @@ import (
 	"github.com/dmitriyb/faber/infra"
 	"github.com/dmitriyb/faber/pipeline"
 	"github.com/dmitriyb/faber/security"
+	"github.com/dmitriyb/faber/tui"
 )
 
 // stateDir is where faber keeps host-side state: run journals under runs/,
@@ -78,7 +79,13 @@ func wireDeps(stdout, stderr io.Writer) (config.Deps, error) {
 	builder := infra.NewImageBuilder(docker, infra.NewNixCLI(wlog), infra.DefaultNixpkgsPin(),
 		filepath.Join(stateDir(hc), "infra"), wlog)
 	store := failure.NewStore(filepath.Join(stateDir(hc), "runs"), wlog)
+	view := tui.New(tui.Options{
+		Store:  store,
+		Images: imageProbe{tags: imageTagger{b: builder}, docker: docker},
+		LogDir: filepath.Join(stateDir(hc), "logs"),
+	})
 	return config.Deps{
+		UI:        view,
 		Prover:    builder.PackageProver(),
 		Builder:   builder.ConfigBuilder(),
 		Journal:   store,
@@ -282,6 +289,18 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 		}
 	}
 	return runErr
+}
+
+// imageProbe is the TUI's images pane seam: the tag a template resolves to
+// and whether the daemon holds it — the run preflight, shown before a run.
+type imageProbe struct {
+	tags   imageTagger
+	docker infra.DockerClient
+}
+
+func (p imageProbe) Tag(t *config.ResolvedTemplate) (string, error) { return p.tags.Tag(t) }
+func (p imageProbe) Exists(ctx context.Context, tag string) (bool, error) {
+	return p.docker.ImageExists(ctx, tag)
 }
 
 // imageTagger adapts infra's deterministic tag derivation to the pipeline's

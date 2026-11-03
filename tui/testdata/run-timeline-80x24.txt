@@ -1,0 +1,24 @@
+run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandboxstarted
+  now   nothing running   failed at review-cycle 2/3 > review   next: resume
+--------------------------------------------------------------------------------
+TIMELINE                                 | STEP
+---------------------------------------- | -------------------------------------
+                    19:04                |
+  implement         iii                  | review-cycle 2/3 > review
+  review-cycle@1      rrfffff            |   status    FAIL
+  review-cycle@2            XX           |   reason    agent-failed
+                                         |   attempt   1
+  90s per column   letters: step initial |   duration  3m00s
+                                         |   usually   4m00s   median across the
+review-cycle 2/3  by attempt             |
+  review              ########## 3m00s   | error
+                                         | OUTPUT   attempt 1   output.log
+                                         | -------------------------------------
+                                         | prelude: fetch-pr #17 ok
+                                         | agent: claude --print ... started
+                                         | agent: exit 1
+                                         |
+                                         |
+                                         |
+                                         |
+j/k move   n next problem   / filter   t/g/l tree graph timeline   f follow   q

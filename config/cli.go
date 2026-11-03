@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -157,8 +158,28 @@ func (e *RegistryUsageError) Unwrap() error { return e.Err }
 // generic error→exit-code mapping (see cliError below).
 func (e *RegistryUsageError) ExitCode() int { return 2 }
 
+// UIOptions is what the TUI needs from the CLI: the config to show, an
+// optional run to open on, the colour decision, and the terminal streams.
+type UIOptions struct {
+	ConfigPath string
+	Run        string // run id or name to open on; "" opens Home
+	Color      bool
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
+}
+
+// UIRunner is the TUI seam (tui module): the root command opens it on a bare
+// `faber` at a terminal, `faber watch` explicitly. nil = no TUI wired.
+type UIRunner interface {
+	Run(ctx context.Context, opts UIOptions) error
+}
+
 // Deps injects the future modules' capabilities into the CLI.
 type Deps struct {
+	// UI opens the live view (tui module); nil leaves bare `faber` a usage
+	// error and `faber watch` a structured refusal.
+	UI        UIRunner
 	Prover    PackageProver
 	Builder   ImageBuilder
 	Executor  Executor
@@ -204,6 +225,8 @@ commands:
   build      build template images
   run        execute a workflow: faber run <workflow> --param k=v ...
   resume     re-enter a journaled run: faber resume <run-id|name>
+  watch      open the live view on this config's runs: faber watch [<run-id|name>]
+             (a bare faber at a terminal opens it too)
   runs       list journaled runs (id, name, workflow, state, started; --json);
              runs pause <run-id|name> asks a live run to pause (drain in-flight
              steps, then stop, exit 4); runs prune deletes finished non-live
@@ -240,6 +263,16 @@ func NewRootCmd(deps Deps) *cobra.Command {
 				return printVersion(cmd.OutOrStdout(), deps.BuildInfo)
 			}
 			if len(args) == 0 {
+				// A bare faber at a terminal is the live view; off a terminal
+				// (a script, a pipe) it stays the usage error, so nothing that
+				// scrapes faber's output ever meets a screen.
+				if deps.UI != nil && isTerminal(cmd.OutOrStdout()) && isTerminal(os.Stdin) {
+					color, _ := ColorEnabled("auto", cmd.ErrOrStderr())
+					return deps.UI.Run(cmd.Context(), UIOptions{
+						ConfigPath: "orchestrator.yaml", Color: color,
+						Stdin: os.Stdin, Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr(),
+					})
+				}
 				return usageErr(errors.New(rootUsageText))
 			}
 			return usageErr(fmt.Errorf("faber: unknown command %q\n%s", args[0], rootUsageText))
@@ -260,6 +293,7 @@ func NewRootCmd(deps Deps) *cobra.Command {
 		newRunCmd(deps),
 		newResumeCmd(deps),
 		newRunsCmd(deps),
+		newWatchCmd(deps),
 		newUpgradeCmd(deps),
 		newAddKeyCmd(deps),
 		newListKeysCmd(deps),

@@ -123,7 +123,7 @@ func (r *RunReport) Text(w io.Writer) error {
 // (those are one range line, counted once each as not reached).
 func (r *RunReport) humanTotals() Totals {
 	var t Totals
-	var items func([]textItem)
+	var items func([]ReadItem)
 	var loops func([]LoopRollup)
 	line := func(l StepLine) {
 		switch l.Status {
@@ -173,13 +173,13 @@ func (r *RunReport) humanTotals() Totals {
 			}
 		}
 	}
-	items = func(is []textItem) {
+	items = func(is []ReadItem) {
 		for _, it := range is {
 			switch {
-			case it.line != nil:
-				line(*it.line)
-			case it.loop != nil:
-				loops([]LoopRollup{*it.loop})
+			case it.Line != nil:
+				line(*it.Line)
+			case it.Loop != nil:
+				loops([]LoopRollup{*it.Loop})
 			}
 		}
 	}
@@ -207,13 +207,13 @@ func (tr textRenderer) step(line StepLine, scope string) string {
 	return stepText(line, scope)
 }
 
-func (tr textRenderer) items(items []textItem, scope, indent string) {
+func (tr textRenderer) items(items []ReadItem, scope, indent string) {
 	for _, it := range items {
 		switch {
-		case it.line != nil:
-			tr.p("%s%s", indent, tr.step(*it.line, scope))
-		case it.loop != nil:
-			tr.loop(*it.loop, scope, indent)
+		case it.Line != nil:
+			tr.p("%s%s", indent, tr.step(*it.Line, scope))
+		case it.Loop != nil:
+			tr.loop(*it.Loop, scope, indent)
 		}
 	}
 }

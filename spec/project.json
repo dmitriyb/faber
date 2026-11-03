@@ -121,6 +121,13 @@
       "title": "Deterministic desugaring",
       "description": "The same YAML input always produces the same JSON IR, byte for byte. The IR is inspectable via faber validate --emit-ir, making the frontend/backend contract testable and diffable.",
       "priority": 2
+    },
+    {
+      "id": "22b7aed35041",
+      "type": "functional",
+      "title": "Live observability",
+      "description": "An operator can see where a run is while it is alive — the running step and since when, whether it is slow against its history, what a ready step waits on, what the box printed, where loops stand against their caps and expectations — from a terminal view that reads only the run store, the reporter, and the IR, shows nothing the CLI cannot show, does nothing the CLI cannot do, and inherits the terminal's theme.",
+      "priority": 3
     }
   ],
   "modules": [
@@ -171,6 +178,13 @@
       "path": "pipeline",
       "description": "The IR executor: topological parallel scheduling, CEL condition evaluation, run-time generate expansion over data-source items, failure propagation, and run reporting.",
       "requires_module": ["51be984560a5", "38eac7b92e62", "6c710a720719", "03dc0699260f"]
+    },
+    {
+      "id": "bfed76fcf2fd",
+      "name": "tui",
+      "path": "tui",
+      "description": "The live view: Home (project, images, runs) and Run (tree, graph, timeline, step, output) screens over the journal, rendered with our own 16-colour ASCII renderer; actions spawn detached faber children.",
+      "requires_module": ["51be984560a5", "6c710a720719", "ac15b2db7263"]
     }
   ],
   "milestones": [
