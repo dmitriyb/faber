@@ -222,7 +222,14 @@ func (m *model) rebuildRows() {
 		m.fsel = 0
 	}
 	if m.fsel < len(m.frows) && m.frows[m.fsel].kind != "step" && m.frows[m.fsel].kind != "gen" {
-		m.moveDown()
+		// settle the flow cursor on a step — the flow's own cursor only,
+		// never the view-dispatching move, which a tick must not touch
+		for i := m.fsel + 1; i < len(m.frows); i++ {
+			if m.frows[i].kind == "step" || m.frows[i].kind == "gen" {
+				m.fsel = i
+				break
+			}
+		}
 	}
 	all := treeRowsMode(m.run, m.open, m.now(), m.preview)
 	if m.filter != "" {

@@ -512,3 +512,30 @@ func TestStatsDistribution(t *testing.T) {
 		t.Errorf("preview rows lack the history:\n%s", preview)
 	}
 }
+
+// Verifies 1d5d7c4db2fe (edge): a tick rebuilds the rows without moving
+// any cursor — the tree, flow and timeline selections stay where the
+// operator put them.
+func TestTickDoesNotMoveCursors(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	m.openRun("20260902-170408-d0feb66b")
+	m.follow = false
+	m.view = "tree"
+	m.sel, m.fsel, m.tsel = 2, 1, 1
+	for i := 0; i < 5; i++ {
+		m.refresh(context.Background()) // what the one-hertz tick does
+	}
+	if m.sel != 2 || m.tsel != 1 {
+		t.Errorf("tick moved cursors: tree %d (want 2), timeline %d (want 1)", m.sel, m.tsel)
+	}
+	if f := m.frows[m.fsel]; f.kind != "step" && f.kind != "gen" {
+		t.Errorf("flow cursor on a frame edge: %+v", f)
+	}
+	before := m.fsel
+	m.refresh(context.Background())
+	if m.fsel != before {
+		t.Errorf("tick moved the flow cursor from %d to %d", before, m.fsel)
+	}
+}
