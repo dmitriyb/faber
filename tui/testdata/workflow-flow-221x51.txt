@@ -1,0 +1,51 @@
+workflow   task   preview: the flow before any run                                                                                                                                          ../config/testdata/reference.yaml
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+FLOW                                                                                                                                 | > PARAMS   2 params
+------------------------------------------------------------------------------------------------------------------------------------ | > STRUCTURE   1 loop
+   > implement                                                                                                p50 3m00s  p90 3m00s   | v NEEDS   4 images   3 roles   4 templates   1 service   9 MISSING
+  +- review-cycle  x3  until review.verdict == "approved" -------------------------------------------------------------------------+ |     image       fix   not checked
+  |     review                                                                                             p50 4m00s  p90 4m00s    | |     image       implement   not checked
+  |     fix             if review.verdict == "changes"                                                     p50 5m00s  p90 5m00s    | |     image       merge   not checked
+  +--------------------------------------------------------------------------------------------------------------------------------^ |     image       review   not checked
+     merge           if review.verdict == "approved"                                                                                 |     identity    implementer   ./keys/implementer   MISSING   key file not found
+                                                                                                                                     |     identity    merger   ./keys/merger   MISSING   key file not found
+                                                                                                                                     |     identity    reviewer   ./keys/reviewer   MISSING   key file not found
+                                                                                                                                     |     template    fix   context   ./hooks/fetch-change   MISSING
+                                                                                                                                     |     template    implement   context   ./hooks/gather-context   MISSING
+                                                                                                                                     |     template    implement   prelude   ./hooks/claim-item   MISSING
+                                                                                                                                     |     template    implement   on_failure   ./hooks/release-item   MISSING
+                                                                                                                                     |     template    review   context   ./hooks/fetch-change   MISSING
+                                                                                                                                     |     resolver    get-token   ./hooks/get-token   MISSING
+                                                                                                                                     |     service     agent-api   file   not checked
+                                                                                                                                     |
+                                                                                                                                     | v STEP   implement   template implement   identity implementer
+                                                                                                                                     |     template    implement
+                                                                                                                                     |     identity    implementer   MISSING
+                                                                                                                                     |   v hooks   3 of 4 set   3 MISSING
+                                                                                                                                     |       context     ./hooks/gather-context   MISSING
+                                                                                                                                     |       prelude     ./hooks/claim-item   MISSING
+                                                                                                                                     |       postlude    none
+                                                                                                                                     |       on_failure  ./hooks/release-item   MISSING
+                                                                                                                                     |   > inputs/outputs   2 inputs   2 outputs
+                                                                                                                                     |     agent       skill implement   model agent-model   effort high
+                                                                                                                                     |   > history   2 attempts   p50 3m00s   all runs of task
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+j/k move   enter open/close   tab/-> details   t/w views   r run this workflow   q back                                                                                                  = faber validate --emit-ir, rendered

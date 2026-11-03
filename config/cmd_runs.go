@@ -64,14 +64,14 @@ type runRow struct {
 	Started  string `json:"started,omitempty"`
 }
 
-// runState derives the listing state from the audit facts alone: live wins
+// RunState derives the listing state from the audit facts alone: live wins
 // (the lock is held right now), an absent run-end marker means the execution
 // never finished (interrupted or crashed), and otherwise the last run-end's
 // status speaks for itself — the config module never interprets the status
 // vocabulary. The settled fallback covers a probeable run-end whose status
 // field is unprobeable (a hand-edited journal): completeness is still the
 // audited fact.
-func runState(a RunAudit) string {
+func RunState(a RunAudit) string {
 	switch {
 	case a.Live:
 		return "live"
@@ -98,7 +98,7 @@ func runRunsListE(cmd *cobra.Command, args []string, deps Deps) error {
 	}
 	rows := make([]runRow, 0, len(audits))
 	for _, a := range audits {
-		row := runRow{RunID: a.RunID, Name: a.Name, Workflow: a.Workflow, State: runState(a)}
+		row := runRow{RunID: a.RunID, Name: a.Name, Workflow: a.Workflow, State: RunState(a)}
 		if !a.Started.IsZero() {
 			row.Started = a.Started.UTC().Format(time.RFC3339)
 		}

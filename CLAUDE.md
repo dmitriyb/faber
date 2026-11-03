@@ -19,6 +19,7 @@ Faber is **mechanism, not policy**: it knows `docker build`/`docker run`, a work
 | metering | Pluggable estimate/actual budget hooks, endpoint fidelity tiers, 429-defer floor | config |
 | failure | Structured step results, on_failure cleanup, retry, run journal, resume/recovery modes | config |
 | pipeline | IR executor: topological + parallel step scheduling, CEL conditions, generate expansion | config, infra, security, agent, metering, failure |
+| tui | The live view: Home and Run screens over the journal, our own 16-colour ASCII renderer, detached-child actions | config, failure, pipeline |
 
 ## Spec Convention (spexmachina)
 
@@ -57,6 +58,6 @@ Requirements titled `Deferred: …` are captured backlog (the design's open edge
 
 ## Organizational Constraints
 
-- **Module dependency order**: config → infra → security → agent → metering/failure → pipeline, implemented in that order
+- **Module dependency order**: config → infra → security → agent → metering/failure → pipeline → tui, implemented in that order
 - **Spec traceability**: all code must trace back to spec requirements; tests verify requirements, not just coverage
 - **Mechanism/policy split**: any PR that teaches faber a domain word (a tracker, a gate service, a spec tool) is wrong by construction — find the config seam instead

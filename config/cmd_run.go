@@ -3,8 +3,10 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -64,7 +66,15 @@ func runRunE(cmd *cobra.Command, args []string, deps Deps) error {
 		return usageErr(err)
 	}
 
-	cfg, ir, targets, params, err := runEntry(common.config, workflow, supplied)
+	// The journal header carries the config path for resume and for every
+	// reader that joins runs to projects; a path as typed ("orchestrator.yaml")
+	// is only meaningful in this working directory, so it is absolutized
+	// before anything records it.
+	configPath, err := filepath.Abs(common.config)
+	if err != nil {
+		return fmt.Errorf("faber run: resolve --config: %w", err)
+	}
+	cfg, ir, targets, params, err := runEntry(configPath, workflow, supplied)
 	if err != nil {
 		return err
 	}
@@ -78,7 +88,7 @@ func runRunE(cmd *cobra.Command, args []string, deps Deps) error {
 		Sessions:    sessions,
 		MaxParallel: maxParallel, Budgets: budgets, MeteringPath: metering,
 		ReportJSON: reportJSON, Progress: progress, Color: color,
-		ConfigPath: common.config, Workflow: workflow, Supplied: supplied,
+		ConfigPath: configPath, Workflow: workflow, Supplied: supplied,
 		Targets: targets, Config: cfg,
 	}
 	return deps.Executor.Execute(ctx, ir, params, opts, logger.With("component", "pipeline"))

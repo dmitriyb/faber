@@ -1,0 +1,24 @@
+run   20260902-170408-d0feb66b   FAILED   task   it~ started 19:04   wall 15m00s
+  now   nothing running   failed at review-cycle 2/3 > review   next: resume
+--------------------------------------------------------------------------------
+STEPS                                    | STEP
+---------------------------------------- | -------------------------------------
+  step                        status     |
+  implement                   ok         | review-cycle 2/3 > review
+  review-cycle                FAIL       |   status    FAIL
+    @1                        ok         |   reason    agent-failed
+    @2                        FAIL       |   attempt   1
+      review                  FAIL       |   duration  3m00s
+      fix                     not reache |
+    @3                        not reache |   history   1 attempt   all runs of t
+  merge                       not reache |     p50     4m00s
+                                         | OUTPUT   attempt 1   output.log
+                                         | -------------------------------------
+                                         | prelude: fetch-pr #17 ok
+                                         | agent: claude --print ... started
+                                         | agent: exit 1
+                                         |
+                                         |
+                                         |
+j/k move -> open <- close n problem / filter h history p pause R resume
+t/w/l views   f follow   q back

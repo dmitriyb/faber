@@ -1,0 +1,51 @@
+run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandbox                                                                                                                          started 19:04   wall 15m00s
+  now   nothing running   failed at review-cycle 2/3 > review   next: resume
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+TIMELINE   whole run   +/- zoom                                                              | STEP
+-------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------
+                      19:04:08        19:07:39        19:11:11        19:14:43        19:1   |
+  > implement         ##############                                                         | implement
+  review-cycle@1 >                 rrrrrrrrrrrrrrrrrrrfffffffffffffffffffffff                |   status    ok
+  review-cycle@2 >                                                          XXXXXXXXXXXXXX   |   attempt   1
+                                                                                             |   duration  3m00s
+  13s per column   letters: step initials, X failed, # one step   zoom x1                    |   outputs   branch=work/x  pr=17
+                                                                                             |
+                                                                                             |   history   2 attempts   all runs of task   h to switch
+                                                                                             |     p50     3m00s
+                                                                                             |     p90     3m00s
+                                                                                             |     p99     3m00s
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             | OUTPUT   attempt 1   output.log
+                                                                                             | ------------------------------------------------------------------------------------------------------------------------------
+                                                                                             |   no output captured
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+j/k move   -> in   <- up   +/- zoom   n problem   h history   p pause   R resume   t/w/l views   f follow   q back                                                                                      = faber runs + report

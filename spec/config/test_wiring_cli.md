@@ -127,6 +127,11 @@ param checking.
     `--progress` or `--color` on `run`/`resume` exits 2 naming the flag,
     before any config is read.
 
+17. **Watch needs a terminal.** With a fake UI wired, bare `faber` off a
+    terminal exits 2 with the usage text and never calls the UI; `faber
+    watch` exits 2 naming the terminal requirement; without a UI, `watch`
+    is an exit-1 structured error naming the tui module.
+
 ## Edge cases
 
 - Unknown `--param name=v` (not in params interface): rejected, listing declared

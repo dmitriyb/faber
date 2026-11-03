@@ -548,6 +548,13 @@ func skillsLink(t *config.ResolvedTemplate) string {
 	return t.Skills.Link
 }
 
+// AttemptDir is the host directory of one attempt of one node under a run
+// directory — where result/, output.log, and sessions/ live. Exported so a
+// reader (the TUI) finds them without re-deriving the path token.
+func AttemptDir(runDir, nodeID string, attempt int) string {
+	return filepath.Join(runDir, "boxes", pathToken(nodeID), "attempt-"+strconv.Itoa(attempt))
+}
+
 // pathToken maps a node id onto a filesystem-safe directory name. A short
 // hash of the raw id keeps distinct ids distinct after character mapping.
 func pathToken(id string) string {

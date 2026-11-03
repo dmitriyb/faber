@@ -356,3 +356,53 @@ func TestSanitizeTermRawControlBytes(t *testing.T) {
 		t.Errorf("printable text mangled: %q", got)
 	}
 }
+
+// Verifies 46b463750d77 (edge): a nested loop's selector is routed into
+// its enclosing iteration, never surfaced as a top-level loop — the
+// pull-loop epic (cycles > review-cycle, land) rolls up to exactly one
+// top-level loop whose iterations carry the nested loops.
+func TestRollup_NestedLoopSelectorsStayNested(t *testing.T) {
+	ok := func(id string) StepLine { return StepLine{ID: id, Status: StateOK, Duration: "1s"} }
+	notReached := func(id, anc string) StepLine { return StepLine{ID: id, Status: StateSkippedDependency, Ancestor: anc} }
+	lines := []StepLine{
+		ok("epic/cycles@1/implement"),
+		ok("epic/cycles@1/review-cycle@1/review"),
+		{ID: "epic/cycles@1/review-cycle@1/fix", Status: StateSkippedCondition},
+		{ID: "epic/cycles@1/review-cycle@2/review", Status: StateSkippedCondition},
+		{ID: "epic/cycles@1/review", Status: StateOK, Chose: "epic/cycles@1/review-cycle@1/review"}, // selector of cycle 1's review-cycle
+		ok("epic/cycles@1/land@1/merge"),
+		{ID: "epic/cycles@1/merge", Status: StateOK, Chose: "epic/cycles@1/land@1/merge"}, // selector of cycle 1's land
+		notReached("epic/cycles@2/implement", "epic/cycles@1/land@1/merge"),
+		notReached("epic/cycles@2/review-cycle@1/review", "epic/cycles@1/land@1/merge"),
+		notReached("epic/cycles@2/review", "epic/cycles@1/land@1/merge"),
+		notReached("epic/cycles@2/land@1/merge", "epic/cycles@1/land@1/merge"),
+		notReached("epic/cycles@2/merge", "epic/cycles@1/land@1/merge"),
+		{ID: "epic/implement", Status: StateOK, Chose: "epic/cycles@1/implement"}, // selector of cycles
+	}
+	sels := map[string]string{
+		"epic/cycles@1/review": "epic/cycles@1/review-cycle", "epic/cycles@1/merge": "epic/cycles@1/land",
+		"epic/cycles@2/review": "epic/cycles@2/review-cycle", "epic/cycles@2/merge": "epic/cycles@2/land",
+		"epic/implement": "epic/cycles",
+	}
+	plain, loops := rollupLoops(lines, "epic/", map[string]int{"epic/cycles": 2, "epic/cycles@1/review-cycle": 2, "epic/cycles@1/land": 1}, sels)
+	if len(plain) != 0 {
+		t.Errorf("plain lines %v, want none", plain)
+	}
+	if len(loops) != 1 || loops[0].Loop != "epic/cycles" {
+		t.Fatalf("top-level loops %+v, want exactly epic/cycles", loops)
+	}
+	c := loops[0]
+	if c.Ran != 1 || c.Bound != 2 || c.NotReached != [2]int{2, 2} || c.Chose != "epic/cycles@1/implement" {
+		t.Errorf("cycles rollup %+v", c)
+	}
+	if len(c.Iterations) != 1 || len(c.Iterations[0].Loops) != 2 {
+		t.Fatalf("iteration 1 = %+v, want two nested loops", c.Iterations)
+	}
+	names := []string{c.Iterations[0].Loops[0].Loop, c.Iterations[0].Loops[1].Loop}
+	if names[0] != "epic/cycles@1/review-cycle" || names[1] != "epic/cycles@1/land" {
+		t.Errorf("nested loops %v", names)
+	}
+	if rc := c.Iterations[0].Loops[0]; rc.Ran != 1 || rc.Bound != 2 || rc.Chose != "epic/cycles@1/review-cycle@1/review" {
+		t.Errorf("review-cycle rollup %+v", rc)
+	}
+}

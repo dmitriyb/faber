@@ -121,6 +121,15 @@ func rollupLoops(lines []StepLine, scope string, bounds map[string]int, sels map
 	}
 	for _, line := range lines {
 		if loop, ok := sels[line.ID]; ok {
+			// A selector belongs to the scope its loop lives in: a nested
+			// loop's selector (epic/cycles@1/review for the loop
+			// epic/cycles@1/review-cycle) rides into cycle 1 first and is
+			// consumed one level down, never as a top-level loop of its own.
+			if outer, i, nested := loopOf(line.ID, scope); nested && outer != loop {
+				g := get(outer)
+				g.iters[i] = append(g.iters[i], line)
+				continue
+			}
 			l := line
 			get(loop).sel = &l
 			continue

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"sync"
 	"time"
 )
@@ -373,6 +374,33 @@ type Replay struct {
 	// End is the last run-end marker, nil when the last execution of this
 	// run never finished (the pre-upgrade guard's signal).
 	End *RunEndRecord
+}
+
+// RunningStep is a step whose newest start has no result finished after
+// it: running while the run is live, dead mid-box otherwise.
+type RunningStep struct {
+	StepID  string
+	Attempt int
+	Since   time.Time
+}
+
+// Running derives the in-flight steps from the journal alone — the start
+// records against the results — newest first. Any reader of a live journal
+// (the live view, a future status command) shares this one derivation.
+func (rp *Replay) Running() []RunningStep {
+	last := map[string]StartRecord{}
+	for _, s := range rp.Starts {
+		last[s.StepID] = s
+	}
+	var out []RunningStep
+	for id, s := range last {
+		if rec, ok := rp.LastByStep[id]; ok && !rec.Result.Timing.Finished.Before(s.Started) {
+			continue
+		}
+		out = append(out, RunningStep{StepID: id, Attempt: s.Attempt, Since: s.Started})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Since.After(out[j].Since) })
+	return out
 }
 
 // Load replays a journal file. A torn final line (crash mid-append, so the

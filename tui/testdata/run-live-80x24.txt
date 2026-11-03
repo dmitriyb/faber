@@ -1,0 +1,24 @@
+run   20260915-180538-4fc8c4f3   LIVE   task   item~ started 19:29   wall 20m00s
+  now   review-cycle 1/3 > review   running  4m00s   usually 4m00s
+--------------------------------------------------------------------------------
+STEPS                                    | STEP
+---------------------------------------- | -------------------------------------
+  step                        status     |
+  implement                   ok         | implement
+  review-cycle                absent     |   status    ok
+  merge                       absent     |   attempt   1
+                                         |   duration  16m00s   slow  past this
+                                         |   outputs   branch=work/y  pr=18
+                                         |
+                                         |   history   2 attempts   all runs of
+                                         |     p50     3m00s
+                                         | OUTPUT   attempt 1   output.log
+                                         | -------------------------------------
+                                         |   no output captured
+                                         |
+                                         |
+                                         |
+                                         |
+                                         |
+j/k move -> open <- close n problem / filter h history p pause R resume
+t/w/l views   f follow   q back

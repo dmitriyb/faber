@@ -27,16 +27,17 @@ type RunReport struct {
 	// items is the human text's reading order: plain lines and loop
 	// rollups interleaved in dependency order; sels maps selector ids to
 	// their loops so an ancestor reads as the loop. Not serialized.
-	items []textItem
+	items []ReadItem
 	sels  map[string]string
 	scope string
 }
 
-// textItem is one entry of the text report's reading order: a plain step
-// line or a loop rollup.
-type textItem struct {
-	line *StepLine
-	loop *LoopRollup
+// ReadItem is one entry of the report's reading order: a plain step line or
+// a loop rollup (exactly one is set). The text renderer and the TUI walk
+// the same order.
+type ReadItem struct {
+	Line *StepLine
+	Loop *LoopRollup
 }
 
 // RunHeader is the report's run-level frame.
@@ -105,7 +106,7 @@ type GenItem struct {
 	Skipped  int          `json:"skipped"`
 	Steps    []StepLine   `json:"steps"`
 	Loops    []LoopRollup `json:"loops,omitempty"`
-	items    []textItem
+	items    []ReadItem
 }
 
 // RunReporter derives run reports from journal replays. Targets, when set,
@@ -330,7 +331,7 @@ func (r RunReporter) Report(rp *failure.Replay, ir *config.IR, journalPath strin
 
 // orderAndRollup arranges lines in reading order and folds loops: plain
 // lines keep their place, a loop takes the place of its first line.
-func orderAndRollup(lines []StepLine, order []string, scope string, bounds map[string]int, sels map[string]string) ([]textItem, []LoopRollup) {
+func orderAndRollup(lines []StepLine, order []string, scope string, bounds map[string]int, sels map[string]string) ([]ReadItem, []LoopRollup) {
 	byID := map[string]*StepLine{}
 	for i := range lines {
 		byID[lines[i].ID] = &lines[i]
@@ -362,16 +363,16 @@ func orderAndRollup(lines []StepLine, order []string, scope string, bounds map[s
 	for _, l := range plain {
 		plainSet[l.ID] = true
 	}
-	var items []textItem
+	var items []ReadItem
 	for i := range ordered {
 		l := &ordered[i]
 		if plainSet[l.ID] {
-			items = append(items, textItem{line: l})
+			items = append(items, ReadItem{Line: l})
 			continue
 		}
 		if li, ok := loopAt[l.ID]; ok && !placed[li] {
 			placed[li] = true
-			items = append(items, textItem{loop: &loops[li]})
+			items = append(items, ReadItem{Loop: &loops[li]})
 		}
 	}
 	return items, loops
@@ -408,6 +409,14 @@ func instanceSelectors(lines []StepLine, rp *failure.Replay, scope string) map[s
 	}
 	return out
 }
+
+// ReadingOrder is the top-level reading order (dependency order, loops
+// folded) and Scope the prefix top-level names are relative to.
+func (r *RunReport) ReadingOrder() []ReadItem { return r.items }
+func (r *RunReport) Scope() string            { return r.scope }
+
+// ReadingOrder is the instance's reading order under its own scope.
+func (g *GenItem) ReadingOrder() []ReadItem { return g.items }
 
 func (r *RunReport) tally(status string) {
 	switch status {

@@ -1,0 +1,96 @@
+{
+  "name": "tui",
+  "description": "The live view: a reader over the run store, the reporter, and the IR that renders Home and Run screens on a terminal. It executes nothing in-process, shows nothing the CLI cannot show, and names the command behind every action.",
+  "requirements": [
+    {
+      "id": "f392ecd71cd1",
+      "preq_id": "22b7aed35041",
+      "type": "functional",
+      "title": "Journal-fed live view",
+      "description": "Every fact on screen is re-derived from the run store at each tick and keystroke (journals by stat, replayed only when they grew): runs and their states from the audit scan and the run lock (live), steps from the reporter's loop-aware reading order over the replayed journal, 'running since' from a start record with no later result, loop caps from the IR and the journal, the duration distribution (p50, p90, p99, count) per workflow and step name — across every journal in the store, or this run's alone, a toggle the screen names — and an attempt's output from its output.log. A run started by another process is watched the same way. Nothing is held that the journal does not hold; a crash loses a cursor position."
+    },
+    {
+      "id": "1d5d7c4db2fe",
+      "preq_id": "22b7aed35041",
+      "type": "functional",
+      "title": "Four screens",
+      "description": "Home: the project (workflows with params, the validate verdict, the preflight as counts with a row per problem — images, roles that templates use and whether a key resolves, templates' hook slots whose script is not there, the credential resolver) beside the store's runs (id, name, workflow, state, started, wall, the live run's current step) with the selection's now/last lines. Run: a header, a now/next strip (newest running step with elapsed and p50, or the failure and the way back in), and three views over the selected step beside STEP and OUTPUT — tree (the report's folding: finished iterations one line with their composition, failed, running or opened ones expanded), flow (the workflow as written, vertical: steps with their guards as 'if …' in a fixed column, loops as frames with cap and exit whose closing edge ends in a repeat mark, generates with their instances side by side; the current iteration carries the run's state), timeline (one level at a time: rows for the iterations or steps under the current prefix with status-coloured bars on the level's own axis; enter drills into a group, esc comes up, the full path above, the parent's bar with this window marked). Keys: j/k and arrows move, n jumps to the next FAIL/HALT/WAIT, / filters, f follows the newest active step, enter opens an iteration, t/w/l switch views, q returns."
+    },
+    {
+      "id": "a22951c98fe3",
+      "preq_id": "22b7aed35041",
+      "type": "functional",
+      "title": "Honest actions",
+      "description": "The view shows nothing the CLI cannot show and does nothing the CLI cannot do; every action names its command. Starting a workflow or resuming a run spawns `faber run`/`faber resume … --progress json` as a detached child (its own session, output to the store's logs directory) that the view then follows through the journal; pause writes the run controller's marker and refuses, with a message, on a run that is not live; quitting a run prints the selected step's re-enter command (or the run's resume command) on stdout after the terminal is restored; prune, upgrade and key management stay CLI-only. Bare `faber` opens the view only at a terminal; off one it stays the usage error, and `faber watch` refuses naming the pipe-friendly surfaces."
+    },
+    {
+      "id": "38b440a94d4c",
+      "preq_id": "22b7aed35041",
+      "type": "functional",
+      "title": "Theme-inheriting renderer",
+      "description": "Our own renderer over x/term: raw mode on stdin, the alternate screen and a hidden cursor, size from the terminal at every frame, a full frame built in memory and written once, restoration on every exit path. Text is plain ASCII, one cell per character. Colour is additive on the 16 palette slots only — bold magenta chrome (titles, key letters), blue identifiers, the status column by meaning (green ok, bold red FAIL/HALT, cyan running/LIVE, yellow ready/WAIT/slow, bright black tertiary), reverse video for the selection — so a colour-stripped frame is byte-identical to the plain render and the terminal theme owns every colour. A bell rings once per newly seen FAIL or HALT step and once when a watched run pauses."
+    }
+  ],
+  "components": [
+    {
+      "id": "d57936fd59ce",
+      "name": "Model",
+      "description": "Loads the project (config load, validate, desugar; the image probe per template; the preflight over roles, hook slots and credentials, read-only), the runs listing with wall and the live step, the run view (replay, reporter with every workflow as generate target, running steps, loop caps), the store-wide duration distribution, and an attempt's output tail; folds the report's reading order into the STEPS rows with live states.",
+      "content": "arch_screens.md",
+      "implements": [
+        "f392ecd71cd1"
+      ]
+    },
+    {
+      "id": "f34e9b2277bb",
+      "name": "Screens",
+      "description": "Home and Run renderers over the model: the panes, the now/next strip, the tree, flow and timeline views, STEP and OUTPUT, the footer legend with the CLI equivalent; the key handling, the prompt line, the detached-child actions, the quit command.",
+      "content": "arch_screens.md",
+      "implements": [
+        "1d5d7c4db2fe",
+        "a22951c98fe3"
+      ]
+    },
+    {
+      "id": "d5d523e1c472",
+      "name": "Renderer",
+      "description": "The frame (rows of exactly the terminal width, truncation that keeps colour codes balanced, one write per frame), the role-table styles, the terminal bracket (raw mode, alternate screen, cursor, restore) and the key decoder (runes, CSI arrows and page keys, enter, escape).",
+      "content": "arch_renderer.md",
+      "implements": [
+        "38b440a94d4c"
+      ]
+    }
+  ],
+  "impl_sections": [
+    {
+      "id": "c5e3a5a2d0f1",
+      "name": "Views and actions",
+      "content": "impl_views.md",
+      "describes": [
+        "d57936fd59ce",
+        "f34e9b2277bb",
+        "d5d523e1c472"
+      ]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "9b1d7c4e2a60",
+      "name": "Live view flow",
+      "description": "Tick or key -> store audit + journal replay (+ run lock probe) -> reporter (loop rollups, reading order) + starts (running since) + output.log tail -> rows -> frame -> one terminal write; a key that acts spawns a detached faber child or writes the pause marker, and the next tick sees the result through the journal.",
+      "content": "flow_live_view.md"
+    }
+  ],
+  "test_sections": [
+    {
+      "id": "3f6a8e1b7c92",
+      "name": "TUI tests",
+      "content": "test_tui.md",
+      "describes": [
+        "d57936fd59ce",
+        "f34e9b2277bb",
+        "d5d523e1c472"
+      ]
+    }
+  ]
+}

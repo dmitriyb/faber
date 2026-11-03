@@ -1,0 +1,51 @@
+run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandbox                                                                                                                          started 19:04   wall 15m00s
+  now   nothing running   failed at review-cycle 2/3 > review   next: resume
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+STEPS                                                                                        | STEP
+-------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------
+  step                        status       duration                                          |
+  implement                   ok           3m00s                                             | review-cycle 2/3 > review
+  review-cycle                FAIL                   2 of up to 3                            |   status    FAIL
+    @1                        ok           9m00s     review . fix                            |   reason    agent-failed
+    @2                        FAIL         3m00s                                             |   attempt   1
+      review                  FAIL         3m00s     agent-failed                            |   duration  3m00s
+      fix                     not reached            after review                            |
+    @3                        not reached            after review-cycle@2/review             |   history   1 attempt   all runs of task   h to switch
+  merge                       not reached            after review-cycle@2/review             |     p50     4m00s
+                                                                                             |     p90     4m00s
+                                                                                             |     p99     4m00s
+                                                                                             |
+                                                                                             | error
+                                                                                             |   agent exited 1
+                                                                                             |
+                                                                                             | handoff
+                                                                                             |   boxes/x/attempt-1/result/handoff.json
+                                                                                             |
+                                                                                             | re-enter   printed on q
+                                                                                             |   faber resume 20260902-170408-d0feb66b \
+                                                                                             |     --interactive task/review-cycle@2/review
+                                                                                             |
+                                                                                             |
+                                                                                             | OUTPUT   attempt 1   output.log
+                                                                                             | ------------------------------------------------------------------------------------------------------------------------------
+                                                                                             | prelude: fetch-pr #17 ok
+                                                                                             | agent: claude --print ... started
+                                                                                             | agent: exit 1
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+j/k move   -> open   <- close   n problem   / filter   h history   p pause   R resume   t/w/l views   f follow   q back                                                                                 = faber runs + report
