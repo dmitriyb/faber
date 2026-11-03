@@ -37,8 +37,8 @@ func renderRun(f *frame, st style, m *model) {
 	bodyH := h - 4
 	var left []string
 	switch m.view {
-	case "graph":
-		left = graphPane(st, m, leftW, bodyH)
+	case "flow":
+		left = flowPane(st, m, leftW, bodyH)
 	case "timeline":
 		left = timelinePane(st, m, leftW, bodyH)
 	default:
@@ -58,7 +58,7 @@ func renderWorkflow(f *frame, st style, m *model) {
 	w, h := f.w, f.h
 	v := m.run
 	wf := m.workflowInfo(v.ID)
-	hdr := st.chrome("workflow") + "   " + st.ident(v.ID) + "   " + st.dim("preview: the compute graph before any run")
+	hdr := st.chrome("workflow") + "   " + st.ident(v.ID) + "   " + st.dim("preview: the flow before any run")
 	f.put(0, pad(hdr, w-vis(m.project.Path))+st.dim(m.project.Path))
 	f.put(1, st.rule(w))
 	leftW := w * 60 / 100
@@ -71,7 +71,7 @@ func renderWorkflow(f *frame, st style, m *model) {
 	if m.view == "tree" {
 		left = treePane(st, m, leftW, bodyH)
 	} else {
-		left = graphPane(st, m, leftW, bodyH)
+		left = flowPane(st, m, leftW, bodyH)
 	}
 	right := []string{st.chrome("PARAMS"), st.rule(rightW), ""}
 	if wf != nil {

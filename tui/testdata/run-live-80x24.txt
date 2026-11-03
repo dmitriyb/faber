@@ -21,4 +21,4 @@ STEPS                                    | STEP
                                          |
                                          |
                                          |
-j/k move   n next problem   / filter   t/g/l tree graph timeline   f follow   q
+j/k move   n next problem   / filter   t/g/l tree flow timeline   f follow   q b

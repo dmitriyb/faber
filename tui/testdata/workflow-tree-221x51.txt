@@ -1,4 +1,4 @@
-workflow   task   preview: the compute graph before any run                                                                                                                   /workspace/faber/config/testdata/reference.yaml
+workflow   task   preview: the flow before any run                                                                                                                            /workspace/faber/config/testdata/reference.yaml
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 STEPS                                                                                                                                | PARAMS
 ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------
@@ -48,4 +48,4 @@ STEPS                                                                           
                                                                                                                                      |
                                                                                                                                      |
                                                                                                                                      |
-j/k move   t/g tree graph   enter expand   r run this workflow   q back   ? all keys                                                                                                     = faber validate --emit-ir, rendered
+j/k move   t/g tree flow   enter expand   r run this workflow   q back   ? all keys                                                                                                      = faber validate --emit-ir, rendered

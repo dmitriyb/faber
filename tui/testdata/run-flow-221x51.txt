@@ -1,14 +1,14 @@
 run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandbox                                                                                                                          started 19:04   wall 15m00s
   now   nothing running   failed at review-cycle 2/3 > review   next: resume
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-GRAPH   columns are dependency depth                                                         | STEP
+FLOW                                                                                         | STEP
 -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------
-                                                                                             |
-  [implement             ]---->[review-cycle          ]---->[merge                 ]         | implement
-   ok 3m00s                     FAIL 2 of up to 3            not reached                     |   status    ok
-                                                                                             |   attempt   1
-                                                                                             |   duration  3m00s
-                                                                                             |   usually   16m00s   median across the store
+   > implement                                                        ok       3m00s         |
+  +- review-cycle  2 of up to 3  until review.verdict == "approved" -----------------------+ | implement
+  |     review                                                     FAIL     3m00s          | |   status    ok
+  |     fix             if review.verdict == "changes"             not reached             | |   attempt   1
+  +----------------------------------------------------------------------------------------^ |   duration  3m00s
+     merge           if review.verdict == "approved"                  not reached            |   usually   16m00s   median across the store
                                                                                              |   outputs   branch=work/x  pr=17
                                                                                              |
                                                                                              |
@@ -48,4 +48,4 @@ GRAPH   columns are dependency depth                                            
                                                                                              |
                                                                                              |
                                                                                              |
-j/k move   n next problem   / filter   t/g/l tree graph timeline   f follow   q back   ? all keys                                                                                                       = faber runs + report
+j/k move   n next problem   / filter   t/g/l tree flow timeline   f follow   q back   ? all keys                                                                                                        = faber runs + report

@@ -14,7 +14,7 @@
       "preq_id": "22b7aed35041",
       "type": "functional",
       "title": "Four screens",
-      "description": "Home: the project (workflows with params, the validate verdict, every template's image state from the preflight probe) beside the store's runs (id, name, workflow, state, started, wall, the live run's current step) with the selection's now/last/next lines. Run: a header, a now/next strip (newest running step with elapsed and median, or the failure and the way back in), and three views over the selected step beside STEP and OUTPUT — tree (the report's folding: finished iterations one line with their composition, failed, running or opened ones expanded), graph (the collapsed DAG: loops one node, selectors folded into their loops, longest-path columns, one barycenter pass, orthogonal edges; per-depth summaries above sixty nodes), timeline (one row per outermost iteration or step with status-coloured bars on a width-scaled axis, the selection's attempts one row each). Keys: j/k and arrows move, n jumps to the next FAIL/HALT/WAIT, / filters, f follows the newest active step, enter opens an iteration, t/g/l switch views, q returns."
+      "description": "Home: the project (workflows with params, the validate verdict, every template's image state from the preflight probe) beside the store's runs (id, name, workflow, state, started, wall, the live run's current step) with the selection's now/last/next lines. Run: a header, a now/next strip (newest running step with elapsed and median, or the failure and the way back in), and three views over the selected step beside STEP and OUTPUT — tree (the report's folding: finished iterations one line with their composition, failed, running or opened ones expanded), flow (the workflow as written, vertical: steps with their guards as 'if …' in a fixed column, loops as frames with cap and exit whose closing edge ends in a repeat mark, generates with their instances side by side; the current iteration carries the run's state), timeline (one row per outermost iteration or step with status-coloured bars on a width-scaled axis, the selection's attempts one row each). Keys: j/k and arrows move, n jumps to the next FAIL/HALT/WAIT, / filters, f follows the newest active step, enter opens an iteration, t/g/l switch views, q returns."
     },
     {
       "id": "a22951c98fe3",
@@ -44,7 +44,7 @@
     {
       "id": "f34e9b2277bb",
       "name": "Screens",
-      "description": "Home and Run renderers over the model: the panes, the now/next strip, the tree, graph (collapse, layout, drawing) and timeline views, STEP and OUTPUT, the footer legend with the CLI equivalent; the key handling, the prompt line, the detached-child actions, the quit command.",
+      "description": "Home and Run renderers over the model: the panes, the now/next strip, the tree, flow and timeline views, STEP and OUTPUT, the footer legend with the CLI equivalent; the key handling, the prompt line, the detached-child actions, the quit command.",
       "content": "arch_screens.md",
       "implements": [
         "1d5d7c4db2fe",

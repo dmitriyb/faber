@@ -39,15 +39,17 @@ docker. The screens are rendered into frames and compared colour-stripped.
    256-colour sequence appears.
 6. **Key decoder.** `j`, CSI up, CR, CSI 6~, `q` decode to `j up enter
    pgdn q`.
-7. **Graph layout.** implement, review-cycle, merge land in columns 0, 1,
-   2 (the selector folded into its loop); no iteration node survives the
-   collapse.
+7. **Flow rows.** On the failed run the flow reads `implement ok`, the
+   `review-cycle` frame at `2 of up to 3` with `until review.verdict ==
+   "approved"`, inside it `review FAIL` and `fix` with `if review.verdict
+   == "changes"` not reached, the closing edge, then `merge` with its
+   guard; `j` from the top lands on `review` (frame edges are skipped) and
+   STEP follows the flow cursor.
 
 8. **Workflow preview.** Tab moves the Home focus to the workflows pane
    (and the runs pane keeps only a dim marker, so one row is highlighted);
-   enter on `task` opens the preview; its graph (loop bodies inlined once,
-   `implement -> review-cycle/review -> …`) and tree frames at 221×51 match
-   their goldens; rows carry `review-cycle||up to 3 iterations` with the
+   enter on `task` opens the preview; its flow and tree frames at 221×51
+   match their goldens; rows carry `review-cycle||up to 3 iterations` with the
    body steps once and no status words; `j` moves the graph cursor; `q`
    returns home.
 9. **Missing image names its tag.** With a probe that reports every image

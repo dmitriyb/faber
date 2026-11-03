@@ -1,13 +1,13 @@
-workflow   task   preview: the compute graph before any run                                                                                                                   /workspace/faber/config/testdata/reference.yaml
+workflow   task   preview: the flow before any run                                                                                                                            /workspace/faber/config/testdata/reference.yaml
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-GRAPH   columns are dependency depth                                                                                                 | PARAMS
+FLOW                                                                                                                                 | PARAMS
 ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------
-                                     review-cycle                                                                                    |
-  [implement                  ]---->[review                     ]--+->[merge                      ]                                  |   item        string   required
-                                 |                                 |                                                                 |   repo        string   required
-                                 |                                 |   review-cycle                                                  |
-                                 +---------------------------------+->[fix                        ]                                  | STRUCTURE
-                                                                                                                                     | --------------------------------------------------------------------------------------
+   > implement                                                                                                                       |
+  +- review-cycle  x3  until review.verdict == "approved" -------------------------------------------------------------------------+ |   item        string   required
+  |     review                                                                                                                     | |   repo        string   required
+  |     fix             if review.verdict == "changes"                                                                             | |
+  +--------------------------------------------------------------------------------------------------------------------------------^ | STRUCTURE
+     merge           if review.verdict == "approved"                                                                                 | --------------------------------------------------------------------------------------
                                                                                                                                      |
                                                                                                                                      |   review-cycle              loop, up to 3 iterations
                                                                                                                                      |
@@ -48,4 +48,4 @@ GRAPH   columns are dependency depth                                            
                                                                                                                                      |
                                                                                                                                      |
                                                                                                                                      |
-j/k move   t/g tree graph   enter expand   r run this workflow   q back   ? all keys                                                                                                     = faber validate --emit-ir, rendered
+j/k move   t/g tree flow   enter expand   r run this workflow   q back   ? all keys                                                                                                      = faber validate --emit-ir, rendered

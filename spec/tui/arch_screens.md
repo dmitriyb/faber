@@ -75,17 +75,19 @@ over OUTPUT, and the footer.
   report and the stream (ok, FAIL, HALT, not needed, not reached, absent,
   running); the selection is a full reverse-video row; the window scrolls
   to keep it visible.
-- **graph**: the collapsed DAG — top-level steps, each loop as one node,
-  generate nodes with an instance node each, selectors folded into their
-  loops — with the IR's edges and condition reads mapped through the fold.
-  Columns are longest-path depth from the sources; rows one barycenter pass
-  over the previous column, id order breaking ties; the column pitch fits
-  the pane; boxes are two lines (name; status and duration), edges drawn
-  beneath them, turning in the gap after their source column and running
-  along the target's row, arrowheads last. The graph has its own cursor:
-  `j`/`k` walk the nodes column by column, the selected box is reverse
-  video, and STEP follows it. Above sixty nodes the columns fold to `depth
-  n: k nodes, …`.
+- **flow**: the workflow as the author wrote it, vertical. Steps are
+  lines in dependency order, each with its facts in fixed columns: `if …`
+  for a guard (step references rewritten to leaf names, the unrolled
+  loop gate dropped), `after …` for a `depends_on`. A loop is a frame:
+  `+- name  x5  until …  ---+` opening it, its body indented inside, and
+  `+-----^` closing it — the `^` is the repeat. A generate is a line
+  naming its source, target and bound, with its instances side by side
+  beneath it on a run. No edges are drawn: faber workflows are sequences
+  with guards and loops, and the only true fan-out is a generate. On a run
+  each loop shows its current iteration (`2 of up to 5`) with the
+  journal's state in the status column, `running` on the live step, and
+  the cursor skips frame edges. The same rows draw the workflow preview
+  with `x5` for the cap and no status column.
 - **timeline**: one row per outermost iteration (`review-cycle@2`) or
   top-level step, a bar of the executed attempts' step initials (`X` for a
   failure) coloured by status on an axis scaled to the width, the running
@@ -99,7 +101,7 @@ over OUTPUT, and the footer.
 Keys: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
 `n` the next FAIL/HALT/WAIT, `/` a filter over id, name and status, `f`
 toggles follow (selection on the newest running step, else the first
-problem), `enter` opens or closes an iteration, `t`/`g`/`l` switch views,
+problem), `enter` opens or closes an iteration, `t`/`g`/`l` switch tree, flow, timeline,
 `q` returns to Home — and, with a failed step selected, remembers its
 re-enter command (or the run's resume command) to print on stdout when the
 view exits.
@@ -108,19 +110,14 @@ view exits.
 
 Enter on a workflow opens the Run screen's views over the IR alone: an
 empty replay reported through the same reporter, so the tree and the graph
-show the compute graph before any run exists — loops as `up to N
-iterations` with their body listed once (nested loops folded the same way,
-in dependency order), generate nodes, sub-workflows — with no status words,
-since nothing has state. The preview's graph inlines every loop body once:
-the nodes of iteration 1 at every nesting level with the IR's own edges
-among them (selectors folded onto their first candidate), boxes two lines
-tall with the loop path above the step name, and an outer loop every node
-shares named once in the title (`inside cycles (up to 45 iterations)`)
-rather than in every box. STRUCTURE lists loop shapes once (`cycles >
+show the flow before any run exists — loops as frames with their cap and
+exit, their body listed once (nested loops framed the same way, in
+dependency order), generate nodes, sub-workflows — with no status column,
+since nothing has state. STRUCTURE lists loop shapes once (`cycles >
 review-cycle, up to 5`), never the unrolled iterations. The right pane lists the workflow's params (type, required or
 default), the structure (loops with their caps, generates with their
 source and target), and the selected step's template, lane, guard and
-retry. `t`/`g` switch tree and graph, enter opens a folded body, `r`
+retry. `t`/`g` switch tree and flow, enter opens a folded body, `r`
 starts this workflow through the same prompt as Home, `q` returns.
 
 ## Liveness

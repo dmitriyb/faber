@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -168,7 +169,7 @@ func TestGoldenScreens(t *testing.T) {
 		m.openRun("20260902-170408-d0feb66b")
 		m.follow = true
 		m.rebuildRows()
-		for _, view := range []string{"tree", "graph", "timeline"} {
+		for _, view := range []string{"tree", "flow", "timeline"} {
 			m.view = view
 			checkGolden(t, name("run-"+view), m.render(size[0], size[1]).plain())
 		}
@@ -336,27 +337,40 @@ func TestReadKeys(t *testing.T) {
 	}
 }
 
-// Verifies 1d5d7c4db2fe: the graph layout puts dependents one column
-// right of their dependencies and the collapsed graph has one node per
-// loop.
-func TestGraphLayout(t *testing.T) {
+// Verifies 1d5d7c4db2fe: the flow view reads the IR as the author wrote it
+// — steps in dependency order, guards as "if …" with leaf names, loops as
+// frames with cap and exit — and on a run the current iteration carries
+// the journal's state while the cursor skips frame edges.
+func TestFlowRows(t *testing.T) {
 	store, release := seedStore(t)
 	defer release()
 	m := testModel(t, store)
 	m.openRun("20260902-170408-d0feb66b")
-	nodes, edges := collapsedGraph(m.run, m.rows)
-	layout(nodes, edges)
-	col := map[string]int{}
-	for _, n := range nodes {
-		col[n.id] = n.col
+	m.view = "flow"
+	var lines []string
+	for _, f := range m.frows {
+		lines = append(lines, fmt.Sprintf("%d|%s|%s|%s|%s|%s|%s", f.depth, f.kind, f.name, f.cap, f.guard, f.status, f.after))
 	}
-	if col["task/implement"] != 0 || col["task/review-cycle"] != 1 || col["task/merge"] != 2 {
-		t.Errorf("columns %v, want implement 0, review-cycle 1, merge 2", col)
-	}
-	for _, n := range nodes {
-		if strings.Contains(n.id, "@") {
-			t.Errorf("iteration node %s leaked into the collapsed graph", n.id)
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"0|step|implement|||ok|",
+		"0|open|review-cycle|2 of up to 3|until review.verdict == \"approved\"||",
+		"1|step|review|||FAIL|",
+		"1|step|fix||if review.verdict == \"changes\"|not reached|",
+		"0|close|",
+		"0|step|merge||if review.verdict == \"approved\"|not reached|",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("flow rows lack %q:\n%s", want, got)
 		}
+	}
+	m.fsel = 0
+	m.handle(context.Background(), key{r: 'j'})
+	if f := m.frows[m.fsel]; f.kind != "step" || f.name != "review" {
+		t.Errorf("j landed on %+v, want the review step (frame edges are skipped)", f)
+	}
+	if r := m.selectedRow(); r == nil || r.id != "task/review-cycle@2/review" {
+		t.Errorf("STEP follows the flow cursor: %+v", r)
 	}
 }
 
@@ -377,7 +391,7 @@ func TestWorkflowPreview(t *testing.T) {
 	if m.screen != "run" || !m.preview || m.run.ID != "task" {
 		t.Fatalf("enter did not open the task preview: screen %q preview %v run %v", m.screen, m.preview, m.run)
 	}
-	checkGolden(t, "workflow-graph-221x51.txt", m.render(221, 51).plain())
+	checkGolden(t, "workflow-flow-221x51.txt", m.render(221, 51).plain())
 	m.view = "tree"
 	checkGolden(t, "workflow-tree-221x51.txt", m.render(221, 51).plain())
 	var notes []string

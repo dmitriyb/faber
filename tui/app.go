@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -36,11 +35,9 @@ type model struct {
 	run     *RunView
 	rows    []row
 	sel     int
-	gnodes  []gnode // the graph view's laid-out nodes (nil = rebuild)
-	gedges  [][2]int
-	gorder  []int  // node indices in column-major order, the cursor's path
-	gsel    int    // index into gorder
-	view    string // "tree" | "graph" | "timeline"
+	frows   []frow // the flow view's rows
+	fsel    int    // the flow cursor
+	view    string // "tree" | "flow" | "timeline"
 	follow  bool
 	filter  string
 	open    map[string]bool
@@ -71,18 +68,21 @@ func (m *model) selectedRun() *RunRow {
 }
 
 func (m *model) selectedRow() *row {
-	if m.view == "graph" {
-		nodes, _ := m.graph()
-		if m.gsel < 0 || m.gsel >= len(m.gorder) {
+	if m.view == "flow" {
+		if m.fsel < 0 || m.fsel >= len(m.frows) {
 			return nil
 		}
-		n := nodes[m.gorder[m.gsel]]
+		f := m.frows[m.fsel]
 		for i := range m.rows {
-			if m.rows[i].id == n.id {
+			if m.rows[i].id == f.id && m.rows[i].kind == "step" {
 				return &m.rows[i]
 			}
 		}
-		return &row{id: n.id, kind: "step", name: n.label}
+		kind := "step"
+		if f.kind == "open" || f.kind == "close" {
+			kind = "loop"
+		}
+		return &row{id: f.id, kind: kind, name: f.name, status: f.status, since: f.since}
 	}
 	if m.sel < 0 || m.sel >= len(m.rows) {
 		return nil
@@ -90,50 +90,15 @@ func (m *model) selectedRow() *row {
 	return &m.rows[m.sel]
 }
 
-// graph returns the laid-out graph for the current view, cached per
-// rebuild so the keys and the renderer agree; gorder is the cursor's path
-// through it (column-major).
-func (m *model) graph() ([]gnode, [][2]int) {
-	if m.gnodes == nil {
-		if m.preview {
-			m.gnodes, m.gedges = previewGraph(m.run)
-		} else {
-			m.gnodes, m.gedges = collapsedGraph(m.run, m.rows)
-		}
-		layout(m.gnodes, m.gedges)
-		m.gorder = make([]int, len(m.gnodes))
-		for i := range m.gorder {
-			m.gorder[i] = i
-		}
-		nodes := m.gnodes
-		sort.SliceStable(m.gorder, func(a, b int) bool {
-			na, nb := nodes[m.gorder[a]], nodes[m.gorder[b]]
-			if na.col != nb.col {
-				return na.col < nb.col
-			}
-			return na.row < nb.row
-		})
-		if m.gsel >= len(m.gorder) {
-			m.gsel = 0
-		}
-	}
-	return m.gnodes, m.gedges
-}
-
-// selectedNode is the graph cursor's node index, -1 when none.
-func (m *model) selectedNode() int {
-	if m.view != "graph" || m.gsel < 0 || m.gsel >= len(m.gorder) {
-		return -1
-	}
-	return m.gorder[m.gsel]
-}
-
-// moveDown / moveUp move whichever cursor the view shows.
+// moveDown / moveUp move whichever cursor the view shows; the flow cursor
+// skips frame edges, which are not things.
 func (m *model) moveDown() {
-	if m.view == "graph" {
-		m.graph()
-		if m.gsel < len(m.gorder)-1 {
-			m.gsel++
+	if m.view == "flow" {
+		for i := m.fsel + 1; i < len(m.frows); i++ {
+			if m.frows[i].kind == "step" || m.frows[i].kind == "gen" {
+				m.fsel = i
+				return
+			}
 		}
 		return
 	}
@@ -143,9 +108,12 @@ func (m *model) moveDown() {
 }
 
 func (m *model) moveUp() {
-	if m.view == "graph" {
-		if m.gsel > 0 {
-			m.gsel--
+	if m.view == "flow" {
+		for i := m.fsel - 1; i >= 0; i-- {
+			if m.frows[i].kind == "step" || m.frows[i].kind == "gen" {
+				m.fsel = i
+				return
+			}
 		}
 		return
 	}
@@ -212,7 +180,13 @@ func (m *model) refresh(ctx context.Context) {
 }
 
 func (m *model) rebuildRows() {
-	m.gnodes, m.gedges, m.gorder = nil, nil, nil
+	m.frows = flowRows(m.run, m.preview, m.now())
+	if m.fsel >= len(m.frows) {
+		m.fsel = 0
+	}
+	if m.fsel < len(m.frows) && m.frows[m.fsel].kind != "step" && m.frows[m.fsel].kind != "gen" {
+		m.moveDown()
+	}
 	all := treeRowsMode(m.run, m.open, m.now(), m.preview)
 	if m.filter != "" {
 		var kept []row
@@ -227,6 +201,12 @@ func (m *model) rebuildRows() {
 	if m.follow && !m.preview {
 		if idx := m.newestActive(); idx >= 0 {
 			m.sel = idx
+		}
+		for i, f := range m.frows {
+			if f.kind == "step" && f.status == "running" {
+				m.fsel = i
+				break
+			}
 		}
 	}
 	if m.sel >= len(m.rows) {
@@ -297,7 +277,7 @@ func (m *model) openWorkflow(name string) {
 	m.run = v
 	m.preview = true
 	m.screen = "run"
-	m.view = "graph"
+	m.view = "flow"
 	m.sel = 0
 	m.follow = false
 	m.rebuildRows()
@@ -330,11 +310,11 @@ func (m *model) homeKeys() [][2]string {
 }
 
 func (m *model) workflowKeys() [][2]string {
-	return [][2]string{{"j/k", "move"}, {"t/g", "tree graph"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
+	return [][2]string{{"j/k", "move"}, {"t/g", "tree flow"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
 }
 
 func (m *model) runKeys() [][2]string {
-	return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"/", "filter"}, {"t/g/l", "tree graph timeline"}, {"f", "follow"}, {"q", "back"}}
+	return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"/", "filter"}, {"t/g/l", "tree flow timeline"}, {"f", "follow"}, {"q", "back"}}
 }
 
 // handle applies one key; it returns false when the app should exit.
@@ -482,7 +462,7 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 	case k.r == 't':
 		m.view = "tree"
 	case k.r == 'g':
-		m.view = "graph"
+		m.view = "flow"
 	case k.r == 'l':
 		m.view = "timeline"
 	case k.name == "enter":
@@ -517,7 +497,7 @@ func (m *model) handleWorkflow(ctx context.Context, k key) bool {
 	case k.r == 't':
 		m.view = "tree"
 	case k.r == 'g':
-		m.view = "graph"
+		m.view = "flow"
 	case k.name == "enter":
 		if r := m.selectedRow(); r != nil && r.kind == "iter" {
 			m.open[r.id] = !m.open[r.id]
