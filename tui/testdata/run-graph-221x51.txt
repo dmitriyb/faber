@@ -3,9 +3,9 @@ run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandbox        
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 GRAPH   columns are dependency depth                                                         | STEP
 -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------
-  [implement             ]---->[review-cycle          ]---->[merge                 ]         |
-   implement           ok       review-cycle      FAIL       merge      not reached          | implement
-                                                                                             |   status    ok
+                                                                                             |
+  [implement             ]---->[review-cycle          ]---->[merge                 ]         | implement
+   ok 3m00s                     FAIL 2 of up to 3            not reached                     |   status    ok
                                                                                              |   attempt   1
                                                                                              |   duration  3m00s
                                                                                              |   usually   16m00s   median across the store

@@ -18,6 +18,7 @@ const (
 	sgrIdent  = "\x1b[34m"
 	sgrDim    = "\x1b[90m"
 	sgrRev    = "\x1b[7m"
+	sgrSel    = "\x1b[7;34m" // the selection bar: reverse video in the identifier slot
 	sgrGreen  = "\x1b[32m"
 	sgrRed    = "\x1b[1;31m"
 	sgrCyan   = "\x1b[36m"
@@ -74,7 +75,7 @@ func (st style) wrap(code, s string) string {
 func (st style) chrome(s string) string { return st.wrap(sgrChrome, s) }
 func (st style) ident(s string) string  { return st.wrap(sgrIdent, s) }
 func (st style) dim(s string) string    { return st.wrap(sgrDim, s) }
-func (st style) rev(s string) string    { return st.wrap(sgrRev, s) }
+func (st style) rev(s string) string    { return st.wrap(sgrSel, s) }
 
 // status colours a status word by meaning: the vocabulary of the report
 // and the progress stream, nothing invented here.

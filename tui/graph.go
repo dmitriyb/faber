@@ -323,11 +323,13 @@ func graphPane(st style, m *model, w, h int) []string {
 	if len(nodes) == 0 {
 		return append([]string{title, st.rule(w)}, "  "+st.dim("nothing to draw"))
 	}
+	frame := ""
 	if m.preview {
-		// Every node inside one outer loop shares its path; say it once in
-		// the title instead of in every box.
+		// Every node inside one outer loop shares its path: draw that loop
+		// as a labelled frame around the body, once, instead of in every
+		// caption — the difference between a chain and a chain repeated.
 		if prefix := commonLoopPrefix(nodes); prefix != "" {
-			title = st.chrome("GRAPH") + "   inside " + st.ident(strings.ReplaceAll(prefix, "/", " > ")) + st.dim(fmt.Sprintf("  (up to %d iterations)", m.run.Bounds[m.run.ID+"/"+prefix])) + st.dim("   columns are dependency depth")
+			frame = fmt.Sprintf("%s, up to %d iterations", strings.ReplaceAll(prefix, "/", " > "), m.run.Bounds[m.run.ID+"/"+prefix])
 			for i := range nodes {
 				nodes[i].label = strings.TrimPrefix(nodes[i].label, prefix+"/")
 			}
@@ -407,7 +409,7 @@ func graphPane(st style, m *model, w, h int) []string {
 		}
 		x0 := 2 + a.col*cellW + boxW
 		x1 := 2 + b.col*cellW
-		y0, y1 := a.row*rowH, b.row*rowH
+		y0, y1 := a.row*rowH+1, b.row*rowH+1
 		xv := x0 + 2
 		if y0 == y1 {
 			for x := x0; x < x1-1; x++ {
@@ -435,51 +437,51 @@ func graphPane(st style, m *model, w, h int) []string {
 	for _, h := range heads {
 		put(h[0], h[1], ">")
 	}
+	// Boxes are steps. A preview box carries a dim caption above it — the
+	// loop path the step sits in — and a run's box its status and duration
+	// below. Edges run on the box line.
 	colored := map[[2]int]string{} // (x,y) of a status word start -> status
+	captions := map[[2]int]int{}   // (x,y) -> caption length, dimmed at output
 	selected := map[int]bool{}
 	for i, n := range nodes {
-		x, y := 2+n.col*cellW, n.row*rowH
-		top, name := "", n.label
+		x, y := 2+n.col*cellW, n.row*rowH+1
+		caption, name := "", n.label
 		if m.preview {
 			if j := strings.LastIndex(n.label, "/"); j >= 0 {
-				top, name = n.label[:j], n.label[j+1:]
+				caption, name = n.label[:j], n.label[j+1:]
 			}
-		}
-		status := n.status
-		if m.preview {
-			status = ""
 		}
 		inner := boxW - 2
-		line1 := "[" + pad(trunc(top, inner), inner) + "]"
-		line2 := " " + trunc(name, inner)
-		if status != "" {
-			line2 = " " + pad(trunc(name, inner-len(status)-1), inner-len(status)-1) + " " + status
+		box := "[" + pad(trunc(name, inner), inner) + "]"
+		put(x, y, box)
+		if caption != "" {
+			c := trunc(caption, inner)
+			put(x+1, y-1, c)
+			captions[[2]int{x + 1, y - 1}] = len(c)
 		}
-		if n.dur != "" && vis(line2)+1+len(n.dur) <= boxW {
-			line2 += " " + n.dur
-		}
-		line2 = pad(trunc(line2, boxW), boxW)
-		if !m.preview || top == "" {
-			// a run's box, or a preview node outside any loop: the name on
-			// top, status and duration (or nothing) below
-			line1 = "[" + pad(trunc(name, inner), inner) + "]"
-			if top == "" && m.preview {
-				line2 = pad("", boxW)
+		if !m.preview {
+			below := " " + n.status
+			if n.dur != "" {
+				below += " " + n.dur
+			}
+			put(x, y+1, trunc(below, boxW))
+			if n.status != "" {
+				colored[[2]int{x + 1, y + 1}] = n.status
 			}
 		}
-		put(x, y, line1)
-		put(x, y+1, line2)
-		if status != "" {
-			colored[[2]int{x + 1 + inner - len(status), y + 1}] = status
-		}
 		if i == m.selectedNode() {
-			selected[y], selected[y+1] = true, true
+			selected[y] = true
 			selectedX[y] = [2]int{x, x + boxW}
-			selectedX[y+1] = [2]int{x, x + boxW}
 		}
 	}
+	var body []string
 	for y, line := range canvas {
 		s := string(line)
+		for pos, n := range captions {
+			if pos[1] == y && st.color {
+				s = s[:pos[0]] + st.dim(s[pos[0]:pos[0]+n]) + s[pos[0]+n:]
+			}
+		}
 		if selected[y] {
 			// the selected box in reverse video, codes stripped inside it
 			x0, x1 := selectedX[y][0], selectedX[y][1]
@@ -487,7 +489,7 @@ func graphPane(st style, m *model, w, h int) []string {
 				x1 = len(s)
 			}
 			s = s[:x0] + st.rev(s[x0:x1]) + s[x1:]
-			out = append(out, fitRow(s, w))
+			body = append(body, s)
 			continue
 		}
 		// colour the status words in place
@@ -499,6 +501,20 @@ func graphPane(st style, m *model, w, h int) []string {
 				}
 			}
 		}
+		body = append(body, s)
+	}
+	if frame != "" {
+		// the shared outer loop as a labelled frame around the body
+		inner := width
+		top := "+-- " + frame + " " + strings.Repeat("-", max(0, inner-len(frame)-2)) + "+"
+		out = append(out, fitRow(st.dim(top), w))
+		for _, s := range body {
+			out = append(out, fitRow(st.dim("| ")+pad(s, inner)+st.dim(" |"), w))
+		}
+		out = append(out, fitRow(st.dim("+"+strings.Repeat("-", inner+2)+"+"), w))
+		return out
+	}
+	for _, s := range body {
 		out = append(out, fitRow(s, w))
 	}
 	return out
