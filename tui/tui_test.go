@@ -432,3 +432,83 @@ func (fakeProbe) Tag(t *config.ResolvedTemplate) (string, error) {
 	return "faber/" + t.Name + ":20be39bb9bb7", nil
 }
 func (fakeProbe) Exists(context.Context, string) (bool, error) { return false, nil }
+
+// Verifies 1d5d7c4db2fe: the timeline has its own cursor over its rows,
+// STEP follows the selected iteration, a short step keeps its letter at a
+// coarse scale, and +/- zoom the columns.
+func TestTimelineCursorAndLetters(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	m.openRun("20260902-170408-d0feb66b")
+	m.view = "timeline"
+	m.follow = false
+	if got := strings.Join(m.tgroups, " "); got != "implement review-cycle@1 review-cycle@2" {
+		t.Fatalf("timeline rows %q", got)
+	}
+	m.tsel = 0
+	m.handle(context.Background(), key{r: 'j'})
+	m.handle(context.Background(), key{r: 'j'})
+	if r := m.selectedRow(); r == nil || r.kind != "iter" || r.id != "task/review-cycle@2/" {
+		t.Errorf("timeline selection %+v, want iteration 2", r)
+	}
+	frame := m.render(120, 40).plain()
+	if !strings.Contains(frame, "> review-cycle@2") {
+		t.Errorf("selected row not marked:\n%s", frame)
+	}
+	if !strings.Contains(frame, "review-cycle 2/3  by attempt") {
+		t.Errorf("expanded block does not follow the cursor:\n%s", frame)
+	}
+	// at 12 columns the 3-minute implement shares a column with the review
+	// that starts right after it; the earlier letter must survive
+	narrow := m.render(34, 40).plain()
+	if !strings.Contains(narrow, "implement") {
+		t.Fatalf("narrow frame:\n%s", narrow)
+	}
+	for _, line := range strings.Split(narrow, "\n") {
+		if strings.Contains(line, "implement") && strings.Contains(line, "i") && !strings.Contains(line[2:], "i") {
+			t.Errorf("implement lost its letter at a coarse scale: %q", line)
+		}
+	}
+	m.handle(context.Background(), key{r: '+'})
+	if m.tzoom != 1 {
+		t.Errorf("+ did not zoom: %d", m.tzoom)
+	}
+	zoomed := m.render(221, 51).plain()
+	if !strings.Contains(zoomed, "zoom x2") {
+		t.Errorf("zoom not reflected:\n%s", zoomed)
+	}
+	m.handle(context.Background(), key{r: '-'})
+	if m.tzoom != 0 {
+		t.Errorf("- did not zoom out: %d", m.tzoom)
+	}
+}
+
+// Verifies f392ecd71cd1: the store's history is a distribution per step
+// name — p50, p90, p99 and the sample count — shown on a run's STEP and in
+// the preview's rows.
+func TestStatsDistribution(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	// only ok attempts count: the failed 3-minute review is not history
+	s, ok := m.stats["review"]
+	if !ok || s.N != 1 || s.P50 != 4*time.Minute || s.P90 != 4*time.Minute || s.P99 != 4*time.Minute {
+		t.Fatalf("review stats %+v, want n=1 p50=p90=p99=4m", s)
+	}
+	m.openRun("20260902-170408-d0feb66b")
+	m.follow = true
+	m.rebuildRows()
+	frame := m.render(221, 51).plain()
+	if !strings.Contains(frame, "p50 4m00s  p90 4m00s  p99 4m00s   over 1 attempt in the store") {
+		t.Errorf("STEP lacks the distribution:\n%s", frame)
+	}
+	m.handle(context.Background(), key{r: 'q'})
+	m.handle(context.Background(), key{r: '\t'})
+	m.handle(context.Background(), key{r: 'j'})
+	m.handle(context.Background(), key{name: "enter"})
+	preview := m.render(221, 51).plain()
+	if !strings.Contains(preview, "p50 4m00s  p90 4m00s") {
+		t.Errorf("preview rows lack the history:\n%s", preview)
+	}
+}

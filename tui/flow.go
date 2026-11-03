@@ -228,6 +228,11 @@ func flowRows(v *RunView, preview bool, now time.Time) []frow {
 				r.after = "after " + a
 			}
 			r.status, r.dur, r.since = stateOf(stateID)
+			if preview {
+				if s, ok := v.Stats[leaf(n.ID)]; ok {
+					r.dur = fmt.Sprintf("p50 %s  p90 %s", durText(int(s.P50.Seconds())), durText(int(s.P90.Seconds())))
+				}
+			}
 			out = append(out, r)
 		}
 	}
@@ -465,12 +470,16 @@ func flowPane(st style, m *model, w, h int) []string {
 			line = left + "   " + name + facts
 			if r.status != "" {
 				line = pad(line, statusX-r.depth*3) + st.status(pad(r.status, 9)) + r.dur
+			} else if r.dur != "" {
+				line = pad(line, statusX-r.depth*3) + st.dim(r.dur) // a preview's history
 			}
 			if i == m.fsel {
 				bar := pad(stripSGR(left)+" > "+stripSGR(name)+stripSGR(facts), right-1)
 				if r.status != "" {
 					bar = pad(stripSGR(left)+" > "+stripSGR(name)+stripSGR(facts), statusX-r.depth*3) + pad(r.status, 9) + r.dur
 					bar = pad(bar, right-1)
+				} else if r.dur != "" {
+					bar = pad(pad(stripSGR(left)+" > "+stripSGR(name)+stripSGR(facts), statusX-r.depth*3)+r.dur, right-1)
 				}
 				line = st.rev(bar)
 			}

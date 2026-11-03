@@ -33,8 +33,11 @@ func renderRun(f *frame, st style, m *model) {
 	if leftW < 40 {
 		leftW = 40
 	}
-	rightW := w - leftW - 3
-	bodyH := h - 4
+	if leftW > w-13 {
+		leftW = max(10, w-13) // a tiny terminal still gets both panes, however cramped
+	}
+	rightW := max(10, w-leftW-3)
+	bodyH := max(3, h-4)
 	var left []string
 	switch m.view {
 	case "flow":
@@ -65,8 +68,11 @@ func renderWorkflow(f *frame, st style, m *model) {
 	if leftW < 40 {
 		leftW = 40
 	}
-	rightW := w - leftW - 3
-	bodyH := h - 3
+	if leftW > w-13 {
+		leftW = max(10, w-13)
+	}
+	rightW := max(10, w-leftW-3)
+	bodyH := max(3, h-3)
 	var left []string
 	if m.view == "tree" {
 		left = treePane(st, m, leftW, bodyH)
@@ -120,11 +126,27 @@ func renderWorkflow(f *frame, st style, m *model) {
 				right = append(right, cols([]string{"  retry", fmt.Sprintf("%d", n.Retry)}, []int{12, rightW - 12}))
 			}
 		}
+		if s, ok := v.Stats[leaf(r.id)]; ok {
+			right = append(right, cols([]string{"  history", statsText(s) + st.dim("   over "+plural(s.N, "attempt"))}, []int{12, rightW - 12}))
+		}
 	}
 	for i, row := range panes(st, [][]string{left, right}, []int{leftW, rightW}, bodyH) {
 		f.put(2+i, row)
 	}
 	f.put(h-1, footer(st, w, m.workflowKeys(), "= faber validate --emit-ir, rendered"))
+}
+
+// plural renders "1 attempt" / "2 attempts".
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// statsText renders a distribution as "p50 4m10s  p90 9m01s  p99 20m05s".
+func statsText(s Stats) string {
+	return fmt.Sprintf("p50 %s  p90 %s  p99 %s", durText(int(s.P50.Seconds())), durText(int(s.P90.Seconds())), durText(int(s.P99.Seconds())))
 }
 
 // loopShape is one loop of the workflow as the author wrote it: its path
@@ -203,11 +225,11 @@ func (m *model) nowStrip(st style) string {
 	if len(v.Running) > 0 && v.Live {
 		r := v.Running[0]
 		line := "  now   " + st.ident(crumb(r.Step, wf, v.Bounds)) + "   " + st.status("running") + "  " + elapsedText(r.Since, now)
-		if med, ok := v.Medians[leaf(r.Step)]; ok {
-			if now.Sub(r.Since) > 2*med {
-				line += "   " + st.status("slow") + st.dim("  usually "+durText(int(med.Seconds())))
+		if s, ok := v.Stats[leaf(r.Step)]; ok {
+			if now.Sub(r.Since) > 2*s.P50 {
+				line += "   " + st.status("slow") + st.dim("  usually "+durText(int(s.P50.Seconds())))
 			} else {
-				line += st.dim("   usually " + durText(int(med.Seconds())))
+				line += st.dim("   usually " + durText(int(s.P50.Seconds())))
 			}
 		}
 		if len(v.Running) > 1 {
@@ -293,8 +315,8 @@ func stepPane(st style, m *model, w, h int) []string {
 	if line != nil && line.Duration != "" {
 		kv("duration", fmtDur(line.Duration))
 	}
-	if med, ok := v.Medians[leaf(r.id)]; ok {
-		kv("usually", durText(int(med.Seconds()))+st.dim("   median across the store"))
+	if s, ok := v.Stats[leaf(r.id)]; ok {
+		kv("usually", statsText(s)+st.dim("   over "+plural(s.N, "attempt")+" in the store"))
 	}
 	if line != nil && len(line.Outputs) > 0 {
 		var parts []string

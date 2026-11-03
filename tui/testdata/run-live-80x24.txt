@@ -8,7 +8,7 @@ STEPS                                    | STEP
   review-cycle                absent     |   status    ok
   merge                       absent     |   attempt   1
                                          |   duration  16m00s
-                                         |   usually   16m00s   median across th
+                                         |   usually   p50 3m00s  p90 3m00s  p99
                                          |   outputs   branch=work/y  pr=18
                                          |
                                          |

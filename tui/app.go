@@ -29,15 +29,18 @@ type model struct {
 	runSel  int
 	wfSel   int
 	focus   string // Home: "runs" | "workflows"
-	meds    map[string]time.Duration
+	stats   map[string]Stats
 	preview bool // the Run screen is a static workflow preview (no journal)
 
 	run     *RunView
 	rows    []row
 	sel     int
-	frows   []frow // the flow view's rows
-	fsel    int    // the flow cursor
-	view    string // "tree" | "flow" | "timeline"
+	frows   []frow   // the flow view's rows
+	fsel    int      // the flow cursor
+	tgroups []string // the timeline's rows
+	tsel    int      // the timeline cursor
+	tzoom   int      // the timeline zoom exponent (columns x 2^tzoom)
+	view    string   // "tree" | "flow" | "timeline"
 	follow  bool
 	filter  string
 	open    map[string]bool
@@ -68,6 +71,21 @@ func (m *model) selectedRun() *RunRow {
 }
 
 func (m *model) selectedRow() *row {
+	if m.view == "timeline" {
+		if m.tsel < 0 || m.tsel >= len(m.tgroups) {
+			return nil
+		}
+		prefix, iter := groupPrefix(m.run, m.tgroups[m.tsel])
+		if iter {
+			return &row{id: prefix, kind: "iter", name: m.tgroups[m.tsel]}
+		}
+		for i := range m.rows {
+			if m.rows[i].id == prefix && m.rows[i].kind == "step" {
+				return &m.rows[i]
+			}
+		}
+		return &row{id: prefix, kind: "step", name: m.tgroups[m.tsel]}
+	}
 	if m.view == "flow" {
 		if m.fsel < 0 || m.fsel >= len(m.frows) {
 			return nil
@@ -93,6 +111,12 @@ func (m *model) selectedRow() *row {
 // moveDown / moveUp move whichever cursor the view shows; the flow cursor
 // skips frame edges, which are not things.
 func (m *model) moveDown() {
+	if m.view == "timeline" {
+		if m.tsel < len(m.tgroups)-1 {
+			m.tsel++
+		}
+		return
+	}
 	if m.view == "flow" {
 		for i := m.fsel + 1; i < len(m.frows); i++ {
 			if m.frows[i].kind == "step" || m.frows[i].kind == "gen" {
@@ -108,6 +132,12 @@ func (m *model) moveDown() {
 }
 
 func (m *model) moveUp() {
+	if m.view == "timeline" {
+		if m.tsel > 0 {
+			m.tsel--
+		}
+		return
+	}
 	if m.view == "flow" {
 		for i := m.fsel - 1; i >= 0; i-- {
 			if m.frows[i].kind == "step" || m.frows[i].kind == "gen" {
@@ -138,7 +168,7 @@ func (m *model) selectedRunLines() []string {
 	if sel == nil {
 		return nil
 	}
-	v, err := loadRun(m.opts.Store, sel.ID, m.meds, m.now())
+	v, err := loadRun(m.opts.Store, sel.ID, m.stats, m.now())
 	if err != nil {
 		return []string{"  " + m.st.dim(err.Error())}
 	}
@@ -161,8 +191,11 @@ func (m *model) refresh(ctx context.Context) {
 	if m.project == nil {
 		m.project = loadProject(ctx, m.uo.ConfigPath, m.opts.Images)
 	}
-	if m.meds == nil {
-		m.meds = medians(m.opts.Store)
+	if m.stats == nil {
+		m.stats = stats(m.opts.Store)
+	}
+	if m.project != nil && m.project.stats == nil {
+		m.project.stats = m.stats
 	}
 	m.runs = loadRuns(m.opts.Store, m.now())
 	if m.runSel >= len(m.runs) {
@@ -172,7 +205,7 @@ func (m *model) refresh(ctx context.Context) {
 		m.runSel = 0
 	}
 	if m.screen == "run" && m.run != nil && !m.preview {
-		if v, err := loadRun(m.opts.Store, m.run.ID, m.meds, m.now()); err == nil {
+		if v, err := loadRun(m.opts.Store, m.run.ID, m.stats, m.now()); err == nil {
 			m.run = v
 			m.rebuildRows()
 		}
@@ -181,6 +214,10 @@ func (m *model) refresh(ctx context.Context) {
 
 func (m *model) rebuildRows() {
 	m.frows = flowRows(m.run, m.preview, m.now())
+	m.tgroups = timelineGroups(m.run, m.now())
+	if m.tsel >= len(m.tgroups) {
+		m.tsel = max(0, len(m.tgroups)-1)
+	}
 	if m.fsel >= len(m.frows) {
 		m.fsel = 0
 	}
@@ -206,6 +243,14 @@ func (m *model) rebuildRows() {
 			if f.kind == "step" && f.status == "running" {
 				m.fsel = i
 				break
+			}
+		}
+		if len(m.run.Running) > 0 {
+			g := groupKey(m.run.Running[0].Step, m.run.Replay.Header.Workflow)
+			for i, tg := range m.tgroups {
+				if tg == g {
+					m.tsel = i
+				}
 			}
 		}
 	}
@@ -254,7 +299,7 @@ func (m *model) bells() {
 
 // openRun switches to the Run screen on a run id.
 func (m *model) openRun(id string) {
-	v, err := loadRun(m.opts.Store, id, m.meds, m.now())
+	v, err := loadRun(m.opts.Store, id, m.stats, m.now())
 	if err != nil {
 		m.status = err.Error()
 		return
@@ -465,6 +510,14 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		m.view = "flow"
 	case k.r == 'l':
 		m.view = "timeline"
+	case (k.r == '+' || k.r == '=') && m.view == "timeline":
+		if m.tzoom < 6 {
+			m.tzoom++
+		}
+	case k.r == '-' && m.view == "timeline":
+		if m.tzoom > 0 {
+			m.tzoom--
+		}
 	case k.name == "enter":
 		if r := m.selectedRow(); r != nil && r.kind == "iter" {
 			m.open[r.id] = !m.open[r.id]

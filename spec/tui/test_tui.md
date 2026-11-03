@@ -56,6 +56,15 @@ docker. The screens are rendered into frames and compared colour-stripped.
    absent under `…:20be39bb9bb7`, Home prints `MISSING  faber build
    20be39bb9bb7`.
 
+10. **Timeline cursor, letters, zoom.** Rows are `implement`,
+    `review-cycle@1`, `review-cycle@2`; `j` twice selects iteration 2,
+    marks its row and expands it below; at a 12-column scale the
+    3-minute implement keeps its letter beside the review that follows;
+    `+` and `-` zoom in and out and the legend says `zoom x2`.
+11. **History as a distribution.** The store's `review` attempts give
+    n=2, p50 3m, p90 and p99 4m; a run's STEP shows `p50 … p90 … p99 …
+    over 2 attempts in the store`; the preview rows carry `p50 … p90 …`.
+
 ## Edge cases
 
 - Narrow terminals: the runs table folds its columns and the footer drops

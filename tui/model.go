@@ -45,6 +45,7 @@ type Project struct {
 	Templates []TemplateInfo
 	cfg       *config.Config
 	irs       map[string]*config.IR // every workflow desugared, for the reporter's targets
+	stats     map[string]Stats      // the store's per-step history, for the preview
 }
 
 // loadProject runs the same pipeline `faber validate` runs and asks the
@@ -227,11 +228,18 @@ func running(rp *failure.Replay, now time.Time) []Running {
 	return out
 }
 
-// medians is the per-leaf-step-name median duration across every ok
-// executed attempt in the store — the "usually 4m10s" next to a running
-// step. Keyed by the id's last segment because that is what repeats across
-// loops, instances, and runs.
-func medians(store *failure.Store) map[string]time.Duration {
+// Stats is a step name's duration distribution across every ok executed
+// attempt in the store: p50 is the "usually" beside a running step, p90
+// and p99 say how bad it gets, n how much history backs them.
+type Stats struct {
+	P50, P90, P99 time.Duration
+	N             int
+}
+
+// stats computes the per-leaf-step-name distributions. Keyed by the id's
+// last segment because that is what repeats across loops, instances, and
+// runs.
+func stats(store *failure.Store) map[string]Stats {
 	audits, err := store.AuditRuns()
 	if err != nil {
 		return nil
@@ -254,10 +262,11 @@ func medians(store *failure.Store) map[string]time.Duration {
 			samples[leaf] = append(samples[leaf], d)
 		}
 	}
-	out := map[string]time.Duration{}
+	out := map[string]Stats{}
 	for leaf, ds := range samples {
 		sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
-		out[leaf] = ds[len(ds)/2]
+		pct := func(p float64) time.Duration { return ds[int(float64(len(ds)-1)*p)] }
+		out[leaf] = Stats{P50: pct(0.5), P90: pct(0.9), P99: pct(0.99), N: len(ds)}
 	}
 	return out
 }
@@ -272,19 +281,19 @@ type RunView struct {
 	Running []Running
 	Bounds  map[string]int
 	RunDir  string
-	Medians map[string]time.Duration
+	Stats   map[string]Stats
 	Err     error // the config could not be re-derived; the journal still shows
 }
 
 // loadRun replays the journal, re-derives the IR from the header's config
 // (the way resume does), and reports; a config that no longer loads leaves
 // the IR nil and the report journal-only.
-func loadRun(store *failure.Store, id string, meds map[string]time.Duration, now time.Time) (*RunView, error) {
+func loadRun(store *failure.Store, id string, st map[string]Stats, now time.Time) (*RunView, error) {
 	rp, err := store.Load(id)
 	if err != nil {
 		return nil, err
 	}
-	v := &RunView{ID: id, Replay: rp, Live: store.RunLive(id), RunDir: store.RunDir(id), Medians: meds}
+	v := &RunView{ID: id, Replay: rp, Live: store.RunLive(id), RunDir: store.RunDir(id), Stats: st}
 	var targets map[string]*config.IR
 	if cfg, viols, err := config.Load(rp.Header.ConfigPath); err != nil {
 		v.Err = err
@@ -332,7 +341,7 @@ func previewWorkflow(p *Project, name string) (*RunView, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RunView{ID: name, Replay: rp, Report: report, IR: ir, Bounds: config.LoopBounds(ir)}, nil
+	return &RunView{ID: name, Replay: rp, Report: report, IR: ir, Bounds: config.LoopBounds(ir), Stats: p.stats}, nil
 }
 
 // outputTail reads the last n lines of an attempt's output.log.

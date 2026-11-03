@@ -8,7 +8,7 @@ FLOW                                                                            
   |     review                                                     FAIL     3m00s          | |   status    ok
   |     fix             if review.verdict == "changes"             not reached             | |   attempt   1
   +----------------------------------------------------------------------------------------^ |   duration  3m00s
-     merge           if review.verdict == "approved"                  not reached            |   usually   16m00s   median across the store
+     merge           if review.verdict == "approved"                  not reached            |   usually   p50 3m00s  p90 3m00s  p99 3m00s   over 2 attempts in the store
                                                                                              |   outputs   branch=work/x  pr=17
                                                                                              |
                                                                                              |

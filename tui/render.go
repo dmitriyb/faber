@@ -172,7 +172,7 @@ func (f *frame) plain() string {
 }
 
 // rule is a dim horizontal rule of n cells.
-func (st style) rule(n int) string { return st.dim(strings.Repeat("-", n)) }
+func (st style) rule(n int) string { return st.dim(strings.Repeat("-", max(0, n))) }
 
 // cols lays fixed-width cells on one row, each cell padded to its width.
 // A plain cell is truncated to fit; a coloured cell (a status word, an

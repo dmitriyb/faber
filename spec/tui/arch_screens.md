@@ -31,10 +31,13 @@ loses a cursor position).
   the report journal-only), the reporter with every workflow as a generate
   target so instances read in dependency order, loop caps from the IR and
   the journal, the attempt directory for `output.log`, and the
-  **medians**: per step name (an id's last segment, which repeats across
-  loops, instances and runs) the median duration of every ok executed
-  attempt in the store — the `usually 4m10s` beside a running step, `slow`
-  past twice.
+  **history**: per step name (an id's last segment, which repeats across
+  loops, instances and runs) the duration distribution of every ok
+  executed attempt in the store — p50, p90, p99 and the sample count. p50
+  is the `usually 4m10s` beside a running step (`slow` past twice); STEP
+  shows all three with the count; the workflow preview shows p50 and p90
+  on every step row, so a preview reads as "what this workflow costs, from
+  your own history".
 
 ## Home
 
@@ -91,8 +94,12 @@ over OUTPUT, and the footer.
 - **timeline**: one row per outermost iteration (`review-cycle@2`) or
   top-level step, a bar of the executed attempts' step initials (`X` for a
   failure) coloured by status on an axis scaled to the width, the running
-  step extended to now; below, the selection's iteration one row per
-  attempt with its duration.
+  step extended to now. A column keeps the first letter written into it,
+  so a short step is never hidden by the long one after it at a coarse
+  scale. The timeline has its own cursor over its rows, the selected row
+  is the selection bar, STEP follows its iteration, and the block below
+  expands that row's attempts one per line with durations. `+`/`-` zoom
+  the columns by powers of two, the window centred on the selected row.
 - **STEP**: breadcrumb, status, reason or since, attempt, duration, usually,
   outputs, then the error, handoff, re-enter command (`printed on q`), or
   the halt. **OUTPUT**: the newest attempt's `output.log` tail,

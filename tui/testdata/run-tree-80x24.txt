@@ -9,7 +9,7 @@ STEPS                                    | STEP
     @1                        ok         |   reason    agent-failed
     @2                        FAIL       |   attempt   1
       review                  FAIL       |   duration  3m00s
-      fix                     not reache |   usually   4m00s   median across the
+      fix                     not reache |   usually   p50 4m00s  p90 4m00s  p99
     @3                        not reache |
   merge                       not reache | error
                                          | OUTPUT   attempt 1   output.log

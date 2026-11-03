@@ -9,7 +9,7 @@ FLOW                                     | STEP
   |     fix             if review.verdic |   reason    agent-failed
   +------------------------------------^ |   attempt   1
      merge           if review.verdict~  |   duration  3m00s
-                                         |   usually   4m00s   median across the
+                                         |   usually   p50 4m00s  p90 4m00s  p99
                                          |
                                          | error
                                          | OUTPUT   attempt 1   output.log
