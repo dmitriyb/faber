@@ -21,4 +21,4 @@ review-cycle 2/3  by attempt             |
                                          |
                                          |
                                          |
-j/k move   n next problem   / filter   t/g/l tree flow timeline   f follow   q b
+j/k move   n next problem   / filter   t/w/l tree workflow timeline   f follow

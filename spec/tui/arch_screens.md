@@ -101,7 +101,7 @@ over OUTPUT, and the footer.
 Keys: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
 `n` the next FAIL/HALT/WAIT, `/` a filter over id, name and status, `f`
 toggles follow (selection on the newest running step, else the first
-problem), `enter` opens or closes an iteration, `t`/`g`/`l` switch tree, flow, timeline,
+problem), `enter` opens or closes an iteration, `t`/`w`/`l` switch tree, workflow, timeline,
 `q` returns to Home — and, with a failed step selected, remembers its
 re-enter command (or the run's resume command) to print on stdout when the
 view exits.
@@ -117,7 +117,7 @@ since nothing has state. STRUCTURE lists loop shapes once (`cycles >
 review-cycle, up to 5`), never the unrolled iterations. The right pane lists the workflow's params (type, required or
 default), the structure (loops with their caps, generates with their
 source and target), and the selected step's template, lane, guard and
-retry. `t`/`g` switch tree and flow, enter opens a folded body, `r`
+retry. `t`/`w` switch tree and workflow, enter opens a folded body, `r`
 starts this workflow through the same prompt as Home, `q` returns.
 
 ## Liveness

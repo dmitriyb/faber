@@ -310,11 +310,11 @@ func (m *model) homeKeys() [][2]string {
 }
 
 func (m *model) workflowKeys() [][2]string {
-	return [][2]string{{"j/k", "move"}, {"t/g", "tree flow"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
+	return [][2]string{{"j/k", "move"}, {"t/w", "tree workflow"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
 }
 
 func (m *model) runKeys() [][2]string {
-	return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"/", "filter"}, {"t/g/l", "tree flow timeline"}, {"f", "follow"}, {"q", "back"}}
+	return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"/", "filter"}, {"t/w/l", "tree workflow timeline"}, {"f", "follow"}, {"q", "back"}}
 }
 
 // handle applies one key; it returns false when the app should exit.
@@ -461,7 +461,7 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		m.rebuildRows()
 	case k.r == 't':
 		m.view = "tree"
-	case k.r == 'g':
+	case k.r == 'w':
 		m.view = "flow"
 	case k.r == 'l':
 		m.view = "timeline"
@@ -496,7 +496,7 @@ func (m *model) handleWorkflow(ctx context.Context, k key) bool {
 		m.moveUp()
 	case k.r == 't':
 		m.view = "tree"
-	case k.r == 'g':
+	case k.r == 'w':
 		m.view = "flow"
 	case k.name == "enter":
 		if r := m.selectedRow(); r != nil && r.kind == "iter" {

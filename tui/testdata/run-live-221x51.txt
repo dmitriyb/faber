@@ -48,4 +48,4 @@ STEPS                                                                           
                                                                                              |
                                                                                              |
                                                                                              |
-j/k move   n next problem   / filter   t/g/l tree flow timeline   f follow   q back   ? all keys                                                                                                        = faber runs + report
+j/k move   n next problem   / filter   t/w/l tree workflow timeline   f follow   q back   ? all keys                                                                                                    = faber runs + report
