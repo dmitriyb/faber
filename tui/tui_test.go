@@ -421,8 +421,146 @@ func TestHomeShowsMissingTagHash(t *testing.T) {
 	m := newApp(Options{Store: store, Now: func() time.Time { return fixed }, Images: fakeProbe{}}, config.UIOptions{ConfigPath: abs})
 	m.refresh(context.Background())
 	frame := m.render(221, 51).plain()
-	if !strings.Contains(frame, "MISSING  faber build  20be39bb9bb7") {
-		t.Errorf("missing image line lacks the tag hash:\n%s", frame)
+	if !strings.Contains(frame, "images      4    4 MISSING") || !strings.Contains(frame, "merge            faber build   20be39bb9bb7") {
+		t.Errorf("missing images: expected the count and a row per image with its tag hash:\n%s", frame)
+	}
+}
+
+type fakeKeys map[string]string // role -> key source; absent = not in the registry
+
+func (k fakeKeys) Resolve(_ context.Context, role string, _ config.IdentityDef) (string, error) {
+	if src, ok := k[role]; ok {
+		return src, nil
+	}
+	return "", fmt.Errorf("identity %q: role not in registry", role)
+}
+
+// Verifies 1d5d7c4db2fe: Home's preflight is a count per class with a
+// row per problem — a role is MISSING only when a template uses it and no
+// key resolves, a declared role no template names is unused, a hook path
+// that is not there is MISSING, the resolver is checked by path — and the
+// same checks say ok once the files exist.
+func TestPreflight(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	// the reference config names hooks and keys that do not exist beside it
+	abs, _ := filepath.Abs(refConfig)
+	m := newApp(Options{Store: store, Now: func() time.Time { return fixed }}, config.UIOptions{ConfigPath: abs})
+	m.refresh(context.Background())
+	pf := m.project.Preflight
+	if len(pf.Roles) != 3 || pf.Roles[0].State != "MISSING" || pf.Roles[0].Fix != "key file not found" {
+		t.Errorf("path-form roles without files: %+v", pf.Roles)
+	}
+	if pf.Templates != 4 || len(pf.Slots) != 5 || pf.Slots[0].Name != "fix" || pf.Slots[0].Detail != "context" || pf.Slots[0].Fix != "./hooks/fetch-change" {
+		t.Errorf("slots without files: %d templates, %+v", pf.Templates, pf.Slots)
+	}
+	if pf.Resolver.State != "MISSING" || pf.Resolver.Detail != "./hooks/get-token" {
+		t.Errorf("resolver: %+v", pf.Resolver)
+	}
+	frame := m.render(221, 51).plain()
+	for _, want := range []string{"identities  3    3 MISSING", "implementer      key file not found", "templates   4    3 MISSING", "implement   prelude    ./hooks/claim-item", "resolver MISSING  ./hooks/get-token   1 service"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("Home lacks %q:\n%s", want, frame)
+		}
+	}
+	// a copy of the config with the files present, roles by registry
+	dir := t.TempDir()
+	src, _ := os.ReadFile(refConfig)
+	text := string(src)
+	text = strings.ReplaceAll(text, "implementer: {key: ./keys/implementer}", "implementer: {}")
+	text = strings.ReplaceAll(text, "merger:      {key: ./keys/merger}", "merger:      {}\n  auditor:     {}")
+	cfg := filepath.Join(dir, "orchestrator.yaml")
+	if err := os.WriteFile(cfg, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"hooks/gather-context", "hooks/claim-item", "hooks/release-item", "hooks/fetch-change", "hooks/get-token", "keys/reviewer"} {
+		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a root config's paths are CWD-relative, for the view as for the run
+	t.Chdir(dir)
+	m2 := newApp(Options{Store: store, Now: func() time.Time { return fixed }, Keys: fakeKeys{"implementer": "~/.ssh/id_impl"}}, config.UIOptions{ConfigPath: cfg})
+	m2.refresh(context.Background())
+	if m2.project.Err != nil {
+		t.Fatalf("copied config: %v", m2.project.Err)
+	}
+	got := map[string]Check{}
+	for _, c := range m2.project.Preflight.Roles {
+		got[c.Name] = c
+	}
+	if got["implementer"].State != "ok" || got["implementer"].Detail != "registry  ~/.ssh/id_impl" {
+		t.Errorf("registry role with a key: %+v", got["implementer"])
+	}
+	if got["reviewer"].State != "ok" || got["reviewer"].Detail != "./keys/reviewer" {
+		t.Errorf("path role with its file: %+v", got["reviewer"])
+	}
+	if got["merger"].State != "MISSING" || got["merger"].Fix != "faber add-key --role merger" {
+		t.Errorf("registry role without a key: %+v", got["merger"])
+	}
+	if got["auditor"].State != "unused" {
+		t.Errorf("a role no template names: %+v", got["auditor"])
+	}
+	if len(m2.project.Preflight.Slots) != 0 || m2.project.Preflight.Templates != 4 {
+		t.Errorf("templates with their files: %+v", m2.project.Preflight)
+	}
+	if m2.project.Preflight.Resolver.State != "ok" {
+		t.Errorf("resolver with its file: %+v", m2.project.Preflight.Resolver)
+	}
+	frame = m2.render(221, 51).plain()
+	for _, want := range []string{"identities  4    1 MISSING", "merger           faber add-key --role merger", "auditor          unused", "templates   4    ok", "resolver ok   1 service   not checked"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("Home lacks %q:\n%s", want, frame)
+		}
+	}
+}
+
+// Verifies 1d5d7c4db2fe: the preview's right pane is blocks that start
+// folded — STEP open, the rest one line — with NEEDS for this workflow;
+// tab gives the pane the cursor, j/k walk the block heads, enter opens or
+// closes, a block with a problem opens itself once and then folds when
+// told to, and the STEP block names all four hooks.
+func TestPreviewFolds(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	m.openWorkflow("task")
+	frame := m.render(221, 51).plain()
+	for _, want := range []string{"> PARAMS   2 params", "> STRUCTURE   1 loop", "v NEEDS   3 roles   4 templates   1 service   9 MISSING", "v STEP   implement   template implement   identity implementer", "v hooks   3 of 4 set   3 MISSING", "postlude    none", "> inputs/outputs   2 inputs   2 outputs", "> history   2 attempts   p50 3m00s   all runs of task"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("preview pane lacks %q:\n%s", want, frame)
+		}
+	}
+	if strings.Contains(frame, "    item        string   required") {
+		t.Errorf("PARAMS must start folded:\n%s", frame)
+	}
+	m.handle(context.Background(), key{r: '\t'})
+	if !m.pfocus {
+		t.Fatal("tab did not focus the pane")
+	}
+	m.handle(context.Background(), key{name: "enter"}) // PARAMS open
+	frame = m.render(221, 51).plain()
+	if !strings.Contains(frame, "v PARAMS   2 params") || !strings.Contains(frame, "item        string   required") {
+		t.Errorf("enter did not open PARAMS:\n%s", frame)
+	}
+	if !strings.Contains(frame, "tab back to the flow") {
+		t.Errorf("footer does not say how to leave the pane:\n%s", frame)
+	}
+	m.handle(context.Background(), key{r: 'j'})
+	m.handle(context.Background(), key{r: 'j'}) // NEEDS
+	m.handle(context.Background(), key{name: "enter"})
+	frame = m.render(221, 51).plain()
+	if !strings.Contains(frame, "> NEEDS") || strings.Contains(frame, "identity    merger") {
+		t.Errorf("a problem block folds when told to:\n%s", frame)
+	}
+	m.handle(context.Background(), key{r: '\t'})
+	if m.pfocus {
+		t.Fatal("tab did not return to the flow")
+	}
+	m.handle(context.Background(), key{r: 'j'}) // the flow cursor moves again
+	if r := m.selectedRow(); r == nil || r.name != "review" {
+		t.Errorf("flow cursor after tab back: %+v", r)
 	}
 }
 

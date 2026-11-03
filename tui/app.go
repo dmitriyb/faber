@@ -30,8 +30,13 @@ type model struct {
 	wfSel    int
 	focus    string // Home: "runs" | "workflows"
 	stats    History
-	hscope   string // the history scope in force: ScopeAllRuns or ScopeThisRun
-	preview  bool   // the Run screen is a static workflow preview (no journal)
+	hscope   string          // the history scope in force: ScopeAllRuns or ScopeThisRun
+	preview  bool            // the Run screen is a static workflow preview (no journal)
+	pfocus   bool            // the preview's right pane has the cursor
+	psel     int             // the preview pane cursor, over block heads
+	popen    map[string]bool // which preview blocks are open
+	plines   []pline         // the preview pane as last drawn, for the cursor
+	pauto    map[string]bool // blocks a problem has opened once; the user's fold wins after
 	cache    *replayCache
 	irs      *irCache
 	statsVer int      // the cache version the stats were computed at (-1 = never)
@@ -70,7 +75,7 @@ type prompt struct {
 
 func newApp(o Options, uo config.UIOptions) *model {
 	return &model{opts: o, uo: uo, st: style{color: uo.Color}, now: o.Now, screen: "home", focus: "runs", view: "tree", follow: true,
-		hscope: ScopeAllRuns, open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
+		hscope: ScopeAllRuns, popen: map[string]bool{"step": true}, pauto: map[string]bool{}, open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
 }
 
 func (m *model) selectedRun() *RunRow {
@@ -280,7 +285,7 @@ const probeEvery = 30
 func (m *model) refresh(ctx context.Context) {
 	m.ticks++
 	if m.project == nil || !m.project.mtime.Equal(configMTime(m.uo.ConfigPath)) || m.ticks%probeEvery == 0 {
-		m.project = loadProject(ctx, m.uo.ConfigPath, m.opts.Images)
+		m.project = loadProject(ctx, m.uo.ConfigPath, m.opts.Images, m.opts.Keys)
 	}
 	runs, err := loadRuns(m.cache, m.now())
 	if err != nil {
@@ -436,7 +441,28 @@ func (m *model) openWorkflow(name string) {
 	m.view = "flow"
 	m.sel = 0
 	m.follow = false
+	m.pfocus, m.psel = false, 0
 	m.rebuildRows()
+}
+
+// autoOpen opens a block the first time it shows a problem; after that the
+// user's own fold is respected.
+func (m *model) autoOpen(key string) {
+	if !m.pauto[key] {
+		m.pauto[key] = true
+		m.popen[key] = true
+	}
+}
+
+// pheads are the preview pane's block heads, where its cursor can rest.
+func (m *model) pheads() []int {
+	var idx []int
+	for i, l := range m.plines {
+		if l.key != "" {
+			idx = append(idx, i)
+		}
+	}
+	return idx
 }
 
 // render draws the current screen into a frame.
@@ -468,7 +494,10 @@ func (m *model) homeKeys() [][2]string {
 }
 
 func (m *model) workflowKeys() [][2]string {
-	return [][2]string{{"j/k", "move"}, {"t/w", "tree workflow"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
+	if m.pfocus {
+		return [][2]string{{"j/k", "move"}, {"enter", "open/close"}, {"tab", "back to the flow"}, {"r", "run this workflow"}, {"q", "back"}}
+	}
+	return [][2]string{{"j/k", "move"}, {"tab", "details"}, {"t/w", "tree workflow"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
 }
 
 // runKeys is the footer per view: a key the footer does not list does not
@@ -688,6 +717,21 @@ func (m *model) handleWorkflow(ctx context.Context, k key) bool {
 	case k.r == 'q' || k.name == "esc":
 		m.screen = "home"
 		m.preview = false
+	case k.r == '\t':
+		m.pfocus = !m.pfocus
+	case m.pfocus && (k.r == 'j' || k.name == "down"):
+		if heads := m.pheads(); m.psel < len(heads)-1 {
+			m.psel++
+		}
+	case m.pfocus && (k.r == 'k' || k.name == "up"):
+		if m.psel > 0 {
+			m.psel--
+		}
+	case m.pfocus && k.name == "enter":
+		if heads := m.pheads(); m.psel < len(heads) {
+			key := m.plines[heads[m.psel]].key
+			m.popen[key] = !m.popen[key]
+		}
 	case k.r == 'j' || k.name == "down":
 		m.moveDown()
 	case k.r == 'k' || k.name == "up":

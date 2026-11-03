@@ -8,7 +8,7 @@ tick (1 Hz) | key
    │                                              ├─► runs table (state via run lock, wall, live step)
    │                                              └─► history p50/p90/p99 (recomputed when the cache version moved) ──► "usually", "slow"
    │
-   ├─ config mtime ──► project reload (validate, desugar; images re-probed on a slow cadence)
+   ├─ config mtime ──► project reload (validate, desugar, preflight: key probe, hook and resolver stats; images re-probed on a slow cadence)
    │
    ├─ replay(run) ──┬─► RunReporter{Targets}.Report ──► ReadingOrder ──► rows (tree / flow / timeline)
    │                ├─► Replay.Running ──► running since

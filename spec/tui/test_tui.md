@@ -53,8 +53,8 @@ docker. The screens are rendered into frames and compared colour-stripped.
    body steps once and no status words; `j` moves the flow cursor; `q`
    returns home.
 9. **Missing image names its tag.** With a probe that reports every image
-   absent under `…:20be39bb9bb7`, Home prints `MISSING  faber build
-   20be39bb9bb7`.
+   absent under `…:20be39bb9bb7`, Home prints `images   4   4 MISSING`
+   and a row per image, `merge   faber build   20be39bb9bb7`.
 
 10. **Timeline cursor, letters, zoom, drill-down.** Rows are `implement`,
     `review-cycle@1`, `review-cycle@2` under `whole run`; `j` twice
@@ -98,8 +98,32 @@ docker. The screens are rendered into frames and compared colour-stripped.
     and the parent bar `in cycles@21`, a 24-row pane does not overflow,
     and backspace twice returns to the top with the cursor on row 21.
 
+18. **Preflight.** Against the reference config, whose hooks and keys are
+    not beside it, Home reads `identities 3   3 MISSING` with `key file
+    not found` rows, `templates 4   3 MISSING` with a row per slot
+    (`implement   prelude   ./hooks/claim-item`), and `resolver MISSING`. A copy with the files present, run from its own
+    directory, two roles by registry (a fake key probe knows one) and one
+    declared role no template uses, reads: the registry role with a key
+    `ok   registry …`, the path role `ok`, the unknown registry role
+    `MISSING   faber add-key --role merger`, the unused role `unused`,
+    `templates 4   ok` with no rows, the resolver `ok`.
+19. **Preview folds.** The task preview opens with `> PARAMS   2 params`,
+    `> STRUCTURE   1 loop`, NEEDS opened by its own MISSING count, STEP
+    open on `implement` with `v hooks   3 of 4 set   3 MISSING` listing
+    all four (`postlude   none`), `> inputs/outputs   2 inputs   2
+    outputs`, `> history   2 attempts   p50 3m00s`; PARAMS' rows are not
+    on screen. `tab` focuses the pane and the footer says `tab back to the
+    flow`; enter opens PARAMS; `j` twice and enter fold NEEDS despite its
+    problem; `tab` returns the cursor to the flow, where `j` moves again.
+
 ## Edge cases
 
+- Hooks are four fixed slots per template; Home never lists hooks as a
+  class of their own, only a template's slot whose script is missing.
+- Paths: a root config's hook, key and resolver paths are CWD-relative,
+  so the preflight checks them against the working directory the view
+  (and a run it spawns) has; an included file's are declarer-absolute and
+  are shown relative to the config.
 - Narrow terminals: the runs table folds its columns, the header is cut
   before the right-hand facts, and the footer drops the CLI equivalent
   rather than overflowing.

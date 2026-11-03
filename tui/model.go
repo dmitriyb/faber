@@ -36,13 +36,38 @@ type TemplateInfo struct {
 	Err     string
 }
 
+// Check is one preflight fact about a configured thing: a role, a hook, an
+// image, the credential resolver. State is the status vocabulary (ok,
+// MISSING, unused, not checked, FAIL); Fix is the command that mends a
+// MISSING; Detail is where the thing was looked for.
+type Check struct {
+	Name   string
+	State  string
+	Detail string
+	Fix    string
+	Used   bool // referenced by some template (an unused thing is never a problem)
+}
+
+// Preflight is what Home states about the config before anyone presses
+// run: every declared role, every template's hook slots, the credential
+// resolver and its services. Health is a count; a problem is a row.
+type Preflight struct {
+	Roles     []Check
+	Templates int     // how many templates were checked
+	Slots     []Check // only the hook slots whose script is not there: Name = template, Detail = slot, Fix = path
+	Resolver  Check   // Name "" when no resolver is configured
+	Services  []Check // state "not checked": only the resolver can answer
+}
+
 // Project is the config in the current directory as Home shows it: the
-// validate result, the workflows, and the preflight's image states.
+// validate result, the workflows, and the preflight.
 type Project struct {
 	Path      string
-	Err       error // load or validate failure; nothing else is shown then
+	Dir       string // the config's directory; paths on screen are relative to it
+	Err       error  // load or validate failure; nothing else is shown then
 	Workflows []WorkflowInfo
 	Templates []TemplateInfo
+	Preflight Preflight
 	cfg       *config.Config
 	irs       map[string]*config.IR // every workflow desugared, for the reporter's targets
 	stats     History               // the store's per-step history, for the preview
@@ -104,8 +129,8 @@ func configMTime(path string) time.Time {
 
 // loadProject runs the same pipeline `faber validate` runs and asks the
 // image probe about every template.
-func loadProject(ctx context.Context, path string, probe ImageProbe) *Project {
-	p := &Project{Path: path, mtime: configMTime(path)}
+func loadProject(ctx context.Context, path string, probe ImageProbe, keys KeyProbe) *Project {
+	p := &Project{Path: path, Dir: filepath.Dir(path), mtime: configMTime(path)}
 	cfg, viols, err := config.Load(path)
 	if err != nil {
 		p.Err = err
@@ -158,6 +183,168 @@ func loadProject(ctx context.Context, path string, probe ImageProbe) *Project {
 			}
 		}
 		p.Templates = append(p.Templates, ti)
+	}
+	p.Preflight = preflight(ctx, cfg, p.irs, p.Dir, keys)
+	return p
+}
+
+// templatesOf lists every agent template an IR runs, sub-workflows included.
+func templatesOf(ir *config.IR) []*config.ResolvedTemplate {
+	var out []*config.ResolvedTemplate
+	var walk func(*config.IR)
+	walk = func(g *config.IR) {
+		for i := range g.Nodes {
+			if t := g.Nodes[i].Template; t != nil {
+				out = append(out, t)
+			}
+			if g.Nodes[i].Sub != nil {
+				walk(g.Nodes[i].Sub)
+			}
+		}
+	}
+	walk(ir)
+	return out
+}
+
+// hookPaths lists a template's four hooks in their fixed order, "" when unset.
+func hookPaths(t *config.ResolvedTemplate) [4][2]string {
+	return [4][2]string{{"context", t.Hooks.Context}, {"prelude", t.Hooks.Prelude}, {"postlude", t.Hooks.Postlude}, {"on_failure", t.Hooks.OnFailure}}
+}
+
+// relPath shows a path the way the YAML spells it: an included file's
+// paths come absolutised against their declaring directory and are shown
+// relative to the config; the root file's are CWD-relative and pass
+// through — which is also how a run opens them, so a stat on the value is
+// the run's own test.
+func relPath(dir, p string) string {
+	if p == "" || !filepath.IsAbs(p) {
+		return p
+	}
+	if r, err := filepath.Rel(dir, p); err == nil && !strings.HasPrefix(r, "..") {
+		return "./" + r
+	}
+	return p
+}
+
+// preflight derives the checks: a role is a problem only when a template
+// uses it and no key resolves (a path-form key by stat, a registry role
+// through the probe); a template's hook slot only when its script is not
+// there; the resolver only when configured and absent. Nothing is run.
+func preflight(ctx context.Context, cfg *config.Config, irs map[string]*config.IR, dir string, keys KeyProbe) Preflight {
+	var pf Preflight
+	usedRoles := map[string]bool{}
+	seen := map[string]bool{}
+	for _, name := range sortedKeys(irs) {
+		for _, t := range templatesOf(irs[name]) {
+			if t.Identity != "" {
+				usedRoles[t.Identity] = true
+			}
+			if seen[t.Name] {
+				continue
+			}
+			seen[t.Name] = true
+			pf.Templates++
+			pf.Slots = append(pf.Slots, missingSlots(t, dir)...)
+		}
+	}
+	sort.SliceStable(pf.Slots, func(i, j int) bool { return pf.Slots[i].Name < pf.Slots[j].Name })
+	for _, role := range sortedKeys(cfg.Identities) {
+		pf.Roles = append(pf.Roles, roleCheck(ctx, role, cfg.Identities[role], usedRoles[role], dir, keys))
+	}
+	if r := cfg.Credentials.Resolver; r != "" {
+		pf.Resolver = Check{Name: filepath.Base(r), Detail: relPath(dir, r), State: "ok", Used: true}
+		if _, err := os.Stat(r); err != nil {
+			pf.Resolver.State = "MISSING"
+		}
+	}
+	for _, name := range sortedKeys(cfg.Credentials.Services) {
+		pf.Services = append(pf.Services, Check{Name: name, Detail: cfg.Credentials.Services[name].Mode, State: "not checked", Used: true})
+	}
+	return pf
+}
+
+// missingSlots lists a template's hook slots whose script is not where the
+// template points, in slot order.
+func missingSlots(t *config.ResolvedTemplate, dir string) []Check {
+	var out []Check
+	for _, h := range hookPaths(t) {
+		if h[1] == "" {
+			continue
+		}
+		if _, err := os.Stat(h[1]); err != nil {
+			out = append(out, Check{Name: t.Name, Detail: h[0], Fix: relPath(dir, h[1]), State: "MISSING", Used: true})
+		}
+	}
+	return out
+}
+
+func roleCheck(ctx context.Context, role string, def config.IdentityDef, used bool, dir string, keys KeyProbe) Check {
+	c := Check{Name: role, Used: used}
+	if !used {
+		c.State = "unused"
+		return c
+	}
+	if def.Key != "" && !strings.HasPrefix(def.Key, "SHA256:") { // a path-form key: the run uses it verbatim
+		c.Detail = relPath(dir, def.Key)
+		c.State = "ok"
+		if _, err := os.Stat(def.Key); err != nil {
+			c.State = "MISSING"
+			c.Fix = "key file not found"
+		}
+		return c
+	}
+	if keys == nil {
+		c.State = "not checked"
+		c.Detail = "registry"
+		return c
+	}
+	src, err := keys.Resolve(ctx, role, def)
+	if err != nil {
+		c.State = "MISSING"
+		c.Fix = "faber add-key --role " + role
+		return c
+	}
+	c.State = "ok"
+	c.Detail = "registry  " + src
+	return c
+}
+
+// needsOf narrows the preflight to what one workflow runs: the roles its
+// templates name and those templates' slots; the resolver and services
+// are global.
+func needsOf(p *Project, ir *config.IR) Preflight {
+	roles := map[string]bool{}
+	templates := map[string]bool{}
+	for _, t := range templatesOf(ir) {
+		if t.Identity != "" {
+			roles[t.Identity] = true
+		}
+		templates[t.Name] = true
+	}
+	var n Preflight
+	for _, c := range p.Preflight.Roles {
+		if roles[c.Name] {
+			n.Roles = append(n.Roles, c)
+		}
+	}
+	n.Templates = len(templates)
+	for _, c := range p.Preflight.Slots {
+		if templates[c.Name] {
+			n.Slots = append(n.Slots, c)
+		}
+	}
+	n.Resolver, n.Services = p.Preflight.Resolver, p.Preflight.Services
+	return n
+}
+
+// displayPath is the config path as the headers show it: relative to the
+// working directory when it is near, so the same project reads the same on
+// any machine; absolute otherwise.
+func displayPath(p string) string {
+	if wd, err := os.Getwd(); err == nil {
+		if r, err := filepath.Rel(wd, p); err == nil && !strings.HasPrefix(r, "../..") {
+			return r
+		}
 	}
 	return p
 }

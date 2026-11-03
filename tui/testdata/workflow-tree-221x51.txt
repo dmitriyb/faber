@@ -1,32 +1,30 @@
-workflow   task   preview: the flow before any run                                                                                                                            /workspace/faber/config/testdata/reference.yaml
+workflow   task   preview: the flow before any run                                                                                                                                          ../config/testdata/reference.yaml
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-STEPS                                                                                                                                | PARAMS
------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------
-  step                        status       duration                                                                                  |
-  implement                                                                                                                          |   item        string   required
-  review-cycle                                       up to 3 iterations                                                              |   repo        string   required
-    review                                                                                                                           |
-    fix                                                                                                                              | STRUCTURE
-  merge                                                                                                                              | --------------------------------------------------------------------------------------
+STEPS                                                                                                                                | > PARAMS   2 params
+------------------------------------------------------------------------------------------------------------------------------------ | > STRUCTURE   1 loop
+  step                        status       duration                                                                                  | v NEEDS   3 roles   4 templates   1 service   9 MISSING
+  implement                                                                                                                          |     identity    implementer   ./keys/implementer   MISSING   key file not found
+  review-cycle                                       up to 3 iterations                                                              |     identity    merger   ./keys/merger   MISSING   key file not found
+    review                                                                                                                           |     identity    reviewer   ./keys/reviewer   MISSING   key file not found
+    fix                                                                                                                              |     template    fix   context   ./hooks/fetch-change   MISSING
+  merge                                                                                                                              |     template    implement   context   ./hooks/gather-context   MISSING
+                                                                                                                                     |     template    implement   prelude   ./hooks/claim-item   MISSING
+                                                                                                                                     |     template    implement   on_failure   ./hooks/release-item   MISSING
+                                                                                                                                     |     template    review   context   ./hooks/fetch-change   MISSING
+                                                                                                                                     |     resolver    get-token   ./hooks/get-token   MISSING
+                                                                                                                                     |     service     agent-api   file   not checked
                                                                                                                                      |
-                                                                                                                                     |   review-cycle              loop, up to 3 iterations
-                                                                                                                                     |
-                                                                                                                                     | STEP
-                                                                                                                                     | --------------------------------------------------------------------------------------
-                                                                                                                                     |
-                                                                                                                                     | implement
-                                                                                                                                     |   template  implement
-                                                                                                                                     |
-                                                                                                                                     |   history   2 attempts   all runs of task
-                                                                                                                                     |     p50     3m00s
-                                                                                                                                     |     p90     3m00s
-                                                                                                                                     |     p99     3m00s
-                                                                                                                                     |
-                                                                                                                                     |
-                                                                                                                                     |
-                                                                                                                                     |
-                                                                                                                                     |
-                                                                                                                                     |
+                                                                                                                                     | v STEP   implement   template implement   identity implementer
+                                                                                                                                     |     template    implement
+                                                                                                                                     |     identity    implementer   MISSING
+                                                                                                                                     |   v hooks   3 of 4 set   3 MISSING
+                                                                                                                                     |       context     ./hooks/gather-context   MISSING
+                                                                                                                                     |       prelude     ./hooks/claim-item   MISSING
+                                                                                                                                     |       postlude    none
+                                                                                                                                     |       on_failure  ./hooks/release-item   MISSING
+                                                                                                                                     |   > inputs/outputs   2 inputs   2 outputs
+                                                                                                                                     |     agent       skill implement   model agent-model   effort high
+                                                                                                                                     |   > history   2 attempts   p50 3m00s   all runs of task
                                                                                                                                      |
                                                                                                                                      |
                                                                                                                                      |
@@ -48,4 +46,6 @@ STEPS                                                                           
                                                                                                                                      |
                                                                                                                                      |
                                                                                                                                      |
-j/k move   t/w tree workflow   enter expand   r run this workflow   q back                                                                                                               = faber validate --emit-ir, rendered
+                                                                                                                                     |
+                                                                                                                                     |
+j/k move   tab details   t/w tree workflow   enter expand   r run this workflow   q back                                                                                                 = faber validate --emit-ir, rendered

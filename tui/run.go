@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -67,9 +68,9 @@ func renderRun(f *frame, st style, m *model) {
 func renderWorkflow(f *frame, st style, m *model) {
 	w, h := f.w, f.h
 	v := m.run
-	wf := m.workflowInfo(v.ID)
 	hdr := st.chrome("workflow") + "   " + st.ident(v.ID) + "   " + st.dim("preview: the flow before any run")
-	f.put(0, pad(hdr, w-vis(m.project.Path))+st.dim(m.project.Path))
+	path := displayPath(m.project.Path)
+	f.put(0, pad(hdr, w-vis(path))+st.dim(path))
 	f.put(1, st.rule(w))
 	leftW := w * 60 / 100
 	if leftW < 40 {
@@ -86,57 +87,7 @@ func renderWorkflow(f *frame, st style, m *model) {
 	} else {
 		left = flowPane(st, m, leftW, bodyH)
 	}
-	right := []string{st.chrome("PARAMS"), st.rule(rightW), ""}
-	if wf != nil {
-		for _, p := range wf.Params {
-			val := p.Type
-			switch {
-			case p.Default != "":
-				val += "   default " + p.Default
-			case p.Required:
-				val += "   required"
-			}
-			right = append(right, cols([]string{"  " + st.ident(p.Name), val}, []int{14, rightW - 14}))
-		}
-		if len(wf.Params) == 0 {
-			right = append(right, "  "+st.dim("none"))
-		}
-	}
-	right = append(right, "", st.chrome("STRUCTURE"), st.rule(rightW), "")
-	nameW := 28
-	for _, sh := range loopShapes(v.IR) {
-		right = append(right, cols([]string{"  " + st.ident(trunc(sh.name, nameW-3)), fmt.Sprintf("loop, up to %d iterations", sh.cap)}, []int{nameW, rightW - nameW}))
-	}
-	for i := range v.IR.Nodes {
-		n := &v.IR.Nodes[i]
-		if n.Kind == config.KindGenerate && n.Gen != nil {
-			right = append(right, cols([]string{"  " + st.ident(trunc(strings.TrimPrefix(n.ID, v.ID+"/"), nameW-3)), "generate over " + n.Gen.Source + " -> " + n.Gen.Workflow}, []int{nameW, rightW - nameW}))
-		}
-	}
-	if r := m.selectedRow(); r != nil && r.kind == "step" {
-		right = append(right, "", st.chrome("STEP"), st.rule(rightW), "", st.ident(crumb(r.id, v.ID, v.Bounds)))
-		for i := range v.IR.Nodes {
-			n := &v.IR.Nodes[i]
-			if n.ID != r.id {
-				continue
-			}
-			if n.Template != nil {
-				right = append(right, cols([]string{"  template", n.Template.Name}, []int{12, rightW - 12}))
-				if n.Template.Lane != "" {
-					right = append(right, cols([]string{"  lane", n.Template.Lane}, []int{12, rightW - 12}))
-				}
-			}
-			if n.When != nil {
-				right = append(right, cols([]string{"  when", trunc(n.When.CEL, rightW-12)}, []int{12, rightW - 12}))
-			}
-			if n.Retry > 0 {
-				right = append(right, cols([]string{"  retry", fmt.Sprintf("%d", n.Retry)}, []int{12, rightW - 12}))
-			}
-		}
-		if s, ok := v.Stats[leaf(r.id)]; ok {
-			right = append(right, historyBlock(st, s, "all runs of "+v.ID, "", rightW)...)
-		}
-	}
+	right := m.paneWithCursor(st, previewPane(st, m, rightW), rightW)
 	for i, row := range panes(st, [][]string{left, right}, []int{leftW, rightW}, bodyH) {
 		f.put(2+i, row)
 	}
@@ -465,5 +416,292 @@ func (m *model) problemIDs() []string {
 			out = append(out, r.id)
 		}
 	}
+	return out
+}
+
+// pline is one line of the preview's right pane. A line with a key is a
+// block head the cursor can rest on and enter opens or closes; the rest
+// is content.
+type pline struct {
+	text string
+	key  string
+}
+
+// previewPane is the preview's right pane: PARAMS, STRUCTURE, NEEDS and
+// STEP as blocks that start folded to one summary line each (STEP open),
+// opened by enter when the pane has focus. A block with a problem opens
+// itself. The pane's lines are kept on the model for the cursor.
+func previewPane(st style, m *model, w int) []string {
+	v := m.run
+	wf := m.workflowInfo(v.ID)
+	var lines []pline
+	head := func(key, title, summary string) {
+		mark := ">"
+		if m.popen[key] {
+			mark = "v"
+		}
+		lines = append(lines, pline{text: st.dim(mark) + " " + st.chrome(title) + "   " + summary, key: key})
+	}
+	body := func(key string, rows ...string) {
+		if m.popen[key] {
+			for _, r := range rows {
+				lines = append(lines, pline{text: r})
+			}
+			lines = append(lines, pline{})
+		}
+	}
+	kv := func(k, val string) string { return cols([]string{"    " + st.dim(k), val}, []int{16, w - 16}) }
+
+	// PARAMS
+	var prows []string
+	if wf != nil {
+		for _, p := range wf.Params {
+			val := p.Type
+			switch {
+			case p.Default != "":
+				val += "   default " + p.Default
+			case p.Required:
+				val += "   required"
+			}
+			prows = append(prows, cols([]string{"    " + st.ident(p.Name), val}, []int{16, w - 16}))
+		}
+	}
+	head("params", "PARAMS", plural(len(prows), "param"))
+	if len(prows) == 0 {
+		prows = []string{"    " + st.dim("none")}
+	}
+	body("params", prows...)
+
+	// STRUCTURE
+	var srows []string
+	shapes := loopShapes(v.IR)
+	for _, sh := range shapes {
+		srows = append(srows, cols([]string{"    " + st.ident(trunc(sh.name, 26)), fmt.Sprintf("loop, up to %d iterations", sh.cap)}, []int{30, w - 30}))
+	}
+	gens := 0
+	for i := range v.IR.Nodes {
+		n := &v.IR.Nodes[i]
+		if n.Kind == config.KindGenerate && n.Gen != nil {
+			gens++
+			srows = append(srows, cols([]string{"    " + st.ident(trunc(strings.TrimPrefix(n.ID, v.ID+"/"), 26)), "generate over " + n.Gen.Source + " -> " + n.Gen.Workflow}, []int{30, w - 30}))
+		}
+	}
+	sum := plural(len(shapes), "loop")
+	if gens > 0 {
+		sum += "   " + plural(gens, "generate")
+	}
+	head("structure", "STRUCTURE", sum)
+	if len(srows) == 0 {
+		srows = []string{"    " + st.dim("a straight sequence")}
+	}
+	body("structure", srows...)
+
+	// NEEDS: what this workflow's steps require, and whether it is there
+	needs := needsOf(m.project, v.IR)
+	missing := len(needs.Slots)
+	for _, c := range needs.Roles {
+		if c.State == "MISSING" {
+			missing++
+		}
+	}
+	if needs.Resolver.State == "MISSING" {
+		missing++
+	}
+	state := st.status("ok")
+	if missing > 0 {
+		state = st.wrap(sgrRed, fmt.Sprintf("%d MISSING", missing))
+		m.autoOpen("needs")
+	}
+	head("needs", "NEEDS", fmt.Sprintf("%s   %s   %s   ", plural(len(needs.Roles), "role"), plural(needs.Templates, "template"), plural(len(needs.Services), "service"))+state)
+	var nrows []string
+	for _, c := range needs.Roles {
+		nrows = append(nrows, checkLine(st, "identity", c, w))
+	}
+	for _, c := range needs.Slots { // a template is listed only by the slot that stops it
+		nrows = append(nrows, cols([]string{"    " + st.dim("template"), st.ident(c.Name) + "   " + st.dim(c.Detail) + "   " + c.Fix + "   " + st.wrap(sgrRed, "MISSING")}, []int{16, w - 16}))
+	}
+	if needs.Resolver.Name != "" {
+		nrows = append(nrows, checkLine(st, "resolver", needs.Resolver, w))
+	}
+	for _, c := range needs.Services {
+		nrows = append(nrows, cols([]string{"    " + st.dim("service"), st.ident(c.Name) + "   " + c.Detail + "   " + st.dim("not checked")}, []int{16, w - 16}))
+	}
+	if len(nrows) == 0 {
+		nrows = []string{"    " + st.dim("nothing beyond the images")}
+	}
+	body("needs", nrows...)
+
+	// STEP: the selected step's schema facts, with sub-blocks
+	r := m.selectedRow()
+	if r == nil || r.kind != "step" {
+		m.plines = lines
+		return plineTexts(lines)
+	}
+	var n *config.Node
+	for _, cand := range nodesOf(v.IR) {
+		if cand.ID == r.id {
+			n = cand
+		}
+	}
+	if n == nil || n.Template == nil {
+		m.plines = lines
+		return plineTexts(lines)
+	}
+	t := n.Template
+	roleState := ""
+	for _, c := range m.project.Preflight.Roles {
+		if c.Name == t.Identity {
+			roleState = c.State
+		}
+	}
+	summary := st.ident(leaf(r.id)) + "   template " + t.Name
+	if t.Identity != "" {
+		summary += "   identity " + t.Identity
+	}
+	head("step", "STEP", summary)
+	if m.popen["step"] {
+		rows := []string{kv("template", t.Name)}
+		if t.Identity != "" {
+			rows = append(rows, kv("identity", t.Identity+"   "+st.status(roleState)))
+		}
+		if t.Lane != "" {
+			rows = append(rows, kv("lane", t.Lane))
+		}
+		if n.When != nil {
+			rows = append(rows, kv("when", trunc(leafCEL(n.When.CEL), w-16)))
+		}
+		if n.Retry > 0 {
+			rows = append(rows, kv("retry", fmt.Sprintf("%d", n.Retry)))
+		}
+		if n.OnFailure != "" {
+			rows = append(rows, kv("on_failure", n.OnFailure))
+		}
+		for _, row := range rows {
+			lines = append(lines, pline{text: row})
+		}
+		// hooks: all four, always
+		set, hmissing := 0, 0
+		var hrows []string
+		for _, h := range hookPaths(t) {
+			if h[1] == "" {
+				hrows = append(hrows, cols([]string{"      " + st.ident(h[0]), st.dim("none")}, []int{18, w - 18}))
+				continue
+			}
+			set++
+			hs := st.status("ok")
+			if _, err := os.Stat(h[1]); err != nil {
+				hs = st.wrap(sgrRed, "MISSING")
+				hmissing++
+			}
+			hrows = append(hrows, cols([]string{"      " + st.ident(h[0]), relPath(m.project.Dir, h[1]) + "   " + hs}, []int{18, w - 18}))
+		}
+		hsum := fmt.Sprintf("%d of 4 set   ", set) + st.status("ok")
+		if hmissing > 0 {
+			hsum = fmt.Sprintf("%d of 4 set   ", set) + st.wrap(sgrRed, fmt.Sprintf("%d MISSING", hmissing))
+			m.autoOpen("step.hooks")
+		}
+		sub := func(key, title, summary string, rows []string) {
+			mark := ">"
+			if m.popen[key] {
+				mark = "v"
+			}
+			lines = append(lines, pline{text: "  " + st.dim(mark) + " " + st.dim(title) + "   " + summary, key: key})
+			if m.popen[key] {
+				for _, row := range rows {
+					lines = append(lines, pline{text: row})
+				}
+			}
+		}
+		sub("step.hooks", "hooks", hsum, hrows)
+		// inputs and outputs
+		var iorows []string
+		for _, name := range sortedKeys(n.Bindings) {
+			iorows = append(iorows, cols([]string{"      " + st.ident(name), st.dim("<- ") + bindingText(n.Bindings[name])}, []int{18, w - 18}))
+		}
+		for _, name := range sortedKeys(t.Output) {
+			iorows = append(iorows, cols([]string{"      " + st.ident(name), st.dim("-> ") + t.Output[name].Type}, []int{18, w - 18}))
+		}
+		sub("step.io", "inputs/outputs", fmt.Sprintf("%s   %s", plural(len(n.Bindings), "input"), plural(len(t.Output), "output")), iorows)
+		agent := "skill " + t.Skill + "   model " + t.Model + "   effort " + t.Effort
+		if len(n.Tools) > 0 {
+			agent += "   tools " + strings.Join(n.Tools, " ")
+		}
+		lines = append(lines, pline{text: kv("agent", trunc(agent, w-16))})
+		if s, ok := v.Stats[leaf(r.id)]; ok {
+			sub("step.history", "history", plural(s.N, "attempt")+"   p50 "+durText(int(s.P50.Seconds()))+"   "+st.dim("all runs of "+v.ID), []string{
+				kv("  p50", durText(int(s.P50.Seconds()))), kv("  p90", durText(int(s.P90.Seconds()))), kv("  p99", durText(int(s.P99.Seconds()))),
+			})
+		} else {
+			lines = append(lines, pline{text: "  " + st.dim("  history   no ok attempt in the store")})
+		}
+	}
+	m.plines = lines
+	return plineTexts(lines)
+}
+
+func plineTexts(lines []pline) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = l.text
+	}
+	return out
+}
+
+// paneWithCursor marks the focused pane's selected head as the selection bar.
+func (m *model) paneWithCursor(st style, lines []string, w int) []string {
+	if !m.pfocus {
+		return lines
+	}
+	heads := m.pheads()
+	if m.psel >= len(heads) {
+		m.psel = max(0, len(heads)-1)
+	}
+	if m.psel < len(heads) {
+		i := heads[m.psel]
+		lines[i] = st.rev(pad(stripSGR(lines[i]), w))
+	}
+	return lines
+}
+
+// checkLine is one NEEDS row: the kind, the name, where it was looked for,
+// the state, and the fix when MISSING.
+func checkLine(st style, kind string, c Check, w int) string {
+	val := st.ident(c.Name)
+	if c.Detail != "" {
+		val += "   " + c.Detail
+	}
+	val += "   " + st.status(c.State)
+	if c.State == "MISSING" && c.Fix != "" {
+		val += "   " + c.Fix
+	}
+	return cols([]string{"    " + st.dim(kind), trunc(val, w-16)}, []int{16, w - 16})
+}
+
+// bindingText reads a binding the way the YAML wrote it.
+func bindingText(b config.BindingDesc) string {
+	switch b.Kind {
+	case config.BindLiteral:
+		return fmt.Sprintf("%v", b.Value)
+	case "param":
+		return "params." + b.Name
+	case "item":
+		return "item." + b.Field
+	}
+	return b.Kind
+}
+
+// nodesOf lists every node of an IR, sub-workflows included.
+func nodesOf(ir *config.IR) []*config.Node {
+	var out []*config.Node
+	var walk func(*config.IR)
+	walk = func(g *config.IR) {
+		for i := range g.Nodes {
+			out = append(out, &g.Nodes[i])
+			if g.Nodes[i].Sub != nil {
+				walk(g.Nodes[i].Sub)
+			}
+		}
+	}
+	walk(ir)
 	return out
 }

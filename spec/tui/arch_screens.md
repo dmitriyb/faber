@@ -16,10 +16,24 @@ a cursor position).
 
 - **Project**: `config.Load` → `Validate` → `Desugar` for every workflow
   (the same pipeline `faber validate` runs); on failure only the error is
-  shown, since nothing else can run. Workflows with their typed params;
-  templates with their image state from the injected probe (tag resolution
-  plus a daemon existence check — the run preflight, shown before anyone
-  presses run; `not checked` when no probe is wired).
+  shown, since nothing else can run. Workflows with their typed params,
+  and the **preflight**: what the run would find out when a box starts,
+  read before anyone presses run and never by running anything. Images:
+  tag resolution plus a daemon existence check through the injected
+  probe. Roles: every declared identity — `unused` when no template names
+  it (a template without an identity needs no key, so a declared role is
+  a problem only when it is used), `ok` when a key resolves (a path-form
+  key by stat; a registry role through the injected key probe, the same
+  registry-plus-locator hop the run makes), `MISSING` with its fix
+  (`faber add-key --role …`) when nothing does, `not checked` when no
+  probe is wired. Templates: a template owns four hook slots (context,
+  prelude, postlude, on_failure), each empty or holding one script; the
+  only fact worth stating is a slot whose script is not there, by stat,
+  named by template and slot. The
+  credential resolver by path; its services only by name and mode, `not
+  checked`, since only the resolver can say whether one resolves, and
+  running it would be an action. A root config's paths are CWD-relative
+  and are checked as such, which is also how the run opens them.
 - **Runs**: the store's tolerant audit scan plus each header and replay:
   the `faber runs` state vocabulary (LIVE from the run lock, then
   incomplete, then the run-end status, with a settled run reading `ok` or
@@ -53,16 +67,20 @@ a cursor position).
 
 Header (the config path, the clock), a rule, two panes, a rule, the
 selected run's block, the footer. The project pane lists workflows with
-`name=<required>` / `name=default` params, the validate verdict, and the
-image table (`ok built`, `MISSING faber build`, `not checked`). The runs
+`name=<required>` / `name=default` params, then the preflight as
+**counts, with a row per problem**: `config ok valid`, `images 4 ok`,
+`identities 12   2 MISSING` with the two roles beneath it and their fix,
+`templates 4   1 MISSING` with `implement   prelude   ./hooks/claim-item`
+beneath it, `credentials resolver ok   3 services not checked`. Fifty
+healthy roles are one line; an unused one is a dim row; a missing image
+is a row with `faber build` and the tag hash it was looked up under, so
+"MISSING" is checkable against `docker image ls`. The runs
 pane is the `faber runs` table with wall and a `now` column (the live run's
 breadcrumb), folding to id / state / now under a hundred columns; the
 selection is a full reverse-video row. Below: `now` (the running step with
 elapsed and p50), `last` (the newest settlement) — computed on refresh,
 never while drawing. A quiet live run gets no `next` line: the journal
-cannot say what the scheduler waits on, so the view does not guess. The
-image table names the tag hash a missing image was looked up under, so
-"MISSING" is checkable against `docker image ls`. Keys: `tab` (or
+cannot say what the scheduler waits on, so the view does not guess. Keys: `tab` (or
 left/right) moves the focus between the runs and the workflows pane;
 `j`/`k` move within it; enter opens the selected run, or — with the
 workflows pane focused — the selected workflow's preview; `r` prompts `run
@@ -150,11 +168,26 @@ show the flow before any run exists — loops as frames with their cap and
 exit, their body listed once (nested loops framed the same way, in
 dependency order), generate nodes, sub-workflows — with no status column,
 since nothing has state. STRUCTURE lists loop shapes once (`cycles >
-review-cycle, up to 5`), never the unrolled iterations. The right pane lists the workflow's params (type, required or
-default), the structure (loops with their caps, generates with their
-source and target), and the selected step's template, lane, guard and
-retry. `t`/`w` switch tree and workflow, enter opens a folded body, `r`
-starts this workflow through the same prompt as Home, `q` returns.
+review-cycle, up to 5`), never the unrolled iterations. The right pane
+is **blocks that start folded**, each one summary line, so the screen
+holds the minimum and opens on request: `PARAMS   2 params`, `STRUCTURE
+1 loop`, `NEEDS   3 roles   4 templates   1 service   ok` — the preflight
+narrowed to this workflow's templates: its roles with their state, a
+template only by the slot that stops it, the services being global — and
+`STEP`, open by default, with the selected step's schema
+facts: template, identity with its state, lane, guard (leaf names), retry,
+on_failure, then sub-blocks `hooks   2 of 4 set   ok` (all four hooks
+listed when open, `none` where unset, each path's state), `inputs/outputs`
+(bindings as the YAML wrote them, outputs with their type), the agent
+line (skill, model, effort, tools), and `history` (p50 in the summary,
+the distribution when open, always all runs of this workflow). Nothing
+opaque — env, volumes, packages — is shown. A block with a MISSING opens
+itself once; after that the user's fold wins. `tab` moves the cursor to
+the pane, where `j`/`k` walk the block heads (marked `>` closed, `v`
+open), `enter` opens or closes, and `tab` returns to the flow; the footer
+names the keys of whichever side has the cursor. `t`/`w` switch tree and
+workflow, enter on the flow opens a folded body, `r` starts this workflow
+through the same prompt as Home, `q` returns.
 
 ## Liveness
 

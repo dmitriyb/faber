@@ -82,6 +82,7 @@ func wireDeps(stdout, stderr io.Writer) (config.Deps, error) {
 	view := tui.New(tui.Options{
 		Store:  store,
 		Images: imageProbe{tags: imageTagger{b: builder}, docker: docker},
+		Keys:   keyProbe{locator: security.NewKeyLocator(wlog)},
 		LogDir: filepath.Join(stateDir(hc), "logs"),
 	})
 	return config.Deps{
@@ -301,6 +302,21 @@ type imageProbe struct {
 func (p imageProbe) Tag(t *config.ResolvedTemplate) (string, error) { return p.tags.Tag(t) }
 func (p imageProbe) Exists(ctx context.Context, tag string) (bool, error) {
 	return p.docker.ImageExists(ctx, tag)
+}
+
+// keyProbe is the TUI's identity seam: the registry and the locator the
+// run itself consults before a box starts, read-only, nothing spawned.
+type keyProbe struct {
+	locator security.KeyLocator
+}
+
+func (p keyProbe) Resolve(ctx context.Context, role string, def config.IdentityDef) (string, error) {
+	reg, err := security.LoadRegistry(security.RegistryPath())
+	if err != nil {
+		return "", err
+	}
+	src, _, err := security.ResolveIdentity(ctx, reg, p.locator, role, def)
+	return src, err
 }
 
 // imageTagger adapts infra's deterministic tag derivation to the pipeline's

@@ -11,7 +11,7 @@ import (
 func renderHome(f *frame, st style, m *model) {
 	w, h := f.w, f.h
 	now := m.now()
-	f.put(0, pad(st.chrome("faber")+"   "+m.project.Path, w-8)+now.Format("15:04:05"))
+	f.put(0, pad(st.chrome("faber")+"   "+displayPath(m.project.Path), w-8)+now.Format("15:04:05"))
 	f.put(1, st.rule(w))
 	leftW := w * 3 / 10
 	if leftW < 36 {
@@ -77,22 +77,108 @@ func projectPane(st style, m *model, w int) []string {
 		}
 		out = append(out, line)
 	}
-	out = append(out, "", cols([]string{"  config", st.status("ok") + "  valid"}, widths), "")
-	tw := []int{20, w - 20}
-	out = append(out, st.dim(cols([]string{"  image", "state"}, tw)))
+	out = append(out, "", "  "+st.dim("preflight"))
+	out = append(out, preflightLines(st, p, w)...)
+	return out
+}
+
+// preflightLines is the config's health as counts, with a row for every
+// problem and its fix. Fifty healthy roles are one line; a missing one is
+// a row the eye lands on.
+func preflightLines(st style, p *Project, w int) []string {
+	pw := []int{14, 5, w - 19}
+	rw := []int{38, w - 38}
+	var out []string
+	out = append(out, cols([]string{"  " + st.dim("config"), "", st.status("ok") + "   valid"}, pw))
+	var rows []string
+	missing, checked := 0, 0
 	for _, t := range p.Templates {
-		state := st.dim("not checked")
 		switch {
 		case t.Err != "":
-			state = st.status("FAIL") + "  " + trunc(t.Err, w-30)
-		case t.Checked && t.Built:
-			state = st.status("ok") + "  built"
-		case t.Checked:
-			state = st.wrap(sgrRed, "MISSING") + "  faber build  " + st.dim(tagHash(t.Tag))
+			missing++
+			rows = append(rows, cols([]string{"                     " + st.ident(t.Name), st.status("FAIL") + "  " + trunc(t.Err, w-32)}, rw))
+		case t.Checked && !t.Built:
+			missing++
+			rows = append(rows, cols([]string{"                     " + st.ident(t.Name), "faber build   " + st.dim(tagHash(t.Tag))}, rw))
 		}
-		out = append(out, cols([]string{"  " + st.ident(t.Name), state}, tw))
+		if t.Checked {
+			checked++
+		}
+	}
+	state := st.status("ok")
+	if missing > 0 {
+		state = st.wrap(sgrRed, fmt.Sprintf("%d MISSING", missing))
+	}
+	if checked == 0 && len(p.Templates) > 0 {
+		state = st.dim("not checked")
+	}
+	out = append(out, cols([]string{"  " + st.dim("images"), fmt.Sprintf("%d", len(p.Templates)), state}, pw))
+	out = append(out, rows...)
+	out = append(out, checkSummary(st, "identities", p.Preflight.Roles, w)...)
+	out = append(out, slotSummary(st, p.Preflight, w)...)
+	cred := st.dim("none")
+	if r := p.Preflight.Resolver; r.Name != "" {
+		cred = "resolver " + st.status(r.State)
+		if r.State == "MISSING" {
+			cred += "  " + r.Detail
+		}
+	}
+	cred += fmt.Sprintf("   %s   ", plural(len(p.Preflight.Services), "service")) + st.dim("not checked")
+	out = append(out, cols([]string{"  " + st.dim("credentials"), "", cred}, pw))
+	return out
+}
+
+// slotSummary is the templates class: how many were checked, and a row per
+// hook slot whose script is not there — the template, the slot, the path.
+func slotSummary(st style, pf Preflight, w int) []string {
+	pw := []int{14, 5, w - 19}
+	broken := map[string]bool{}
+	for _, c := range pf.Slots {
+		broken[c.Name] = true
+	}
+	state := st.status("ok")
+	if len(broken) > 0 {
+		state = st.wrap(sgrRed, fmt.Sprintf("%d MISSING", len(broken)))
+	}
+	out := []string{cols([]string{"  " + st.dim("templates"), fmt.Sprintf("%d", pf.Templates), state}, pw)}
+	for _, c := range pf.Slots {
+		out = append(out, cols([]string{"                     " + st.ident(c.Name), st.dim(c.Detail), c.Fix}, []int{33, 11, w - 44}))
 	}
 	return out
+}
+
+// checkSummary is one preflight class: the count, a row per MISSING with
+// its fix, the unused ones dim, the "not checked" count when no probe is
+// wired.
+func checkSummary(st style, label string, checks []Check, w int) []string {
+	pw := []int{14, 5, w - 19}
+	rw := []int{38, w - 38}
+	var rows []string
+	missing, unchecked := 0, 0
+	for _, c := range checks {
+		switch c.State {
+		case "MISSING":
+			missing++
+			fix := c.Fix
+			if fix == "" {
+				fix = c.Detail
+			}
+			rows = append(rows, cols([]string{"                     " + st.ident(c.Name), fix}, rw))
+		case "unused":
+			rows = append(rows, cols([]string{"                     " + st.ident(c.Name), st.dim("unused")}, rw))
+		case "not checked":
+			unchecked++
+		}
+	}
+	state := st.status("ok")
+	if missing > 0 {
+		state = st.wrap(sgrRed, fmt.Sprintf("%d MISSING", missing))
+	}
+	if unchecked > 0 {
+		state += "   " + st.dim(fmt.Sprintf("%d not checked", unchecked))
+	}
+	out := []string{cols([]string{"  " + st.dim(label), fmt.Sprintf("%d", len(checks)), state}, pw)}
+	return append(out, rows...)
 }
 
 func runsPane(st style, m *model, w int) []string {

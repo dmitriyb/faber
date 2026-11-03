@@ -25,10 +25,18 @@ type ImageProbe interface {
 	Exists(ctx context.Context, tag string) (bool, error)
 }
 
+// KeyProbe resolves a role's key the way a run would before it starts a
+// box — the registry and the key locator, nothing spawned — so Home can
+// say whether a used role has a key. nil leaves registry roles "not checked".
+type KeyProbe interface {
+	Resolve(ctx context.Context, role string, def config.IdentityDef) (source string, err error)
+}
+
 // Options is the wiring's injection: every capability explicit, no globals.
 type Options struct {
 	Store      *failure.Store // run journals (required)
-	Images     ImageProbe     // nil = no images pane
+	Images     ImageProbe     // nil = images "not checked"
+	Keys       KeyProbe       // nil = registry roles "not checked"
 	LogDir     string         // where detached children write their stderr
 	Executable string         // the faber binary spawned for run/resume; "" = os.Executable()
 	Now        func() time.Time

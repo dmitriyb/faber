@@ -1,4 +1,4 @@
-faber   /workspace/faber/config/testdata/reference.yaml                                                                                                                                                              19:49:08
+faber   ../config/testdata/reference.yaml                                                                                                                                                                            19:49:08
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 PROJECT                                                            | RUNS   this config                                                                                                                  other configs: 0
 ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -7,20 +7,20 @@ PROJECT                                                            | RUNS   this
   epic        group=<required>  repo=<required>                    |   20260915-180538-4fc8c4f3  unnamed     task       LIVE       2026-09-02 19:29  20m00s     review-cycle 1/1 > review   running
   task        item=<required>  repo=<required>                     |   20260902-170408-d0feb66b  unnamed     task       FAILED     2026-09-02 19:04  15m00s
                                                                    |
-  config      ok  valid                                            |
-                                                                   |
-  image             state                                          |
-  fix               not checked                                    |
-  implement         not checked                                    |
-  merge             not checked                                    |
-  review            not checked                                    |
-                                                                   |
-                                                                   |
-                                                                   |
-                                                                   |
-                                                                   |
-                                                                   |
-                                                                   |
+  preflight                                                        |
+  config           ok   valid                                      |
+  images      4    not checked                                     |
+  identities  3    3 MISSING                                       |
+                     implementer      key file not found           |
+                     merger           key file not found           |
+                     reviewer         key file not found           |
+  templates   4    3 MISSING                                       |
+                     fix         context    ./hooks/fetch-change   |
+                     implement   context    ./hooks/gather-context |
+                     implement   prelude    ./hooks/claim-item     |
+                     implement   on_failure ./hooks/release-item   |
+                     review      context    ./hooks/fetch-change   |
+  credentials      resolver MISSING  ./hooks/get-token   1 service |
                                                                    |
                                                                    |
                                                                    |

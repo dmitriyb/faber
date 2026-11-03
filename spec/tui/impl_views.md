@@ -3,7 +3,8 @@
 ## Entry (tui.go, app.go)
 
 ```go
-type Options struct { Store *failure.Store; Images ImageProbe; LogDir, Executable string; Now func() time.Time }
+type Options struct { Store *failure.Store; Images ImageProbe; Keys KeyProbe; LogDir, Executable string; Now func() time.Time }
+type KeyProbe interface { Resolve(ctx, role string, def config.IdentityDef) (source string, err error) }   // the run's registry+locator hop, read-only
 type ImageProbe interface { Tag(*config.ResolvedTemplate) (string, error); Exists(ctx, tag string) (bool, error) }
 func New(Options) *UI                     // config.UIRunner
 func (u *UI) Run(ctx, config.UIOptions) error   // signal.NotifyContext(SIGINT, SIGTERM, SIGHUP) around the loop
@@ -13,6 +14,7 @@ type model struct {            // re-derived from the store at every tick/key
     project *Project; runs []RunRow; runSel, wfSel int; focus string
     cache *replayCache; irs *irCache; stats History; hscope string; statsVer int; loadErr string
     run *RunView; preview bool
+    pfocus bool; psel int; popen, pauto map[string]bool; plines []pline   // the preview pane: focus, cursor over block heads, folds, one-time auto-open
     rows []row; sel int                   // tree
     frows []frow; fsel int                // flow
     trows []trow; tsel, tzoom int; tpath []string; tback []int   // timeline: the current level's rows, the prefixes drilled into, the cursors to restore
@@ -30,7 +32,10 @@ image tagger and the docker client, and `<state>/logs` as the log dir.
 ## Model (model.go, tree.go, flow.go, timeline.go)
 
 ```go
-loadProject(ctx, path, probe) *Project            // Load → Validate → Desugar each workflow → probe per template; mtime kept
+loadProject(ctx, path, images, keys) *Project     // Load → Validate → Desugar each workflow → probe per template → preflight; mtime kept
+preflight(ctx, cfg, irs, dir, keys) Preflight     // roles (used? resolves?), templates' hook slots (script exists?), resolver (exists?), services (named); Check{Name, State, Detail, Fix, Used}
+needsOf(project, ir) Preflight                    // the preflight narrowed to one workflow's templates
+previewPane(st, m, w) []string                    // the preview's right pane as foldable blocks; sets m.plines for the pane cursor
 configMTime(path) time.Time
 irCache.get(path) (map[string]*config.IR, error)  // a run's IR by its header's config path, re-derived when the file moved
 replayCache.get(id) (*failure.Replay, error)      // Store.Load keyed on the journal's size+mtime; version bumps per replay
