@@ -21,4 +21,4 @@ FLOW                                     | STEP
                                          |
                                          |
                                          |
-j/k move   n next problem   / filter   t/w/l tree workflow timeline   f follow
+j/k move   n next problem   t/w/l views   f follow   q back

@@ -114,9 +114,9 @@ over OUTPUT, and the footer.
   wide bars; nesting goes as deep as the ids do. The breadcrumb above the
   axis carries the full path (`cycles 21/45 > review-cycle 1/3`), and one
   dim line draws the parent's bar with this level's window marked, so the
-  place in the whole run stays visible. Esc or backspace goes one level
-  up with the cursor back on the row entered; esc at the top leaves the
-  run. The timeline has its own cursor, the selected row is the selection
+  place in the whole run stays visible. Right arrow or enter drills in;
+  left arrow or esc (backspace too) goes one level up with the cursor
+  back on the row entered; esc at the top leaves the run. The timeline has its own cursor, the selected row is the selection
   bar, STEP and OUTPUT follow a selected step. `+`/`-` zoom the columns
   by powers of two within a level, the window centred on the selected row.
 - **STEP**: breadcrumb, status, reason or since, attempt, duration, usually,
@@ -127,10 +127,11 @@ over OUTPUT, and the footer.
 Keys: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
 `n` the next FAIL/HALT/WAIT — each on the cursor of the view shown — `/` a filter over id, name and status, `f`
 toggles follow (selection on the newest running step, else the first
-problem), `enter` opens or closes an iteration (on the timeline: drills into a group; esc or backspace comes up), `t`/`w`/`l` switch tree, workflow, timeline,
+problem), `enter` opens or closes an iteration (on the timeline: `enter`/right drills into a group, left/`esc` comes up), `t`/`w`/`l` switch tree, workflow, timeline,
 `q` returns to Home — and, with a failed step selected, remembers its
 re-enter command (or the run's resume command) to print on stdout when the
-view exits.
+view exits. The footer is per view and lists every key the view answers
+to: a key it does not name does not exist.
 
 ## Workflow preview
 

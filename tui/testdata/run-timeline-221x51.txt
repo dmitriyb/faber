@@ -48,4 +48,4 @@ TIMELINE   whole run   +/- zoom                                                 
                                                                                              |
                                                                                              |
                                                                                              |
-j/k move   n next problem   / filter   t/w/l tree workflow timeline   f follow   q back                                                                                                                 = faber runs + report
+j/k move   enter/-> in   <-/esc up   +/- zoom   n problem   t/w/l views   f follow   q back                                                                                                             = faber runs + report

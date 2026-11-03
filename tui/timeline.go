@@ -116,7 +116,7 @@ func timelinePane(st style, m *model, w, h int) []string {
 	prefix := m.tprefix()
 	path := st.dim("whole run")
 	if len(m.tpath) > 0 {
-		path = st.ident(crumb(prefix, wf, v.Bounds)) + st.dim("   esc up")
+		path = st.ident(crumb(prefix, wf, v.Bounds))
 	}
 	out := []string{st.chrome("TIMELINE") + "   " + path + st.dim("   +/- zoom"), st.rule(w)}
 	t0, t1, ok := levelSpan(v, prefix, now)

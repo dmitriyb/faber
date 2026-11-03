@@ -500,12 +500,23 @@ func TestTimelineCursorAndLetters(t *testing.T) {
 		t.Errorf("selection inside %+v, want the review step", r)
 	}
 	frame = m.render(120, 40).plain()
-	if !strings.Contains(frame, "review-cycle 2/3   esc up") || !strings.Contains(frame, "in task") || !strings.Contains(frame, "review-cycle 2/3 > review") {
+	if !strings.Contains(frame, "TIMELINE   review-cycle 2/3") || !strings.Contains(frame, "in task") || !strings.Contains(frame, "review-cycle 2/3 > review") {
 		t.Errorf("breadcrumb, parent bar or STEP missing inside the iteration:\n%s", frame)
 	}
-	m.handle(context.Background(), key{name: "esc"})
+	if !strings.Contains(frame, "enter/-> in   <-/esc up") {
+		t.Errorf("the timeline footer does not name the level keys:\n%s", frame)
+	}
+	m.handle(context.Background(), key{name: "left"})
 	if m.screen != "run" || len(m.tpath) != 0 || m.tsel != 2 {
-		t.Errorf("esc did not come back up to iteration 2: screen %q path %v cursor %d", m.screen, m.tpath, m.tsel)
+		t.Errorf("left did not come back up to iteration 2: screen %q path %v cursor %d", m.screen, m.tpath, m.tsel)
+	}
+	m.handle(context.Background(), key{name: "right"})
+	if len(m.tpath) != 1 {
+		t.Fatalf("right did not drill in: path %v", m.tpath)
+	}
+	m.handle(context.Background(), key{name: "esc"})
+	if len(m.tpath) != 0 || m.tsel != 2 {
+		t.Errorf("esc did not come back up: path %v cursor %d", m.tpath, m.tsel)
 	}
 	m.handle(context.Background(), key{name: "esc"})
 	if m.screen != "home" {

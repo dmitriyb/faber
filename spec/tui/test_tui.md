@@ -59,10 +59,11 @@ docker. The screens are rendered into frames and compared colour-stripped.
 10. **Timeline cursor, letters, zoom, drill-down.** Rows are `implement`,
     `review-cycle@1`, `review-cycle@2` under `whole run`; `j` twice
     selects iteration 2 and marks its row; enter drills in: `review` is
-    the only row, the breadcrumb reads `review-cycle 2/3   esc up`, the
-    parent bar says `in task`, STEP reads `review-cycle 2/3 > review`;
-    esc comes back up with the cursor on iteration 2, and esc at the top
-    leaves the run; at a 12-column scale the
+    the only row, the breadcrumb reads `review-cycle 2/3`, the parent bar
+    says `in task`, STEP reads `review-cycle 2/3 > review`, the footer
+    names `enter/-> in   <-/esc up`; left comes back up with the
+    cursor on iteration 2, right drills in again, esc comes up, and esc
+    at the top leaves the run; at a 12-column scale the
     3-minute implement keeps its letter beside the review that follows;
     `+` and `-` zoom in and out and the legend says `zoom x2`.
 11. **History as a distribution.** The store's `review` attempts give

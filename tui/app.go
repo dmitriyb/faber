@@ -458,8 +458,16 @@ func (m *model) workflowKeys() [][2]string {
 	return [][2]string{{"j/k", "move"}, {"t/w", "tree workflow"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
 }
 
+// runKeys is the footer per view: a key the footer does not list does not
+// exist.
 func (m *model) runKeys() [][2]string {
-	return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"/", "filter"}, {"t/w/l", "tree workflow timeline"}, {"f", "follow"}, {"q", "back"}}
+	switch m.view {
+	case "timeline":
+		return [][2]string{{"j/k", "move"}, {"enter/->", "in"}, {"<-/esc", "up"}, {"+/-", "zoom"}, {"n", "problem"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+	case "flow":
+		return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+	}
+	return [][2]string{{"j/k", "move"}, {"enter", "open/close iteration"}, {"n", "next problem"}, {"/", "filter"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 }
 
 // handle applies one key; it returns false when the app should exit.
@@ -577,7 +585,7 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		return m.handleWorkflow(ctx, k)
 	}
 	switch {
-	case (k.name == "esc" || k.r == 0x7f || k.r == 0x08) && m.view == "timeline" && len(m.tpath) > 0:
+	case (k.name == "esc" || k.name == "left" || k.r == 0x7f || k.r == 0x08) && m.view == "timeline" && len(m.tpath) > 0:
 		m.timelineUp() // a level up comes before leaving the run
 	case k.r == 'q' || k.name == "esc":
 		if r := m.selectedRow(); r != nil {
@@ -625,7 +633,7 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		if m.tzoom > 0 {
 			m.tzoom--
 		}
-	case k.name == "enter":
+	case k.name == "enter" || (k.name == "right" && m.view == "timeline"):
 		if m.view == "timeline" {
 			if m.tsel < len(m.trows) && m.trows[m.tsel].deeper {
 				m.follow = false
