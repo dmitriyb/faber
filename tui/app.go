@@ -24,25 +24,26 @@ type model struct {
 	now    func() time.Time
 	screen string // "home" | "run"
 
-	project  *Project
-	runs     []RunRow
-	runSel   int
-	wfSel    int
-	focus    string // Home: "runs" | "workflows"
-	stats    History
-	hscope   string          // the history scope in force: ScopeAllRuns or ScopeThisRun
-	preview  bool            // the Run screen is a static workflow preview (no journal)
-	pfocus   bool            // the preview's right pane has the cursor
-	psel     int             // the preview pane cursor, over block heads
-	popen    map[string]bool // which preview blocks are open
-	plines   []pline         // the preview pane as last drawn, for the cursor
-	pauto    map[string]bool // blocks a problem has opened once; the user's fold wins after
-	cache    *replayCache
-	irs      *irCache
-	statsVer int      // the cache version the stats were computed at (-1 = never)
-	selLines []string // Home's now/last lines for the selected run, computed in refresh
-	ticks    int
-	loadErr  string // the last store error, shown instead of an empty table
+	project    *Project
+	runs       []RunRow
+	runSel     int
+	wfSel      int
+	focus      string // Home: "runs" | "workflows"
+	stats      History
+	hscope     string          // the history scope in force: ScopeAllRuns or ScopeThisRun
+	preview    bool            // the Run screen is a static workflow preview (no journal)
+	pfocus     bool            // the preview's right pane has the cursor
+	psel       int             // the preview pane cursor, over block heads
+	popen      map[string]bool // which preview blocks are open
+	plines     []pline         // the preview pane as last drawn, for the cursor
+	pauto      map[string]bool // blocks a problem has opened once; the user's fold wins after
+	footerRows int             // how many rows the last footer took (1, or 2 when narrow)
+	cache      *replayCache
+	irs        *irCache
+	statsVer   int      // the cache version the stats were computed at (-1 = never)
+	selLines   []string // Home's now/last lines for the selected run, computed in refresh
+	ticks      int
+	loadErr    string // the last store error, shown instead of an empty table
 
 	run     *RunView
 	rows    []row
@@ -479,25 +480,25 @@ func (m *model) render(w, h int) *frame {
 	if m.prompt != nil {
 		f.put(h-1, m.st.chrome(m.prompt.label)+" "+m.prompt.text+"_")
 	} else if m.status != "" {
-		f.put(h-2, m.st.dim(trunc(m.status, w)))
+		f.put(h-1-m.footerRows, m.st.dim(trunc(m.status, w)))
 	} else if m.loadErr != "" {
-		f.put(h-2, m.st.status("FAIL")+" "+m.st.dim(trunc("store: "+m.loadErr, w-5)))
+		f.put(h-1-m.footerRows, m.st.status("FAIL")+" "+m.st.dim(trunc("store: "+m.loadErr, w-5)))
 	}
 	return f
 }
 
 func (m *model) homeKeys() [][2]string {
 	if m.focus == "workflows" {
-		return [][2]string{{"enter", "preview workflow"}, {"tab", "runs"}, {"j/k", "move"}, {"r", "run workflow"}, {"q", "quit"}}
+		return [][2]string{{"j/k", "move"}, {"enter", "preview"}, {"tab/->", "runs"}, {"r", "run workflow"}, {"q", "quit"}}
 	}
-	return [][2]string{{"enter", "open run"}, {"tab", "workflows"}, {"j/k", "move"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
+	return [][2]string{{"j/k", "move"}, {"enter", "open"}, {"tab/<-", "workflows"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
 }
 
 func (m *model) workflowKeys() [][2]string {
 	if m.pfocus {
-		return [][2]string{{"j/k", "move"}, {"enter", "open/close"}, {"tab", "back to the flow"}, {"r", "run this workflow"}, {"q", "back"}}
+		return [][2]string{{"j/k", "move"}, {"enter", "open/close"}, {"tab/<-", "flow"}, {"r", "run this workflow"}, {"q", "back"}}
 	}
-	return [][2]string{{"j/k", "move"}, {"tab", "details"}, {"t/w", "tree workflow"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
+	return [][2]string{{"j/k", "move"}, {"enter", "open/close"}, {"tab/->", "details"}, {"t/w", "views"}, {"r", "run this workflow"}, {"q", "back"}}
 }
 
 // runKeys is the footer per view: a key the footer does not list does not
@@ -505,11 +506,11 @@ func (m *model) workflowKeys() [][2]string {
 func (m *model) runKeys() [][2]string {
 	switch m.view {
 	case "timeline":
-		return [][2]string{{"j/k", "move"}, {"->", "in"}, {"<-", "up"}, {"+/-", "zoom"}, {"n", "problem"}, {"h", "history"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+		return [][2]string{{"j/k", "move"}, {"->", "in"}, {"<-", "up"}, {"+/-", "zoom"}, {"n", "problem"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 	case "flow":
-		return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"h", "history"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+		return [][2]string{{"j/k", "move"}, {"n", "problem"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 	}
-	return [][2]string{{"j/k", "move"}, {"enter", "open/close iteration"}, {"n", "next problem"}, {"/", "filter"}, {"h", "history"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+	return [][2]string{{"j/k", "move"}, {"->", "open"}, {"<-", "close"}, {"n", "problem"}, {"/", "filter"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 }
 
 // handle applies one key; it returns false when the app should exit.
@@ -546,32 +547,42 @@ func (m *model) handle(ctx context.Context, k key) bool {
 
 func p(m *model) *prompt { return m.prompt }
 
+// The key vocabulary is the same on every screen:
+//
+//	j/k, arrows, page keys   move the list that has the cursor
+//	tab, <- ->               the pane, where a screen has two (Home: project | runs; the
+//	                         preview: flow | details) — right goes to the right pane
+//	-> / enter               go into the thing under the cursor: open an iteration, drill
+//	                         into a timeline group, open a block
+//	<-                       come out of it
+//	esc                      back out one step if there is one, else leave the screen
+//	q                        leave the screen
+//	r, p, R                  run a workflow; pause or resume the run under the cursor or on screen
+//
+// A key the footer does not list does not exist, and the footer folds to a
+// second row rather than dropping one.
 func (m *model) handleHome(ctx context.Context, k key) bool {
 	switch {
 	case k.r == 'q' || k.name == "esc":
 		return false
-	case k.r == '\t' || k.name == "right" || k.name == "left":
+	case k.r == '\t':
 		if m.focus == "runs" {
 			m.focus = "workflows"
 		} else {
 			m.focus = "runs"
 		}
+	case k.name == "right":
+		m.focus = "runs"
+	case k.name == "left":
+		m.focus = "workflows"
 	case k.r == 'j' || k.name == "down":
-		if m.focus == "workflows" {
-			if m.wfSel < len(m.project.Workflows)-1 {
-				m.wfSel++
-			}
-		} else if m.runSel < len(m.runs)-1 {
-			m.runSel++
-		}
+		m.homeMove(1)
 	case k.r == 'k' || k.name == "up":
-		if m.focus == "workflows" {
-			if m.wfSel > 0 {
-				m.wfSel--
-			}
-		} else if m.runSel > 0 {
-			m.runSel--
-		}
+		m.homeMove(-1)
+	case k.name == "pgdn":
+		m.homeMove(10)
+	case k.name == "pgup":
+		m.homeMove(-10)
 	case k.name == "enter":
 		if m.focus == "workflows" {
 			if m.wfSel < len(m.project.Workflows) {
@@ -584,23 +595,11 @@ func (m *model) handleHome(ctx context.Context, k key) bool {
 		}
 	case k.r == 'p':
 		if sel := m.selectedRun(); sel != nil {
-			if sel.State != "LIVE" {
-				m.status = "pause: run " + sel.ID + " is not live"
-				break
-			}
-			if err := m.opts.Store.RequestPause(sel.ID); err != nil {
-				m.status = err.Error()
-			} else {
-				m.status = "pause requested: faber runs pause " + sel.ID
-			}
+			m.pauseRun(sel.ID, sel.State == "LIVE")
 		}
 	case k.r == 'R':
 		if sel := m.selectedRun(); sel != nil {
-			if sel.State == "LIVE" {
-				m.status = "resume: run " + sel.ID + " is live; it holds its own lock"
-				break
-			}
-			m.status = m.spawn("resume", sel.ID)
+			m.resumeRun(sel.ID, sel.State == "LIVE")
 		}
 	case k.r == 'r':
 		if m.project.cfg == nil {
@@ -622,13 +621,57 @@ func (m *model) handleHome(ctx context.Context, k key) bool {
 	return true
 }
 
+// homeMove moves the focused Home list by d rows, clamped.
+func (m *model) homeMove(d int) {
+	if m.focus == "workflows" {
+		m.wfSel = clamp(m.wfSel+d, 0, len(m.project.Workflows)-1)
+		return
+	}
+	m.runSel = clamp(m.runSel+d, 0, len(m.runs)-1)
+}
+
+func clamp(v, lo, hi int) int {
+	if hi < lo {
+		return lo
+	}
+	return min(max(v, lo), hi)
+}
+
+// pauseRun writes the pause marker for a live run; a settled run is refused
+// with a message and no marker.
+func (m *model) pauseRun(id string, live bool) {
+	if !live {
+		m.status = "pause: run " + id + " is not live"
+		return
+	}
+	if err := m.opts.Store.RequestPause(id); err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.status = "pause requested: faber runs pause " + id
+}
+
+// resumeRun spawns the resume for a settled run; a live run holds its own
+// lock and is refused.
+func (m *model) resumeRun(id string, live bool) {
+	if live {
+		m.status = "resume: run " + id + " is live; it holds its own lock"
+		return
+	}
+	m.status = m.spawn("resume", id)
+}
+
+// handleRun is the Run screen's key set over the view that has the cursor.
 func (m *model) handleRun(ctx context.Context, k key) bool {
 	if m.preview {
 		return m.handleWorkflow(ctx, k)
 	}
+	back := k.name == "left" || k.r == 0x7f || k.r == 0x08
 	switch {
-	case (k.name == "esc" || k.name == "left" || k.r == 0x7f || k.r == 0x08) && m.view == "timeline" && len(m.tpath) > 0:
+	case (k.name == "esc" || back) && m.view == "timeline" && len(m.tpath) > 0:
 		m.timelineUp() // a level up comes before leaving the run
+	case back && m.view == "tree":
+		m.closeIteration()
 	case k.r == 'q' || k.name == "esc":
 		if r := m.selectedRow(); r != nil {
 			if line, ok := m.lineOf(r.id); ok && line.Error != nil && line.Error.Handoff != "" {
@@ -668,6 +711,10 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 			m.hscope = ScopeAllRuns
 		}
 		m.openRunKeepingPlace(m.run.ID)
+	case k.r == 'p':
+		m.pauseRun(m.run.ID, m.run.Live)
+	case k.r == 'R':
+		m.resumeRun(m.run.ID, m.run.Live)
 	case k.r == 't':
 		m.view = "tree"
 	case k.r == 'w':
@@ -682,8 +729,9 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		if m.tzoom > 0 {
 			m.tzoom--
 		}
-	case k.name == "enter" || (k.name == "right" && m.view == "timeline"):
-		if m.view == "timeline" {
+	case k.name == "enter" || k.name == "right":
+		switch m.view {
+		case "timeline":
 			if m.tsel < len(m.trows) && m.trows[m.tsel].deeper {
 				m.follow = false
 				m.tpath = append(m.tpath, m.trows[m.tsel].id)
@@ -691,11 +739,15 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 				m.tsel = 0
 				m.rebuildRows()
 			}
-			break
-		}
-		if r := m.selectedRow(); r != nil && r.kind == "iter" {
-			m.open[r.id] = !m.open[r.id]
-			m.rebuildRows()
+		case "tree":
+			if r := m.selectedRow(); r != nil && r.kind == "iter" {
+				if k.name == "right" {
+					m.open[r.id] = true // right goes in; enter toggles
+				} else {
+					m.open[r.id] = !m.open[r.id]
+				}
+				m.rebuildRows()
+			}
 		}
 	case k.r == '/':
 		m.prompt = &prompt{label: "filter:", done: func(text string) string {
@@ -710,24 +762,54 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 	return true
 }
 
-// handleWorkflow is the preview's key set: move, open iterations, switch
-// tree/flow, start the workflow, back.
+// closeIteration is "come out" on the tree: the iteration under the cursor
+// folds, or the one the cursor is inside folds with the cursor on its row.
+func (m *model) closeIteration() {
+	if m.sel >= len(m.rows) {
+		return
+	}
+	r := m.rows[m.sel]
+	if r.kind == "iter" {
+		m.open[r.id] = false
+		m.rebuildRows()
+		return
+	}
+	for i := m.sel - 1; i >= 0; i-- {
+		if it := m.rows[i]; it.kind == "iter" && strings.HasPrefix(r.id, it.id) {
+			m.open[it.id] = false
+			m.follow = false
+			m.sel = i
+			m.rebuildRows()
+			return
+		}
+	}
+}
+
+// handleWorkflow is the preview's key set: the flow on the left, the
+// details pane on the right, the same vocabulary as Home for the pane and
+// as the tree for opening things.
 func (m *model) handleWorkflow(ctx context.Context, k key) bool {
 	switch {
+	case k.name == "esc" && m.pfocus:
+		m.pfocus = false // back out one step: the pane returns the cursor to the flow
 	case k.r == 'q' || k.name == "esc":
 		m.screen = "home"
 		m.preview = false
 	case k.r == '\t':
 		m.pfocus = !m.pfocus
+	case k.name == "right" && !m.pfocus:
+		m.pfocus = true
+	case k.name == "left" && m.pfocus:
+		m.pfocus = false
 	case m.pfocus && (k.r == 'j' || k.name == "down"):
-		if heads := m.pheads(); m.psel < len(heads)-1 {
-			m.psel++
-		}
+		m.paneMove(1)
 	case m.pfocus && (k.r == 'k' || k.name == "up"):
-		if m.psel > 0 {
-			m.psel--
-		}
-	case m.pfocus && k.name == "enter":
+		m.paneMove(-1)
+	case m.pfocus && k.name == "pgdn":
+		m.paneMove(10)
+	case m.pfocus && k.name == "pgup":
+		m.paneMove(-10)
+	case m.pfocus && (k.name == "enter" || k.name == "right"):
 		if heads := m.pheads(); m.psel < len(heads) {
 			key := m.plines[heads[m.psel]].key
 			m.popen[key] = !m.popen[key]
@@ -736,6 +818,14 @@ func (m *model) handleWorkflow(ctx context.Context, k key) bool {
 		m.moveDown()
 	case k.r == 'k' || k.name == "up":
 		m.moveUp()
+	case k.name == "pgdn":
+		for i := 0; i < 10; i++ {
+			m.moveDown()
+		}
+	case k.name == "pgup":
+		for i := 0; i < 10; i++ {
+			m.moveUp()
+		}
 	case k.r == 't':
 		m.view = "tree"
 	case k.r == 'w':
@@ -756,6 +846,11 @@ func (m *model) handleWorkflow(ctx context.Context, k key) bool {
 		}}
 	}
 	return true
+}
+
+// paneMove moves the preview pane's cursor over its block heads.
+func (m *model) paneMove(d int) {
+	m.psel = clamp(m.psel+d, 0, len(m.pheads())-1)
 }
 
 // spawn starts `faber <sub> args…` as a detached child whose output goes to

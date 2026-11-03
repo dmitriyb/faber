@@ -60,7 +60,7 @@ func renderRun(f *frame, st style, m *model) {
 	for i, row := range panes(st, [][]string{left, rightCol}, []int{leftW, rightW}, bodyH) {
 		f.put(3+i, row)
 	}
-	f.put(h-1, footer(st, w, m.runKeys(), "= faber runs + report"))
+	putFooter(f, st, m, m.runKeys(), "= faber runs + report")
 }
 
 // renderWorkflow draws the preview: the flow (or the folded
@@ -91,7 +91,7 @@ func renderWorkflow(f *frame, st style, m *model) {
 	for i, row := range panes(st, [][]string{left, right}, []int{leftW, rightW}, bodyH) {
 		f.put(2+i, row)
 	}
-	f.put(h-1, footer(st, w, m.workflowKeys(), "= faber validate --emit-ir, rendered"))
+	putFooter(f, st, m, m.workflowKeys(), "= faber validate --emit-ir, rendered")
 }
 
 // plural renders "1 attempt" / "2 attempts".

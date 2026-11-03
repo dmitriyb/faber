@@ -44,7 +44,7 @@ func renderHome(f *frame, st style, m *model) {
 	} else {
 		f.put(y, st.dim("no runs in the store yet"))
 	}
-	f.put(h-1, footer(st, w, m.homeKeys(), "= faber runs"))
+	putFooter(f, st, m, m.homeKeys(), "= faber runs")
 }
 
 func projectPane(st style, m *model, w int) []string {
@@ -248,20 +248,42 @@ func sameConfig(journaled, project string) bool {
 	return strings.HasSuffix(journaled, "/"+project) || strings.HasSuffix(project, "/"+journaled)
 }
 
-// footer renders the key legend and the CLI equivalent on the right.
-func footer(st style, w int, keys [][2]string, equiv string) string {
+// putFooter draws the key legend on the last row, with the CLI equivalent
+// on the right when it fits; on a narrow terminal the legend folds onto a
+// second row above rather than dropping a key.
+func putFooter(f *frame, st style, m *model, keys [][2]string, equiv string) {
+	rows := footerRows(st, f.w, keys, equiv)
+	m.footerRows = len(rows)
+	for i, r := range rows {
+		f.put(f.h-len(rows)+i, r)
+	}
+}
+
+func footerRows(st style, w int, keys [][2]string, equiv string) []string {
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		parts = append(parts, st.chrome(k[0])+" "+k[1])
 	}
-	left := strings.Join(parts, "   ")
-	if vis(left) > w {
-		left = strings.Join(parts, " ") // narrow: every key still named, tighter
+	line := func(ps []string) string {
+		s := strings.Join(ps, "   ")
+		if vis(s) > w {
+			s = strings.Join(ps, " ")
+		}
+		return s
 	}
-	if vis(left)+vis(equiv)+2 > w {
-		return left
+	one := line(parts)
+	if vis(one) <= w {
+		if vis(one)+vis(equiv)+2 <= w {
+			one = pad(one, w-vis(equiv)) + st.dim(equiv)
+		}
+		return []string{one}
 	}
-	return pad(left, w-vis(equiv)) + st.dim(equiv)
+	// two rows: fill the first while it fits, the rest on the second
+	cut := len(parts)
+	for cut > 1 && vis(line(parts[:cut])) > w {
+		cut--
+	}
+	return []string{line(parts[:cut]), line(parts[cut:])}
 }
 
 // elapsedText renders "since" as elapsed from now.

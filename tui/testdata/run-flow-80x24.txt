@@ -21,4 +21,4 @@ FLOW                                     | STEP
                                          |
                                          |
                                          |
-j/k move   n next problem   h history   t/w/l views   f follow   q back
+j/k move n problem h history p pause R resume t/w/l views f follow q back

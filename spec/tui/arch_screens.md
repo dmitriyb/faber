@@ -151,7 +151,19 @@ over OUTPUT, and the footer.
   the halt. **OUTPUT**: the newest attempt's `output.log` tail,
   terminal-sanitized.
 
-Keys: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
+One key vocabulary on every screen: `j`/`k`, arrows and page keys move
+the list that has the cursor; `tab` and left/right move between panes
+where a screen has two (Home: left is the project, right the runs; the
+preview: left the flow, right the details); right or enter goes into the
+thing under the cursor (opens an iteration, drills into a timeline group,
+opens a block) and left comes out of it (closes the iteration, even from
+inside it, with the cursor back on its row; a level up); esc backs out
+one step if there is one (a timeline level, the details pane, a prompt)
+and otherwise leaves the screen, which `q` always does; `r`, `p`, `R`
+run, pause and resume the run under the cursor on Home or the run on
+screen. The footer lists every key the screen answers to, and folds onto
+a second row on a narrow terminal rather than dropping one. On the Run
+screen: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
 `n` the next FAIL/HALT/WAIT — each on the cursor of the view shown — `/` a filter over id, name and status, `f`
 toggles follow (selection on the newest running step, else the first
 problem), `enter` opens or closes an iteration (on the timeline: `enter`/right drills into a group, left/`esc` comes up), `h` switches the history scope, `t`/`w`/`l` switch tree, workflow, timeline,

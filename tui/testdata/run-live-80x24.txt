@@ -20,5 +20,5 @@ STEPS                                    | STEP
                                          |
                                          |
                                          |
-                                         |
-j/k move enter open/close iteration n next problem / filter h history t/w/l view
+j/k move -> open <- close n problem / filter h history p pause R resume
+t/w/l views   f follow   q back

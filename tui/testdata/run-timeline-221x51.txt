@@ -48,4 +48,4 @@ TIMELINE   whole run   +/- zoom                                                 
                                                                                              |
                                                                                              |
                                                                                              |
-j/k move   -> in   <- up   +/- zoom   n problem   h history   t/w/l views   f follow   q back                                                                                                           = faber runs + report
+j/k move   -> in   <- up   +/- zoom   n problem   h history   p pause   R resume   t/w/l views   f follow   q back                                                                                      = faber runs + report

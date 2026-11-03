@@ -116,6 +116,14 @@ docker. The screens are rendered into frames and compared colour-stripped.
     flow`; enter opens PARAMS; `j` twice and enter fold NEEDS despite its
     problem; `tab` returns the cursor to the flow, where `j` moves again.
 
+20. **One key vocabulary.** Left on Home focuses the project pane and
+    right the runs; page keys clamp. On the preview, right focuses the
+    details pane, esc returns to the flow before it leaves the preview,
+    left returns too. On the tree, right opens an iteration and left
+    closes it from inside, cursor on its row. `p` on the open settled run
+    says `not live`, `R` on the open live run says `is live`. At 80
+    columns the tree footer folds to two rows and still ends in `q back`.
+
 ## Edge cases
 
 - Hooks are four fixed slots per template; Home never lists hooks as a

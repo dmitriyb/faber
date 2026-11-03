@@ -544,7 +544,7 @@ func TestPreviewFolds(t *testing.T) {
 	if !strings.Contains(frame, "v PARAMS   2 params") || !strings.Contains(frame, "item        string   required") {
 		t.Errorf("enter did not open PARAMS:\n%s", frame)
 	}
-	if !strings.Contains(frame, "tab back to the flow") {
+	if !strings.Contains(frame, "tab/<- flow") {
 		t.Errorf("footer does not say how to leave the pane:\n%s", frame)
 	}
 	m.handle(context.Background(), key{r: 'j'})
@@ -944,5 +944,87 @@ func TestTimelineDrillsDown(t *testing.T) {
 	m.handle(context.Background(), key{r: 0x7f})
 	if len(m.tpath) != 0 || m.tsel != 20 {
 		t.Errorf("two levels up: path %v cursor %d (want 20)", m.tpath, m.tsel)
+	}
+}
+
+// Verifies 1d5d7c4db2fe: one key vocabulary on every screen — arrows and
+// tab move between panes on Home and the preview, right goes into the
+// thing under the cursor and left comes out on the tree, esc backs out
+// one step before it leaves a screen, page keys work on every list, and
+// pause/resume act on the run on screen.
+func TestKeysAreOneVocabulary(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	// Home: left is the project pane, right the runs pane; page keys clamp
+	m.handle(context.Background(), key{name: "left"})
+	if m.focus != "workflows" {
+		t.Errorf("left on Home: focus %q", m.focus)
+	}
+	m.handle(context.Background(), key{name: "pgdn"})
+	if m.wfSel != len(m.project.Workflows)-1 {
+		t.Errorf("pgdn on the workflows: %d", m.wfSel)
+	}
+	m.handle(context.Background(), key{name: "right"})
+	if m.focus != "runs" {
+		t.Errorf("right on Home: focus %q", m.focus)
+	}
+	// preview: right goes to details, left comes back, esc from the pane comes back first
+	m.openWorkflow("task")
+	m.handle(context.Background(), key{name: "right"})
+	if !m.pfocus {
+		t.Fatal("right did not focus the details pane")
+	}
+	m.handle(context.Background(), key{name: "esc"})
+	if m.pfocus || m.screen != "run" {
+		t.Errorf("esc from the pane: focus %v screen %q (want the flow, still on the preview)", m.pfocus, m.screen)
+	}
+	m.handle(context.Background(), key{name: "right"})
+	m.handle(context.Background(), key{name: "left"})
+	if m.pfocus {
+		t.Error("left did not return to the flow")
+	}
+	m.handle(context.Background(), key{name: "esc"})
+	if m.screen != "home" {
+		t.Errorf("esc on the flow did not leave the preview: %q", m.screen)
+	}
+	// tree: right opens an iteration, left closes it (from inside too)
+	m.openRun("20260902-170408-d0feb66b")
+	m.follow = false
+	m.view = "tree"
+	m.sel = 0
+	for i := range m.rows {
+		if m.rows[i].kind == "iter" && m.rows[i].id == "task/review-cycle@1/" {
+			m.sel = i
+		}
+	}
+	before := len(m.rows)
+	m.handle(context.Background(), key{name: "right"})
+	if len(m.rows) != before+2 || !m.open["task/review-cycle@1/"] {
+		t.Fatalf("right did not open iteration 1: %d rows (was %d)", len(m.rows), before)
+	}
+	m.handle(context.Background(), key{r: 'j'}) // inside it
+	m.handle(context.Background(), key{name: "left"})
+	if len(m.rows) != before || m.rows[m.sel].id != "task/review-cycle@1/" {
+		t.Errorf("left from inside did not close iteration 1 with the cursor on its row: %d rows, cursor on %q", len(m.rows), m.rows[m.sel].id)
+	}
+	// Run: p and R act on the run on screen
+	m.handle(context.Background(), key{r: 'p'})
+	if !strings.Contains(m.status, "not live") {
+		t.Errorf("p on a settled run: %q", m.status)
+	}
+	m.openRun("20260915-180538-4fc8c4f3")
+	m.handle(context.Background(), key{r: 'R'})
+	if !strings.Contains(m.status, "is live") {
+		t.Errorf("R on the live run: %q", m.status)
+	}
+	// a narrow terminal folds the footer to two rows instead of dropping keys
+	m.view = "tree"
+	f := m.render(80, 24)
+	last, prev := f.plain(), ""
+	rows := strings.Split(strings.TrimRight(last, "\n"), "\n")
+	last, prev = rows[len(rows)-1], rows[len(rows)-2]
+	if !strings.Contains(prev, "j/k move") || !strings.Contains(last, "q back") || m.footerRows != 2 {
+		t.Errorf("narrow footer did not fold (%d rows):\n%s\n%s", m.footerRows, prev, last)
 	}
 }
