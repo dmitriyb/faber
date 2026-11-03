@@ -3,20 +3,20 @@ run   20260902-170408-d0feb66b   FAILED   task   item=I-1   repo=sandboxstarted
 --------------------------------------------------------------------------------
 GRAPH   columns are dependency depth     | STEP
 ---------------------------------------- | -------------------------------------
-  [implement    ok 3m00s ]----->[review- |
-                                         | review-cycle 2/3 > review
-                                         |   status    FAIL
-                                         |   reason    agent-failed
+  [implement  ]---->[review-cyc~]---->[m |
+   impleme~ ok       revie~ FAIL         | implement
+                                         |   status    ok
                                          |   attempt   1
                                          |   duration  3m00s
-                                         |   usually   4m00s   median across the
+                                         |   usually   16m00s   median across th
+                                         |   outputs   branch=work/x  pr=17
                                          |
-                                         | error
+                                         |
                                          | OUTPUT   attempt 1   output.log
                                          | -------------------------------------
-                                         | prelude: fetch-pr #17 ok
-                                         | agent: claude --print ... started
-                                         | agent: exit 1
+                                         |   no output captured
+                                         |
+                                         |
                                          |
                                          |
                                          |

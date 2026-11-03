@@ -24,6 +24,21 @@ type gnode struct {
 // node, iteration nodes vanish, generate instances become one node each
 // under their generate. Edges are the IR's, mapped through the fold.
 func collapsedGraph(v *RunView, rows []row) ([]gnode, [][2]int) {
+	return buildGraph(v, rows, false)
+}
+
+// previewGraph inlines every loop body once: the nodes of iteration 1 at
+// every nesting level, labelled by their path without the iteration
+// marks (review-cycle/review), with the IR's own edges among them — the
+// compute graph as the author drew it, before any run.
+func previewGraph(v *RunView) ([]gnode, [][2]int) {
+	return buildGraph(v, nil, true)
+}
+
+func buildGraph(v *RunView, rows []row, preview bool) ([]gnode, [][2]int) {
+	if preview {
+		return inlinedGraph(v)
+	}
 	foldIter := func(id string) string {
 		segs := strings.Split(id, "/")
 		for k, seg := range segs {
@@ -119,6 +134,121 @@ func collapsedGraph(v *RunView, rows []row) ([]gnode, [][2]int) {
 	return nodes, edges
 }
 
+// inlinedGraph is the preview's graph: first-iteration nodes only, loop
+// marks dropped from labels, IR edges and condition reads among them.
+func inlinedGraph(v *RunView) ([]gnode, [][2]int) {
+	if v.IR == nil {
+		return nil, nil
+	}
+	first := func(id string) (string, bool) {
+		segs := strings.Split(id, "/")
+		var out []string
+		for k, seg := range segs {
+			if name, i, ok := config.IterationOf(seg); ok {
+				if i != 1 {
+					return "", false
+				}
+				out = append(out, name)
+				continue
+			}
+			if k == 0 && seg == v.IR.Workflow {
+				continue
+			}
+			out = append(out, seg)
+		}
+		return strings.Join(out, "/"), true
+	}
+	var nodes []gnode
+	index := map[string]int{}
+	var walk func(*config.IR)
+	walk = func(g *config.IR) {
+		for i := range g.Nodes {
+			n := &g.Nodes[i]
+			if n.Sub != nil {
+				walk(n.Sub)
+			}
+			if n.Kind == config.KindSelector {
+				continue
+			}
+			label, ok := first(n.ID)
+			if !ok {
+				continue
+			}
+			index[n.ID] = len(nodes)
+			nodes = append(nodes, gnode{id: n.ID, label: label})
+		}
+	}
+	walk(v.IR)
+	var edges [][2]int
+	seen := map[[2]int]bool{}
+	selTarget := map[string]string{} // selector id -> its first (newest-first list's last) candidate in iteration 1
+	var sels func(*config.IR)
+	sels = func(g *config.IR) {
+		for i := range g.Nodes {
+			n := &g.Nodes[i]
+			if n.Sub != nil {
+				sels(n.Sub)
+			}
+			if n.Kind == config.KindSelector && n.Sel != nil && len(n.Sel.Candidates) > 0 {
+				selTarget[n.ID] = n.Sel.Candidates[len(n.Sel.Candidates)-1]
+			}
+		}
+	}
+	sels(v.IR)
+	resolve := func(id string) (int, bool) {
+		if t, ok := selTarget[id]; ok {
+			id = t
+		}
+		i, ok := index[id]
+		return i, ok
+	}
+	addEdge := func(from, to string) {
+		a, aok := resolve(from)
+		b, bok := resolve(to)
+		if !aok || !bok || a == b || seen[[2]int{a, b}] {
+			return
+		}
+		seen[[2]int{a, b}] = true
+		edges = append(edges, [2]int{a, b})
+	}
+	var collect func(*config.IR)
+	collect = func(g *config.IR) {
+		for _, e := range g.Edges {
+			addEdge(e.From, e.To)
+		}
+		for i := range g.Nodes {
+			n := &g.Nodes[i]
+			if n.Sub != nil {
+				collect(n.Sub)
+			}
+			if n.When != nil {
+				for _, d := range n.When.Deps {
+					addEdge(d, n.ID)
+				}
+			}
+		}
+	}
+	collect(v.IR)
+	return nodes, edges
+}
+
+// commonLoopPrefix is the loop path every preview node shares, or "".
+func commonLoopPrefix(nodes []gnode) string {
+	if len(nodes) == 0 {
+		return ""
+	}
+	first, _, ok := strings.Cut(nodes[0].label, "/")
+	if !ok {
+		return ""
+	}
+	for _, n := range nodes {
+		if !strings.HasPrefix(n.label, first+"/") {
+			return ""
+		}
+	}
+	return first
+}
+
 // layout assigns columns by longest path from the sources and rows by one
 // barycenter pass over the previous column, id order breaking ties.
 func layout(nodes []gnode, edges [][2]int) {
@@ -188,12 +318,22 @@ func bary(nodes []gnode, preds []int) float64 {
 // graphPane draws the laid-out graph: boxes per column, orthogonal edges.
 // Above a size the drawing cannot read, columns fold to summaries.
 func graphPane(st style, m *model, w, h int) []string {
-	out := []string{st.chrome("GRAPH") + st.dim("   columns are dependency depth"), st.rule(w)}
-	nodes, edges := collapsedGraph(m.run, m.rows)
+	title := st.chrome("GRAPH") + st.dim("   columns are dependency depth")
+	nodes, edges := m.graph()
 	if len(nodes) == 0 {
-		return append(out, "  "+st.dim("nothing to draw"))
+		return append([]string{title, st.rule(w)}, "  "+st.dim("nothing to draw"))
 	}
-	layout(nodes, edges)
+	if m.preview {
+		// Every node inside one outer loop shares its path; say it once in
+		// the title instead of in every box.
+		if prefix := commonLoopPrefix(nodes); prefix != "" {
+			title = st.chrome("GRAPH") + "   inside " + st.ident(strings.ReplaceAll(prefix, "/", " > ")) + st.dim(fmt.Sprintf("  (up to %d iterations)", m.run.Bounds[m.run.ID+"/"+prefix])) + st.dim("   columns are dependency depth")
+			for i := range nodes {
+				nodes[i].label = strings.TrimPrefix(nodes[i].label, prefix+"/")
+			}
+		}
+	}
+	out := []string{title, st.rule(w)}
 	maxCol, rowsPerCol := 0, map[int]int{}
 	for _, n := range nodes {
 		if n.col > maxCol {
@@ -219,18 +359,29 @@ func graphPane(st style, m *model, w, h int) []string {
 		}
 		return out
 	}
-	boxW := 24
-	gap := 6
-	cellW := boxW + gap
+	// Cells fit the pane: the column pitch is the width over the columns,
+	// boxes two lines tall (the loop path above the step name) so a label
+	// like review-cycle/review needs no 30-cell box.
+	cells := maxCol + 1
+	cellW := (w - 4) / cells
+	if cellW < 18 {
+		cellW = 18
+	}
+	if cellW > 34 {
+		cellW = 34
+	}
+	gap := 5
+	boxW := cellW - gap
 	maxRows := 0
 	for _, r := range rowsPerCol {
 		if r > maxRows {
 			maxRows = r
 		}
 	}
-	rowH := 2
+	rowH := 3
+	selectedX := map[int][2]int{}
 	canvas := make([][]byte, maxRows*rowH+1)
-	width := (maxCol+1)*cellW + 2
+	width := cells*cellW + 2
 	for i := range canvas {
 		canvas[i] = []byte(strings.Repeat(" ", width))
 	}
@@ -244,8 +395,11 @@ func graphPane(st style, m *model, w, h int) []string {
 			}
 		}
 	}
-	// Edges first, nodes on top: a box is never cut by a line passing
-	// through its column.
+	// Edges first, nodes on top. A multi-column edge turns in the gap right
+	// after its source column and runs along the target's row, so it never
+	// threads a box; boxes drawn afterwards hide what it crosses. Arrowheads
+	// go last, so a longer edge's line never overwrites a shorter one's head.
+	var heads [][2]int
 	for _, e := range edges {
 		a, b := nodes[e[0]], nodes[e[1]]
 		if b.col <= a.col {
@@ -254,44 +408,88 @@ func graphPane(st style, m *model, w, h int) []string {
 		x0 := 2 + a.col*cellW + boxW
 		x1 := 2 + b.col*cellW
 		y0, y1 := a.row*rowH, b.row*rowH
-		mid := x0 + (x1-x0)/2
-		for x := x0; x < mid; x++ {
-			put(x, y0, "-")
-		}
-		if y0 != y1 {
+		xv := x0 + 2
+		if y0 == y1 {
+			for x := x0; x < x1-1; x++ {
+				put(x, y0, "-")
+			}
+		} else {
+			for x := x0; x < xv; x++ {
+				put(x, y0, "-")
+			}
 			lo, hi := y0, y1
 			if lo > hi {
 				lo, hi = hi, lo
 			}
 			for y := lo; y <= hi; y++ {
-				put(mid, y, "|")
+				put(xv, y, "|")
 			}
-			put(mid, y0, "+")
-			put(mid, y1, "+")
+			put(xv, y0, "+")
+			put(xv, y1, "+")
+			for x := xv + 1; x < x1-1; x++ {
+				put(x, y1, "-")
+			}
 		}
-		for x := mid + 1; x < x1-1; x++ {
-			put(x, y1, "-")
-		}
-		put(x1-1, y1, ">")
+		heads = append(heads, [2]int{x1 - 1, y1})
+	}
+	for _, h := range heads {
+		put(h[0], h[1], ">")
 	}
 	colored := map[[2]int]string{} // (x,y) of a status word start -> status
-	for _, n := range nodes {
+	selected := map[int]bool{}
+	for i, n := range nodes {
 		x, y := 2+n.col*cellW, n.row*rowH
-		label := trunc(n.label, 12)
+		top, name := "", n.label
+		if m.preview {
+			if j := strings.LastIndex(n.label, "/"); j >= 0 {
+				top, name = n.label[:j], n.label[j+1:]
+			}
+		}
 		status := n.status
 		if m.preview {
-			status = "" // a preview has no state, only structure
+			status = ""
 		}
-		text := fmt.Sprintf("[%-12s %s", label, status)
-		if n.dur != "" && len(text)+1+len(n.dur) < boxW-1 {
-			text += " " + n.dur
+		inner := boxW - 2
+		line1 := "[" + pad(trunc(top, inner), inner) + "]"
+		line2 := " " + trunc(name, inner)
+		if status != "" {
+			line2 = " " + pad(trunc(name, inner-len(status)-1), inner-len(status)-1) + " " + status
 		}
-		text = pad(trunc(text, boxW-1), boxW-1) + "]"
-		put(x, y, text)
-		colored[[2]int{x + 14, y}] = status
+		if n.dur != "" && vis(line2)+1+len(n.dur) <= boxW {
+			line2 += " " + n.dur
+		}
+		line2 = pad(trunc(line2, boxW), boxW)
+		if !m.preview || top == "" {
+			// a run's box, or a preview node outside any loop: the name on
+			// top, status and duration (or nothing) below
+			line1 = "[" + pad(trunc(name, inner), inner) + "]"
+			if top == "" && m.preview {
+				line2 = pad("", boxW)
+			}
+		}
+		put(x, y, line1)
+		put(x, y+1, line2)
+		if status != "" {
+			colored[[2]int{x + 1 + inner - len(status), y + 1}] = status
+		}
+		if i == m.selectedNode() {
+			selected[y], selected[y+1] = true, true
+			selectedX[y] = [2]int{x, x + boxW}
+			selectedX[y+1] = [2]int{x, x + boxW}
+		}
 	}
 	for y, line := range canvas {
 		s := string(line)
+		if selected[y] {
+			// the selected box in reverse video, codes stripped inside it
+			x0, x1 := selectedX[y][0], selectedX[y][1]
+			if x1 > len(s) {
+				x1 = len(s)
+			}
+			s = s[:x0] + st.rev(s[x0:x1]) + s[x1:]
+			out = append(out, fitRow(s, w))
+			continue
+		}
 		// colour the status words in place
 		for pos, status := range colored {
 			if pos[1] == y && st.color {

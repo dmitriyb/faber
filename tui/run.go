@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,14 +90,14 @@ func renderWorkflow(f *frame, st style, m *model) {
 		}
 	}
 	right = append(right, "", st.chrome("STRUCTURE"), st.rule(rightW), "")
-	bounds := config.LoopBounds(v.IR)
-	for _, loop := range sortedKeys(bounds) {
-		right = append(right, cols([]string{"  " + st.ident(strings.TrimPrefix(loop, v.ID+"/")), fmt.Sprintf("loop, up to %d iterations", bounds[loop])}, []int{22, rightW - 22}))
+	nameW := 28
+	for _, sh := range loopShapes(v.IR) {
+		right = append(right, cols([]string{"  " + st.ident(trunc(sh.name, nameW-3)), fmt.Sprintf("loop, up to %d iterations", sh.cap)}, []int{nameW, rightW - nameW}))
 	}
 	for i := range v.IR.Nodes {
 		n := &v.IR.Nodes[i]
 		if n.Kind == config.KindGenerate && n.Gen != nil {
-			right = append(right, cols([]string{"  " + st.ident(strings.TrimPrefix(n.ID, v.ID+"/")), "generate over " + n.Gen.Source + " -> " + n.Gen.Workflow}, []int{22, rightW - 22}))
+			right = append(right, cols([]string{"  " + st.ident(trunc(strings.TrimPrefix(n.ID, v.ID+"/"), nameW-3)), "generate over " + n.Gen.Source + " -> " + n.Gen.Workflow}, []int{nameW, rightW - nameW}))
 		}
 	}
 	if r := m.selectedRow(); r != nil && r.kind == "step" {
@@ -124,6 +125,45 @@ func renderWorkflow(f *frame, st style, m *model) {
 		f.put(2+i, row)
 	}
 	f.put(h-1, footer(st, w, m.workflowKeys(), "= faber validate --emit-ir, rendered"))
+}
+
+// loopShape is one loop of the workflow as the author wrote it: its path
+// with the iteration marks dropped ("cycles > review-cycle") and its cap.
+type loopShape struct {
+	name string
+	cap  int
+}
+
+// loopShapes folds the unrolled loop bounds back to shapes, each once, in
+// path order.
+func loopShapes(ir *config.IR) []loopShape {
+	seen := map[string]int{}
+	var order []string
+	for loop, cap := range config.LoopBounds(ir) {
+		segs := strings.Split(loop, "/")
+		var parts []string
+		for k, seg := range segs {
+			if k == 0 && seg == ir.Workflow {
+				continue
+			}
+			if name, _, ok := config.IterationOf(seg); ok {
+				parts = append(parts, name)
+				continue
+			}
+			parts = append(parts, seg)
+		}
+		name := strings.Join(parts, " > ")
+		if _, ok := seen[name]; !ok {
+			order = append(order, name)
+		}
+		seen[name] = cap
+	}
+	sort.Strings(order)
+	out := make([]loopShape, 0, len(order))
+	for _, n := range order {
+		out = append(out, loopShape{name: n, cap: seen[n]})
+	}
+	return out
 }
 
 func (m *model) workflowInfo(name string) *WorkflowInfo {

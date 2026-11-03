@@ -130,8 +130,11 @@ func runsPane(st style, m *model, w int) []string {
 			cells = []string{"  " + st.ident(r.ID), st.status(r.State), nowCol}
 		}
 		line := cols(cells, widths)
-		if i == m.runSel {
-			line = st.rev(pad(line, w))
+		switch {
+		case i == m.runSel && m.focus == "runs":
+			line = st.rev(pad(stripSGR(line), w))
+		case i == m.runSel:
+			line = st.dim(">") + line[1:] // the remembered selection, unfocused
 		}
 		out = append(out, line)
 	}

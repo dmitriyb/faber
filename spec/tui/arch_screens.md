@@ -79,9 +79,13 @@ over OUTPUT, and the footer.
   generate nodes with an instance node each, selectors folded into their
   loops — with the IR's edges and condition reads mapped through the fold.
   Columns are longest-path depth from the sources; rows one barycenter pass
-  over the previous column, id order breaking ties; boxes `[name status
-  dur]` in cells, orthogonal edges drawn beneath the boxes (`---+`, `|`,
-  `+--->`). Above sixty nodes the columns fold to `depth n: k nodes, …`.
+  over the previous column, id order breaking ties; the column pitch fits
+  the pane; boxes are two lines (name; status and duration), edges drawn
+  beneath them, turning in the gap after their source column and running
+  along the target's row, arrowheads last. The graph has its own cursor:
+  `j`/`k` walk the nodes column by column, the selected box is reverse
+  video, and STEP follows it. Above sixty nodes the columns fold to `depth
+  n: k nodes, …`.
 - **timeline**: one row per outermost iteration (`review-cycle@2`) or
   top-level step, a bar of the executed attempts' step initials (`X` for a
   failure) coloured by status on an axis scaled to the width, the running
@@ -105,9 +109,15 @@ view exits.
 Enter on a workflow opens the Run screen's views over the IR alone: an
 empty replay reported through the same reporter, so the tree and the graph
 show the compute graph before any run exists — loops as `up to N
-iterations` with their body listed once, generate nodes, sub-workflows,
-and the graph's dependency columns — with no status words, since nothing
-has state. The right pane lists the workflow's params (type, required or
+iterations` with their body listed once (nested loops folded the same way,
+in dependency order), generate nodes, sub-workflows — with no status words,
+since nothing has state. The preview's graph inlines every loop body once:
+the nodes of iteration 1 at every nesting level with the IR's own edges
+among them (selectors folded onto their first candidate), boxes two lines
+tall with the loop path above the step name, and an outer loop every node
+shares named once in the title (`inside cycles (up to 45 iterations)`)
+rather than in every box. STRUCTURE lists loop shapes once (`cycles >
+review-cycle, up to 5`), never the unrolled iterations. The right pane lists the workflow's params (type, required or
 default), the structure (loops with their caps, generates with their
 source and target), and the selected step's template, lane, guard and
 retry. `t`/`g` switch tree and graph, enter opens a folded body, `r`

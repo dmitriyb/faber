@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -35,6 +36,10 @@ type model struct {
 	run     *RunView
 	rows    []row
 	sel     int
+	gnodes  []gnode // the graph view's laid-out nodes (nil = rebuild)
+	gedges  [][2]int
+	gorder  []int  // node indices in column-major order, the cursor's path
+	gsel    int    // index into gorder
 	view    string // "tree" | "graph" | "timeline"
 	follow  bool
 	filter  string
@@ -66,10 +71,87 @@ func (m *model) selectedRun() *RunRow {
 }
 
 func (m *model) selectedRow() *row {
+	if m.view == "graph" {
+		nodes, _ := m.graph()
+		if m.gsel < 0 || m.gsel >= len(m.gorder) {
+			return nil
+		}
+		n := nodes[m.gorder[m.gsel]]
+		for i := range m.rows {
+			if m.rows[i].id == n.id {
+				return &m.rows[i]
+			}
+		}
+		return &row{id: n.id, kind: "step", name: n.label}
+	}
 	if m.sel < 0 || m.sel >= len(m.rows) {
 		return nil
 	}
 	return &m.rows[m.sel]
+}
+
+// graph returns the laid-out graph for the current view, cached per
+// rebuild so the keys and the renderer agree; gorder is the cursor's path
+// through it (column-major).
+func (m *model) graph() ([]gnode, [][2]int) {
+	if m.gnodes == nil {
+		if m.preview {
+			m.gnodes, m.gedges = previewGraph(m.run)
+		} else {
+			m.gnodes, m.gedges = collapsedGraph(m.run, m.rows)
+		}
+		layout(m.gnodes, m.gedges)
+		m.gorder = make([]int, len(m.gnodes))
+		for i := range m.gorder {
+			m.gorder[i] = i
+		}
+		nodes := m.gnodes
+		sort.SliceStable(m.gorder, func(a, b int) bool {
+			na, nb := nodes[m.gorder[a]], nodes[m.gorder[b]]
+			if na.col != nb.col {
+				return na.col < nb.col
+			}
+			return na.row < nb.row
+		})
+		if m.gsel >= len(m.gorder) {
+			m.gsel = 0
+		}
+	}
+	return m.gnodes, m.gedges
+}
+
+// selectedNode is the graph cursor's node index, -1 when none.
+func (m *model) selectedNode() int {
+	if m.view != "graph" || m.gsel < 0 || m.gsel >= len(m.gorder) {
+		return -1
+	}
+	return m.gorder[m.gsel]
+}
+
+// moveDown / moveUp move whichever cursor the view shows.
+func (m *model) moveDown() {
+	if m.view == "graph" {
+		m.graph()
+		if m.gsel < len(m.gorder)-1 {
+			m.gsel++
+		}
+		return
+	}
+	if m.sel < len(m.rows)-1 {
+		m.sel++
+	}
+}
+
+func (m *model) moveUp() {
+	if m.view == "graph" {
+		if m.gsel > 0 {
+			m.gsel--
+		}
+		return
+	}
+	if m.sel > 0 {
+		m.sel--
+	}
 }
 
 func (m *model) otherRuns() int {
@@ -130,6 +212,7 @@ func (m *model) refresh(ctx context.Context) {
 }
 
 func (m *model) rebuildRows() {
+	m.gnodes, m.gedges, m.gorder = nil, nil, nil
 	all := treeRowsMode(m.run, m.open, m.now(), m.preview)
 	if m.filter != "" {
 		var kept []row
@@ -374,14 +457,10 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		m.filter = ""
 	case k.r == 'j' || k.name == "down":
 		m.follow = false
-		if m.sel < len(m.rows)-1 {
-			m.sel++
-		}
+		m.moveDown()
 	case k.r == 'k' || k.name == "up":
 		m.follow = false
-		if m.sel > 0 {
-			m.sel--
-		}
+		m.moveUp()
 	case k.name == "pgdn":
 		m.follow = false
 		m.sel = min(m.sel+10, len(m.rows)-1)
@@ -432,13 +511,9 @@ func (m *model) handleWorkflow(ctx context.Context, k key) bool {
 		m.screen = "home"
 		m.preview = false
 	case k.r == 'j' || k.name == "down":
-		if m.sel < len(m.rows)-1 {
-			m.sel++
-		}
+		m.moveDown()
 	case k.r == 'k' || k.name == "up":
-		if m.sel > 0 {
-			m.sel--
-		}
+		m.moveUp()
 	case k.r == 't':
 		m.view = "tree"
 	case k.r == 'g':
