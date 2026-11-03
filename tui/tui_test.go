@@ -359,3 +359,62 @@ func TestGraphLayout(t *testing.T) {
 		}
 	}
 }
+
+// Verifies 1d5d7c4db2fe: the workflow preview renders the compute graph
+// and the folded structure from the IR alone — loops as "up to N
+// iterations" with their body once, no status words — and tab moves the
+// Home focus between the panes.
+func TestWorkflowPreview(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	m := testModel(t, store)
+	m.handle(context.Background(), key{r: '\t'})
+	if m.focus != "workflows" {
+		t.Fatalf("tab did not switch focus: %q", m.focus)
+	}
+	m.handle(context.Background(), key{r: 'j'}) // epic, task sorted: task is second
+	m.handle(context.Background(), key{name: "enter"})
+	if m.screen != "run" || !m.preview || m.run.ID != "task" {
+		t.Fatalf("enter did not open the task preview: screen %q preview %v run %v", m.screen, m.preview, m.run)
+	}
+	checkGolden(t, "workflow-graph-221x51.txt", m.render(221, 51).plain())
+	m.view = "tree"
+	checkGolden(t, "workflow-tree-221x51.txt", m.render(221, 51).plain())
+	var notes []string
+	for _, r := range m.rows {
+		notes = append(notes, r.name+"|"+r.status+"|"+r.note)
+	}
+	joined := strings.Join(notes, "\n")
+	if !strings.Contains(joined, "review-cycle||up to 3 iterations") || !strings.Contains(joined, "review||") || !strings.Contains(joined, "fix||") {
+		t.Errorf("preview rows %s", joined)
+	}
+	for _, r := range m.rows {
+		if r.status != "" && r.status != "absent" {
+			t.Errorf("preview row %s carries state %q", r.id, r.status)
+		}
+	}
+	m.handle(context.Background(), key{r: 'q'})
+	if m.screen != "home" || m.preview {
+		t.Error("q must return home and leave preview mode")
+	}
+}
+
+// Verifies 1d5d7c4db2fe: a missing image names the tag hash it looked for.
+func TestHomeShowsMissingTagHash(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	abs, _ := filepath.Abs(refConfig)
+	m := newApp(Options{Store: store, Now: func() time.Time { return fixed }, Images: fakeProbe{}}, config.UIOptions{ConfigPath: abs})
+	m.refresh(context.Background())
+	frame := m.render(221, 51).plain()
+	if !strings.Contains(frame, "MISSING  faber build  20be39bb9bb7") {
+		t.Errorf("missing image line lacks the tag hash:\n%s", frame)
+	}
+}
+
+type fakeProbe struct{}
+
+func (fakeProbe) Tag(t *config.ResolvedTemplate) (string, error) {
+	return "faber/" + t.Name + ":20be39bb9bb7", nil
+}
+func (fakeProbe) Exists(context.Context, string) (bool, error) { return false, nil }

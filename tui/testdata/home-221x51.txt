@@ -48,4 +48,4 @@ SELECTED   20260915-180538-4fc8c4f3   task   started 2026-09-02 19:29   LIVE
   last  implement   ok
 
 
-enter open run   r run workflow   p pause   R resume   q quit   ? all keys                                                                                                                                       = faber runs
+enter open run   tab workflows   r run workflow   p pause   R resume   q quit   ? all keys                                                                                                                       = faber runs

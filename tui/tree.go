@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/pipeline"
 )
 
@@ -47,6 +49,13 @@ func statusWord(state string) string {
 // node, or is explicitly opened is expanded. Running nodes come from the
 // journal's starts (absent lines with a start are running or dead).
 func treeRows(v *RunView, open map[string]bool, now time.Time) []row {
+	return treeRowsMode(v, open, now, false)
+}
+
+// treeRowsMode is treeRows with the preview flag: in a preview nothing
+// executed, so loops read "up to N" and absent iterations are listed as
+// the structure they are.
+func treeRowsMode(v *RunView, open map[string]bool, now time.Time, preview bool) []row {
 	running := map[string]Running{}
 	for _, r := range v.Running {
 		running[r.Step] = r
@@ -55,6 +64,9 @@ func treeRows(v *RunView, open map[string]bool, now time.Time) []row {
 	var walk func(items []pipeline.ReadItem, scope string, indent int)
 	stepRow := func(l pipeline.StepLine, scope string, indent int) row {
 		r := row{indent: indent, id: l.ID, kind: "step", name: strings.TrimPrefix(l.ID, scope), status: statusWord(l.Status), dur: fmtDur(l.Duration)}
+		if preview {
+			r.status = ""
+		}
 		if run, ok := running[l.ID]; ok && v.Live {
 			r.status, r.since = "running", run.Since
 			r.dur = durText(int(now.Sub(run.Since).Seconds()))
@@ -88,7 +100,7 @@ func treeRows(v *RunView, open map[string]bool, now time.Time) []row {
 	var loopRows func(l pipeline.LoopRollup, scope string, indent int)
 	loopRows = func(l pipeline.LoopRollup, scope string, indent int) {
 		name := strings.TrimPrefix(l.Loop, scope)
-		if l.Ran == 0 && !l.Exhausted {
+		if l.Ran == 0 && !l.Exhausted && !preview {
 			r := row{indent: indent, id: l.Loop, kind: "loop", name: name, status: "not reached"}
 			if l.Absent[0] > 0 {
 				r.status = "absent"
@@ -101,6 +113,9 @@ func treeRows(v *RunView, open map[string]bool, now time.Time) []row {
 		}
 		hdr := row{indent: indent, id: l.Loop, kind: "loop", name: name, status: statusWord(l.Status),
 			note: fmt.Sprintf("%d of up to %d", l.Ran, l.Bound)}
+		if preview {
+			hdr.note = fmt.Sprintf("up to %d iterations", l.Bound)
+		}
 		if l.Exhausted {
 			hdr.note += "  exhausted"
 		}
@@ -108,6 +123,14 @@ func treeRows(v *RunView, open map[string]bool, now time.Time) []row {
 			hdr.note += "  -> " + relName(l.Chose, l.Loop)
 		}
 		rows = append(rows, hdr)
+		if preview && v.IR != nil {
+			hdr.status = ""
+			rows[len(rows)-1] = hdr
+			// The body, once: iteration 1's nodes in dependency order, nested
+			// loops folded the same way.
+			rows = append(rows, previewBody(v.IR, l.Loop+"@1/", indent+1)...)
+			return
+		}
 		for _, it := range l.Iterations {
 			prefix := l.Loop + "@" + strconv.Itoa(it.Index) + "/"
 			live := false
@@ -164,6 +187,130 @@ func treeRows(v *RunView, open map[string]bool, now time.Time) []row {
 		}
 	}
 	return rows
+}
+
+// previewBody lists a loop body once, from the IR: iteration 1's steps in
+// dependency order, a nested loop as one "up to N" row with its own body
+// beneath. Selectors are wiring and are not listed.
+func previewBody(ir *config.IR, prefix string, indent int) []row {
+	type item struct {
+		id   string // step id, or a nested loop's prefix id
+		loop bool
+		cap  int
+	}
+	seen := map[string]bool{}
+	var items []item
+	var walk func(*config.IR)
+	walk = func(g *config.IR) {
+		for i := range g.Nodes {
+			n := &g.Nodes[i]
+			if n.Sub != nil {
+				walk(n.Sub)
+			}
+			if !strings.HasPrefix(n.ID, prefix) || n.Kind == config.KindSelector {
+				continue
+			}
+			rest := strings.TrimPrefix(n.ID, prefix)
+			first, _, nested := strings.Cut(rest, "/")
+			if !nested {
+				if !seen[n.ID] {
+					seen[n.ID] = true
+					items = append(items, item{id: n.ID})
+				}
+				continue
+			}
+			if name, i, ok := config.IterationOf(first); ok {
+				loop := prefix + name
+				if !seen[loop] {
+					seen[loop] = true
+					items = append(items, item{id: loop, loop: true})
+				}
+				for k := range items {
+					if items[k].id == loop && i > items[k].cap {
+						items[k].cap = i
+					}
+				}
+			}
+		}
+	}
+	walk(ir)
+	// dependency order among the items: an item's rank is the longest path
+	// over the IR's edges and condition reads, folded onto items
+	fold := func(id string) string {
+		if !strings.HasPrefix(id, prefix) {
+			return ""
+		}
+		rest := strings.TrimPrefix(id, prefix)
+		first, _, nested := strings.Cut(rest, "/")
+		if nested {
+			if name, _, ok := config.IterationOf(first); ok {
+				return prefix + name
+			}
+			return ""
+		}
+		return id
+	}
+	rank := map[string]int{}
+	pred := map[string][]string{}
+	var collect func(*config.IR)
+	collect = func(g *config.IR) {
+		for _, e := range g.Edges {
+			a, b := fold(e.From), fold(e.To)
+			if a != "" && b != "" && a != b {
+				pred[b] = append(pred[b], a)
+			}
+		}
+		for i := range g.Nodes {
+			n := &g.Nodes[i]
+			if n.Sub != nil {
+				collect(n.Sub)
+			}
+			if n.When == nil {
+				continue
+			}
+			b := fold(n.ID)
+			for _, d := range n.When.Deps {
+				if a := fold(d); a != "" && b != "" && a != b {
+					pred[b] = append(pred[b], a)
+				}
+			}
+		}
+	}
+	collect(ir)
+	var rankOf func(string, int) int
+	rankOf = func(id string, depth int) int {
+		if r, ok := rank[id]; ok {
+			return r
+		}
+		if depth > 64 {
+			return 0
+		}
+		best := 0
+		for _, p := range pred[id] {
+			if r := rankOf(p, depth+1) + 1; r > best {
+				best = r
+			}
+		}
+		rank[id] = best
+		return best
+	}
+	sort.SliceStable(items, func(a, b int) bool {
+		ra, rb := rankOf(items[a].id, 0), rankOf(items[b].id, 0)
+		if ra != rb {
+			return ra < rb
+		}
+		return items[a].id < items[b].id
+	})
+	var out []row
+	for _, it := range items {
+		if it.loop {
+			out = append(out, row{indent: indent, id: it.id, kind: "loop", name: strings.TrimPrefix(it.id, prefix), note: fmt.Sprintf("up to %d iterations", it.cap)})
+			out = append(out, previewBody(ir, it.id+"@1/", indent+1)...)
+			continue
+		}
+		out = append(out, row{indent: indent, id: it.id, kind: "step", name: strings.TrimPrefix(it.id, prefix)})
+	}
+	return out
 }
 
 // composition is a finished iteration's one-line summary: step kinds in

@@ -27,7 +27,10 @@ type model struct {
 	project *Project
 	runs    []RunRow
 	runSel  int
+	wfSel   int
+	focus   string // Home: "runs" | "workflows"
 	meds    map[string]time.Duration
+	preview bool // the Run screen is a static workflow preview (no journal)
 
 	run     *RunView
 	rows    []row
@@ -52,7 +55,7 @@ type prompt struct {
 }
 
 func newApp(o Options, uo config.UIOptions) *model {
-	return &model{opts: o, uo: uo, st: style{color: uo.Color}, now: o.Now, screen: "home", view: "tree", follow: true, open: map[string]bool{}, alerted: map[string]bool{}}
+	return &model{opts: o, uo: uo, st: style{color: uo.Color}, now: o.Now, screen: "home", focus: "runs", view: "tree", follow: true, open: map[string]bool{}, alerted: map[string]bool{}}
 }
 
 func (m *model) selectedRun() *RunRow {
@@ -118,7 +121,7 @@ func (m *model) refresh(ctx context.Context) {
 	if m.runSel < 0 {
 		m.runSel = 0
 	}
-	if m.screen == "run" && m.run != nil {
+	if m.screen == "run" && m.run != nil && !m.preview {
 		if v, err := loadRun(m.opts.Store, m.run.ID, m.meds, m.now()); err == nil {
 			m.run = v
 			m.rebuildRows()
@@ -127,7 +130,7 @@ func (m *model) refresh(ctx context.Context) {
 }
 
 func (m *model) rebuildRows() {
-	all := treeRows(m.run, m.open, m.now())
+	all := treeRowsMode(m.run, m.open, m.now(), m.preview)
 	if m.filter != "" {
 		var kept []row
 		for _, r := range all {
@@ -138,7 +141,7 @@ func (m *model) rebuildRows() {
 		all = kept
 	}
 	m.rows = all
-	if m.follow {
+	if m.follow && !m.preview {
 		if idx := m.newestActive(); idx >= 0 {
 			m.sel = idx
 		}
@@ -194,16 +197,36 @@ func (m *model) openRun(id string) {
 		return
 	}
 	m.run = v
+	m.preview = false
 	m.screen = "run"
 	m.sel = 0
+	m.rebuildRows()
+}
+
+// openWorkflow switches to the Workflow screen: the Run screen's views
+// over the IR alone, nothing journaled — the compute graph before a run.
+func (m *model) openWorkflow(name string) {
+	v, err := previewWorkflow(m.project, name)
+	if err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.run = v
+	m.preview = true
+	m.screen = "run"
+	m.view = "graph"
+	m.sel = 0
+	m.follow = false
 	m.rebuildRows()
 }
 
 // render draws the current screen into a frame.
 func (m *model) render(w, h int) *frame {
 	f := newFrame(w, h)
-	switch m.screen {
-	case "run":
+	switch {
+	case m.screen == "run" && m.preview:
+		renderWorkflow(f, m.st, m)
+	case m.screen == "run":
 		renderRun(f, m.st, m)
 	default:
 		renderHome(f, m.st, m)
@@ -217,7 +240,14 @@ func (m *model) render(w, h int) *frame {
 }
 
 func (m *model) homeKeys() [][2]string {
-	return [][2]string{{"enter", "open run"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
+	if m.focus == "workflows" {
+		return [][2]string{{"enter", "preview workflow"}, {"tab", "runs"}, {"r", "run workflow"}, {"q", "quit"}}
+	}
+	return [][2]string{{"enter", "open run"}, {"tab", "workflows"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
+}
+
+func (m *model) workflowKeys() [][2]string {
+	return [][2]string{{"j/k", "move"}, {"t/g", "tree graph"}, {"enter", "expand"}, {"r", "run this workflow"}, {"q", "back"}}
 }
 
 func (m *model) runKeys() [][2]string {
@@ -259,15 +289,35 @@ func (m *model) handleHome(ctx context.Context, k key) bool {
 	switch {
 	case k.r == 'q' || k.name == "esc":
 		return false
+	case k.r == '\t' || k.name == "right" || k.name == "left":
+		if m.focus == "runs" {
+			m.focus = "workflows"
+		} else {
+			m.focus = "runs"
+		}
 	case k.r == 'j' || k.name == "down":
-		if m.runSel < len(m.runs)-1 {
+		if m.focus == "workflows" {
+			if m.wfSel < len(m.project.Workflows)-1 {
+				m.wfSel++
+			}
+		} else if m.runSel < len(m.runs)-1 {
 			m.runSel++
 		}
 	case k.r == 'k' || k.name == "up":
-		if m.runSel > 0 {
+		if m.focus == "workflows" {
+			if m.wfSel > 0 {
+				m.wfSel--
+			}
+		} else if m.runSel > 0 {
 			m.runSel--
 		}
 	case k.name == "enter":
+		if m.focus == "workflows" {
+			if m.wfSel < len(m.project.Workflows) {
+				m.openWorkflow(m.project.Workflows[m.wfSel].Name)
+			}
+			break
+		}
 		if sel := m.selectedRun(); sel != nil {
 			m.openRun(sel.ID)
 		}
@@ -308,6 +358,9 @@ func (m *model) handleHome(ctx context.Context, k key) bool {
 }
 
 func (m *model) handleRun(ctx context.Context, k key) bool {
+	if m.preview {
+		return m.handleWorkflow(ctx, k)
+	}
 	switch {
 	case k.r == 'q' || k.name == "esc":
 		if r := m.selectedRow(); r != nil {
@@ -366,6 +419,43 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 				return ""
 			}
 			return "filter: " + text + " (empty to clear)"
+		}}
+	}
+	return true
+}
+
+// handleWorkflow is the preview's key set: move, open iterations, switch
+// tree/graph, start the workflow, back.
+func (m *model) handleWorkflow(ctx context.Context, k key) bool {
+	switch {
+	case k.r == 'q' || k.name == "esc":
+		m.screen = "home"
+		m.preview = false
+	case k.r == 'j' || k.name == "down":
+		if m.sel < len(m.rows)-1 {
+			m.sel++
+		}
+	case k.r == 'k' || k.name == "up":
+		if m.sel > 0 {
+			m.sel--
+		}
+	case k.r == 't':
+		m.view = "tree"
+	case k.r == 'g':
+		m.view = "graph"
+	case k.name == "enter":
+		if r := m.selectedRow(); r != nil && r.kind == "iter" {
+			m.open[r.id] = !m.open[r.id]
+			m.rebuildRows()
+		}
+	case k.r == 'r':
+		wf := m.run.Replay.Header.Workflow
+		m.prompt = &prompt{label: "run " + wf + " [k=v ...]:", done: func(text string) string {
+			args := []string{wf}
+			for _, kv := range strings.Fields(text) {
+				args = append(args, "--param", kv)
+			}
+			return m.spawn("run", args...)
 		}}
 	}
 	return true

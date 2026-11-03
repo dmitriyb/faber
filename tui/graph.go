@@ -279,6 +279,9 @@ func graphPane(st style, m *model, w, h int) []string {
 		x, y := 2+n.col*cellW, n.row*rowH
 		label := trunc(n.label, 12)
 		status := n.status
+		if m.preview {
+			status = "" // a preview has no state, only structure
+		}
 		text := fmt.Sprintf("[%-12s %s", label, status)
 		if n.dur != "" && len(text)+1+len(n.dur) < boxW-1 {
 			text += " " + n.dur

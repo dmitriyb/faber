@@ -1,0 +1,51 @@
+workflow   task   preview: the compute graph before any run                                                                                                                   /workspace/faber/config/testdata/reference.yaml
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+STEPS                                                                                                                                | PARAMS
+------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------
+  step                        status       duration                                                                                  |
+  implement                                                                                                                          |   item        string   required
+  review-cycle                                       up to 3 iterations                                                              |   repo        string   required
+    review                                                                                                                           |
+    fix                                                                                                                              | STRUCTURE
+  merge                                                                                                                              | --------------------------------------------------------------------------------------
+                                                                                                                                     |
+                                                                                                                                     |   review-cycle        loop, up to 3 iterations
+                                                                                                                                     |
+                                                                                                                                     | STEP
+                                                                                                                                     | --------------------------------------------------------------------------------------
+                                                                                                                                     |
+                                                                                                                                     | implement
+                                                                                                                                     |   template  implement
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+                                                                                                                                     |
+j/k move   t/g tree graph   enter expand   r run this workflow   q back   ? all keys                                                                                                     = faber validate --emit-ir, rendered

@@ -315,6 +315,26 @@ func loadRun(store *failure.Store, id string, meds map[string]time.Duration, now
 	return v, nil
 }
 
+// previewWorkflow builds a RunView over the IR alone — an empty replay
+// reported through the same reporter — so the Run screen's tree and graph
+// show a workflow's compute graph before any run exists. Every line is
+// "absent", which the preview renders as structure rather than state.
+func previewWorkflow(p *Project, name string) (*RunView, error) {
+	if p == nil || p.cfg == nil {
+		return nil, fmt.Errorf("preview %s: the config does not validate", name)
+	}
+	ir := p.irs[name]
+	if ir == nil {
+		return nil, fmt.Errorf("preview %s: workflow not desugared", name)
+	}
+	rp := &failure.Replay{Header: failure.Header{Workflow: name}, Results: map[failure.Key]failure.ResultRecord{}, LastByStep: map[string]failure.ResultRecord{}}
+	report, err := (pipeline.RunReporter{Targets: p.irs}).Report(rp, ir, "")
+	if err != nil {
+		return nil, err
+	}
+	return &RunView{ID: name, Replay: rp, Report: report, IR: ir, Bounds: config.LoopBounds(ir)}, nil
+}
+
 // outputTail reads the last n lines of an attempt's output.log.
 func outputTail(runDir, nodeID string, attempt, n int) []string {
 	raw, err := os.ReadFile(filepath.Join(pipeline.AttemptDir(runDir, nodeID, attempt), pipeline.OutputLogName))

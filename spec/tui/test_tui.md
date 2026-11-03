@@ -43,6 +43,14 @@ docker. The screens are rendered into frames and compared colour-stripped.
    2 (the selector folded into its loop); no iteration node survives the
    collapse.
 
+8. **Workflow preview.** Tab moves the Home focus to the workflows pane;
+   enter on `task` opens the preview; its graph and tree frames at 221×51
+   match their goldens; rows carry `review-cycle||up to 3 iterations` with
+   the body steps once and no status words; `q` returns home.
+9. **Missing image names its tag.** With a probe that reports every image
+   absent under `…:20be39bb9bb7`, Home prints `MISSING  faber build
+   20be39bb9bb7`.
+
 ## Edge cases
 
 - Narrow terminals: the runs table folds its columns and the footer drops

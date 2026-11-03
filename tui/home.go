@@ -21,7 +21,7 @@ func renderHome(f *frame, st style, m *model) {
 		leftW = 66
 	}
 	rightW := w - leftW - 3
-	left := projectPane(st, m.project, leftW)
+	left := projectPane(st, m, leftW)
 	right := runsPane(st, m, rightW)
 	bodyH := h - 2 - 1 - 5 - 1 // header+rule, rule, selected block, footer
 	if bodyH < 4 {
@@ -47,7 +47,8 @@ func renderHome(f *frame, st style, m *model) {
 	f.put(h-1, footer(st, w, m.homeKeys(), "= faber runs"))
 }
 
-func projectPane(st style, p *Project, w int) []string {
+func projectPane(st style, m *model, w int) []string {
+	p := m.project
 	out := []string{st.chrome("PROJECT"), st.rule(w), ""}
 	if p.Err != nil {
 		out = append(out, "  config  "+st.status("FAIL"))
@@ -58,7 +59,7 @@ func projectPane(st style, p *Project, w int) []string {
 	}
 	widths := []int{14, w - 14}
 	out = append(out, st.dim(cols([]string{"  workflow", "params"}, widths)))
-	for _, wf := range p.Workflows {
+	for i, wf := range p.Workflows {
 		var ps []string
 		for _, pr := range wf.Params {
 			switch {
@@ -70,7 +71,11 @@ func projectPane(st style, p *Project, w int) []string {
 				ps = append(ps, pr.Name+"=?")
 			}
 		}
-		out = append(out, cols([]string{"  " + st.ident(wf.Name), strings.Join(ps, "  ")}, widths))
+		line := cols([]string{"  " + st.ident(wf.Name), strings.Join(ps, "  ")}, widths)
+		if m.focus == "workflows" && i == m.wfSel {
+			line = st.rev(pad(stripSGR(line), w))
+		}
+		out = append(out, line)
 	}
 	out = append(out, "", cols([]string{"  config", st.status("ok") + "  valid"}, widths), "")
 	tw := []int{20, w - 20}
@@ -83,7 +88,7 @@ func projectPane(st style, p *Project, w int) []string {
 		case t.Checked && t.Built:
 			state = st.status("ok") + "  built"
 		case t.Checked:
-			state = st.wrap(sgrRed, "MISSING") + "  faber build"
+			state = st.wrap(sgrRed, "MISSING") + "  faber build  " + st.dim(tagHash(t.Tag))
 		}
 		out = append(out, cols([]string{"  " + st.ident(t.Name), state}, tw))
 	}
@@ -134,6 +139,15 @@ func runsPane(st style, m *model, w int) []string {
 		out = append(out, "  "+st.dim("no journaled runs"))
 	}
 	return out
+}
+
+// tagHash is the hash part of an image tag ("faber/review:20be39bb9bb7" ->
+// "20be39bb9bb7"), what distinguishes a rebuilt image.
+func tagHash(tag string) string {
+	if i := strings.LastIndex(tag, ":"); i >= 0 {
+		return tag[i+1:]
+	}
+	return tag
 }
 
 // sameConfig compares a journaled config path with the project's: equal

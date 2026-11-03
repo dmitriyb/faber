@@ -46,8 +46,12 @@ pane is the `faber runs` table with wall and a `now` column (the live run's
 breadcrumb), folding to id / state / now under a hundred columns; the
 selection is a full reverse-video row. Below: `now` (the running step with
 elapsed and median), `last` (the newest settlement), `next` (what the run
-waits on). Keys: enter opens; `r` prompts `run <workflow> [k=v …]` and
-spawns the child; `p` pauses a live run (and refuses, with a message, a
+waits on). The image table names the tag hash a missing image was looked
+up under, so "MISSING" is checkable against `docker image ls`. Keys: `tab`
+(or left/right) moves the focus between the runs and the workflows pane;
+`j`/`k` move within it; enter opens the selected run, or — with the
+workflows pane focused — the selected workflow's preview; `r` prompts `run
+<workflow> [k=v …]` and spawns the child; `p` pauses a live run (and refuses, with a message, a
 run that is not live — no marker is written); `R` spawns the resume; `q`
 quits. Prune, upgrade and key management stay CLI-only.
 
@@ -95,6 +99,19 @@ problem), `enter` opens or closes an iteration, `t`/`g`/`l` switch views,
 `q` returns to Home — and, with a failed step selected, remembers its
 re-enter command (or the run's resume command) to print on stdout when the
 view exits.
+
+## Workflow preview
+
+Enter on a workflow opens the Run screen's views over the IR alone: an
+empty replay reported through the same reporter, so the tree and the graph
+show the compute graph before any run exists — loops as `up to N
+iterations` with their body listed once, generate nodes, sub-workflows,
+and the graph's dependency columns — with no status words, since nothing
+has state. The right pane lists the workflow's params (type, required or
+default), the structure (loops with their caps, generates with their
+source and target), and the selected step's template, lane, guard and
+retry. `t`/`g` switch tree and graph, enter opens a folded body, `r`
+starts this workflow through the same prompt as Home, `q` returns.
 
 ## Liveness
 

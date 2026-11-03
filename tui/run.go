@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/failure"
 	"github.com/dmitriyb/faber/pipeline"
 )
@@ -48,6 +49,90 @@ func renderRun(f *frame, st style, m *model) {
 		f.put(3+i, row)
 	}
 	f.put(h-1, footer(st, w, m.runKeys(), "= faber runs + report"))
+}
+
+// renderWorkflow draws the preview: the compute graph (or the folded
+// structure) on the left, the params and the selected node on the right.
+func renderWorkflow(f *frame, st style, m *model) {
+	w, h := f.w, f.h
+	v := m.run
+	wf := m.workflowInfo(v.ID)
+	hdr := st.chrome("workflow") + "   " + st.ident(v.ID) + "   " + st.dim("preview: the compute graph before any run")
+	f.put(0, pad(hdr, w-vis(m.project.Path))+st.dim(m.project.Path))
+	f.put(1, st.rule(w))
+	leftW := w * 60 / 100
+	if leftW < 40 {
+		leftW = 40
+	}
+	rightW := w - leftW - 3
+	bodyH := h - 3
+	var left []string
+	if m.view == "tree" {
+		left = treePane(st, m, leftW, bodyH)
+	} else {
+		left = graphPane(st, m, leftW, bodyH)
+	}
+	right := []string{st.chrome("PARAMS"), st.rule(rightW), ""}
+	if wf != nil {
+		for _, p := range wf.Params {
+			val := p.Type
+			switch {
+			case p.Default != "":
+				val += "   default " + p.Default
+			case p.Required:
+				val += "   required"
+			}
+			right = append(right, cols([]string{"  " + st.ident(p.Name), val}, []int{14, rightW - 14}))
+		}
+		if len(wf.Params) == 0 {
+			right = append(right, "  "+st.dim("none"))
+		}
+	}
+	right = append(right, "", st.chrome("STRUCTURE"), st.rule(rightW), "")
+	bounds := config.LoopBounds(v.IR)
+	for _, loop := range sortedKeys(bounds) {
+		right = append(right, cols([]string{"  " + st.ident(strings.TrimPrefix(loop, v.ID+"/")), fmt.Sprintf("loop, up to %d iterations", bounds[loop])}, []int{22, rightW - 22}))
+	}
+	for i := range v.IR.Nodes {
+		n := &v.IR.Nodes[i]
+		if n.Kind == config.KindGenerate && n.Gen != nil {
+			right = append(right, cols([]string{"  " + st.ident(strings.TrimPrefix(n.ID, v.ID+"/")), "generate over " + n.Gen.Source + " -> " + n.Gen.Workflow}, []int{22, rightW - 22}))
+		}
+	}
+	if r := m.selectedRow(); r != nil && r.kind == "step" {
+		right = append(right, "", st.chrome("STEP"), st.rule(rightW), "", st.ident(crumb(r.id, v.ID, v.Bounds)))
+		for i := range v.IR.Nodes {
+			n := &v.IR.Nodes[i]
+			if n.ID != r.id {
+				continue
+			}
+			if n.Template != nil {
+				right = append(right, cols([]string{"  template", n.Template.Name}, []int{12, rightW - 12}))
+				if n.Template.Lane != "" {
+					right = append(right, cols([]string{"  lane", n.Template.Lane}, []int{12, rightW - 12}))
+				}
+			}
+			if n.When != nil {
+				right = append(right, cols([]string{"  when", trunc(n.When.CEL, rightW-12)}, []int{12, rightW - 12}))
+			}
+			if n.Retry > 0 {
+				right = append(right, cols([]string{"  retry", fmt.Sprintf("%d", n.Retry)}, []int{12, rightW - 12}))
+			}
+		}
+	}
+	for i, row := range panes(st, [][]string{left, right}, []int{leftW, rightW}, bodyH) {
+		f.put(2+i, row)
+	}
+	f.put(h-1, footer(st, w, m.workflowKeys(), "= faber validate --emit-ir, rendered"))
+}
+
+func (m *model) workflowInfo(name string) *WorkflowInfo {
+	for i := range m.project.Workflows {
+		if m.project.Workflows[i].Name == name {
+			return &m.project.Workflows[i]
+		}
+	}
+	return nil
 }
 
 // runStateOf is the run's badge: LIVE, paused, FAILED, HALT, ok, incomplete.
@@ -116,6 +201,9 @@ func treePane(st style, m *model, w, h int) []string {
 		name := strings.Repeat("  ", r.indent) + r.name
 		nameW := 28
 		statusCell := st.status(r.status)
+		if m.preview {
+			statusCell = ""
+		}
 		var line string
 		switch r.kind {
 		case "loop", "iter", "item", "gen":
