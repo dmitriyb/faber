@@ -527,7 +527,7 @@ func TestPreviewFolds(t *testing.T) {
 	m := testModel(t, store)
 	m.openWorkflow("task")
 	frame := m.render(221, 51).plain()
-	for _, want := range []string{"> PARAMS   2 params", "> STRUCTURE   1 loop", "v NEEDS   3 roles   4 templates   1 service   9 MISSING", "v STEP   implement   template implement   identity implementer", "v hooks   3 of 4 set   3 MISSING", "postlude    none", "> inputs/outputs   2 inputs   2 outputs", "> history   2 attempts   p50 3m00s   all runs of task"} {
+	for _, want := range []string{"> PARAMS   2 params", "> STRUCTURE   1 loop", "v NEEDS   4 images   3 roles   4 templates   1 service   9 MISSING", "image       implement   not checked", "v STEP   implement   template implement   identity implementer", "v hooks   3 of 4 set   3 MISSING", "postlude    none", "> inputs/outputs   2 inputs   2 outputs", "> history   2 attempts   p50 3m00s   all runs of task"} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("preview pane lacks %q:\n%s", want, frame)
 		}
@@ -1110,5 +1110,29 @@ func TestRunsTablePinsLiveAndScrolls(t *testing.T) {
 	}
 	if m.handle(context.Background(), key{name: "esc"}) {
 		t.Error("esc with no filter did not quit")
+	}
+}
+
+// Verifies 1d5d7c4db2fe: NEEDS lists the images of this workflow's
+// templates, not the config's — task runs implement, epic implement-next —
+// each with the probe's verdict and the fix.
+func TestNeedsListsTheWorkflowsImages(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	abs, _ := filepath.Abs(refConfig)
+	m := newApp(Options{Store: store, Now: func() time.Time { return fixed }, Images: fakeProbe{}}, config.UIOptions{ConfigPath: abs})
+	m.refresh(context.Background())
+	m.openWorkflow("task")
+	frame := m.render(221, 51).plain()
+	for _, want := range []string{"v NEEDS   4 images", "image       implement   MISSING   faber build   20be39bb9bb7", "image       review   MISSING"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("task NEEDS lacks %q:\n%s", want, frame)
+		}
+	}
+	m.handle(context.Background(), key{r: 'q'})
+	m.openWorkflow("epic")
+	frame = m.render(221, 51).plain()
+	if !strings.Contains(frame, "image       implement   MISSING") || !strings.Contains(frame, "image       merge   MISSING") {
+		t.Errorf("epic NEEDS lacks its templates' images:\n%s", frame)
 	}
 }

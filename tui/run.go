@@ -499,8 +499,8 @@ func previewPane(st style, m *model, w int) []string {
 	// NEEDS: what this workflow's steps require, and whether it is there
 	needs := needsOf(m.project, v.IR)
 	missing := len(needs.Slots)
-	for _, c := range needs.Roles {
-		if c.State == "MISSING" {
+	for _, c := range append(append([]Check{}, needs.Images...), needs.Roles...) {
+		if c.State == "MISSING" || c.State == "FAIL" {
 			missing++
 		}
 	}
@@ -512,8 +512,18 @@ func previewPane(st style, m *model, w int) []string {
 		state = st.wrap(sgrRed, fmt.Sprintf("%d MISSING", missing))
 		m.autoOpen("needs")
 	}
-	head("needs", "NEEDS", fmt.Sprintf("%s   %s   %s   ", plural(len(needs.Roles), "role"), plural(needs.Templates, "template"), plural(len(needs.Services), "service"))+state)
+	head("needs", "NEEDS", fmt.Sprintf("%s   %s   %s   %s   ", plural(len(needs.Images), "image"), plural(len(needs.Roles), "role"), plural(needs.Templates, "template"), plural(len(needs.Services), "service"))+state)
 	var nrows []string
+	for _, c := range needs.Images {
+		val := st.ident(c.Name) + "   " + st.status(c.State)
+		switch c.State {
+		case "MISSING":
+			val += "   " + c.Fix + "   " + st.dim(c.Detail)
+		case "FAIL":
+			val += "   " + trunc(c.Detail, w-40)
+		}
+		nrows = append(nrows, cols([]string{"    " + st.dim("image"), val}, []int{16, w - 16}))
+	}
 	for _, c := range needs.Roles {
 		nrows = append(nrows, checkLine(st, "identity", c, w))
 	}
@@ -525,9 +535,6 @@ func previewPane(st style, m *model, w int) []string {
 	}
 	for _, c := range needs.Services {
 		nrows = append(nrows, cols([]string{"    " + st.dim("service"), st.ident(c.Name) + "   " + c.Detail + "   " + st.dim("not checked")}, []int{16, w - 16}))
-	}
-	if len(nrows) == 0 {
-		nrows = []string{"    " + st.dim("nothing beyond the images")}
 	}
 	body("needs", nrows...)
 

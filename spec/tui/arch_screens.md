@@ -188,9 +188,11 @@ since nothing has state. STRUCTURE lists loop shapes once (`cycles >
 review-cycle, up to 5`), never the unrolled iterations. The right pane
 is **blocks that start folded**, each one summary line, so the screen
 holds the minimum and opens on request: `PARAMS   2 params`, `STRUCTURE
-1 loop`, `NEEDS   3 roles   4 templates   1 service   ok` — the preflight
-narrowed to this workflow's templates: its roles with their state, a
-template only by the slot that stops it, the services being global — and
+1 loop`, `NEEDS   4 images   3 roles   4 templates   1 service   ok` — the
+preflight narrowed to this workflow's templates: their images with the
+probe's verdict (so `task` lists `implement` and `epic` lists
+`implement-next`, while Home lists the union), its roles with their state,
+a template only by the slot that stops it, the services being global — and
 `STEP`, open by default, with the selected step's schema
 facts: template, identity with its state, lane, guard (leaf names), retry,
 on_failure, then sub-blocks `hooks   2 of 4 set   ok` (all four hooks

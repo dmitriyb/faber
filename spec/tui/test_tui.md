@@ -131,6 +131,10 @@ docker. The screens are rendered into frames and compared colour-stripped.
     leaves the failed run alone and the title names the filter; esc clears
     the filter, a second esc quits.
 
+22. **NEEDS lists the workflow's images.** With a probe that reports every
+    image absent, the task preview's NEEDS reads `4 images` with
+    `implement   MISSING   faber build   20be39bb9bb7` and `review`; the
+    epic preview lists its own templates' images.
 ## Edge cases
 
 - Hooks are four fixed slots per template; Home never lists hooks as a

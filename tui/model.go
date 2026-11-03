@@ -55,6 +55,7 @@ type Preflight struct {
 	Roles     []Check
 	Templates int     // how many templates were checked
 	Slots     []Check // only the hook slots whose script is not there: Name = template, Detail = slot, Fix = path
+	Images    []Check // one per template the workflow runs (NEEDS only): ok, MISSING with faber build, FAIL, not checked
 	Resolver  Check   // Name "" when no resolver is configured
 	Services  []Check // state "not checked": only the resolver can answer
 }
@@ -188,17 +189,27 @@ func loadProject(ctx context.Context, path string, probe ImageProbe, keys KeyPro
 	return p
 }
 
-// templatesOf lists every agent template an IR runs, sub-workflows included.
-func templatesOf(ir *config.IR) []*config.ResolvedTemplate {
+// templatesOf lists every agent template a workflow runs: its own nodes,
+// its sub-workflows, and the workflows its generates expand into — the
+// reference epic is a generate over task, so epic needs task's images.
+func templatesOf(ir *config.IR, irs map[string]*config.IR) []*config.ResolvedTemplate {
 	var out []*config.ResolvedTemplate
+	visited := map[string]bool{}
 	var walk func(*config.IR)
 	walk = func(g *config.IR) {
 		for i := range g.Nodes {
-			if t := g.Nodes[i].Template; t != nil {
-				out = append(out, t)
+			n := &g.Nodes[i]
+			if n.Template != nil {
+				out = append(out, n.Template)
 			}
-			if g.Nodes[i].Sub != nil {
-				walk(g.Nodes[i].Sub)
+			if n.Sub != nil {
+				walk(n.Sub)
+			}
+			if n.Gen != nil && !visited[n.Gen.Workflow] {
+				visited[n.Gen.Workflow] = true
+				if target := irs[n.Gen.Workflow]; target != nil {
+					walk(target)
+				}
 			}
 		}
 	}
@@ -235,7 +246,7 @@ func preflight(ctx context.Context, cfg *config.Config, irs map[string]*config.I
 	usedRoles := map[string]bool{}
 	seen := map[string]bool{}
 	for _, name := range sortedKeys(irs) {
-		for _, t := range templatesOf(irs[name]) {
+		for _, t := range templatesOf(irs[name], irs) {
 			if t.Identity != "" {
 				usedRoles[t.Identity] = true
 			}
@@ -315,7 +326,7 @@ func roleCheck(ctx context.Context, role string, def config.IdentityDef, used bo
 func needsOf(p *Project, ir *config.IR) Preflight {
 	roles := map[string]bool{}
 	templates := map[string]bool{}
-	for _, t := range templatesOf(ir) {
+	for _, t := range templatesOf(ir, p.irs) {
 		if t.Identity != "" {
 			roles[t.Identity] = true
 		}
@@ -328,6 +339,23 @@ func needsOf(p *Project, ir *config.IR) Preflight {
 		}
 	}
 	n.Templates = len(templates)
+	for _, t := range p.Templates {
+		if !templates[t.Name] {
+			continue
+		}
+		c := Check{Name: t.Name, Used: true}
+		switch {
+		case t.Err != "":
+			c.State, c.Detail = "FAIL", t.Err
+		case t.Checked && t.Built:
+			c.State = "ok"
+		case t.Checked:
+			c.State, c.Fix, c.Detail = "MISSING", "faber build", tagHash(t.Tag)
+		default:
+			c.State = "not checked"
+		}
+		n.Images = append(n.Images, c)
+	}
 	for _, c := range p.Preflight.Slots {
 		if templates[c.Name] {
 			n.Slots = append(n.Slots, c)
