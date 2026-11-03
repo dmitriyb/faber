@@ -8,9 +8,9 @@ TIMELINE   +/- zoom                                                             
   review-cycle@1                  rrrrrrrrrrrrrrrrrrrffffffffffffffffffffffff                |   status    ok
   review-cycle@2                                                            XXXXXXXXXXXXXX   |   attempt   1
                                                                                              |   duration  3m00s
-  12s per column   letters: step initial   X failed   zoom x1                                |   outputs   branch=work/x  pr=17
+  12s per column   letters: step initial   X failed   zoom x1   enter hide                   |   outputs   branch=work/x  pr=17
                                                                                              |
-implement  by attempt                                                                        |   history   2 attempts of this step in the store
+implement  by attempt (1)                                                                    |   history   2 attempts of this step in the store
                       ############################################################## 3m00s   |     p50     3m00s
                                                                                              |     p90     3m00s
                                                                                              |     p99     3m00s

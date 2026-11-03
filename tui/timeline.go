@@ -143,7 +143,17 @@ func timelinePane(st style, m *model, w, h int) []string {
 		}
 	}
 	out = append(out, strings.Repeat(" ", label)+st.dim(string(axis)))
-	avail := h - len(out) - 4
+	// the expansion keeps its room whatever the row count: the rows scroll
+	// in the rest, so a 45-iteration run still shows the selected one's steps
+	var subs []span
+	if m.tshow && m.tsel < len(groups) {
+		subs = byGroup[groups[m.tsel]]
+	}
+	blockH := 0
+	if len(subs) > 0 {
+		blockH = min(len(subs)+2, max(3, (h-len(out)-2)/2))
+	}
+	avail := h - len(out) - 2 - blockH
 	if avail < 3 {
 		avail = 3
 	}
@@ -186,15 +196,19 @@ func timelinePane(st style, m *model, w, h int) []string {
 		}
 		out = append(out, line)
 	}
-	out = append(out, "", st.dim(fmt.Sprintf("  %ds per column   letters: step initial   X failed   zoom x%d", int(col), zoom)))
-	// expanded: the selected row's attempts, one row each
-	if m.tsel < len(groups) && len(out) < h-2 {
+	hint := "enter steps"
+	if m.tshow {
+		hint = "enter hide"
+	}
+	out = append(out, "", st.dim(fmt.Sprintf("  %ds per column   letters: step initial   X failed   zoom x%d   %s", int(col), zoom, hint)))
+	// expanded: the selected row's attempts, one row each, in the room kept above
+	if blockH > 0 {
 		g := groups[m.tsel]
-		subs := byGroup[g]
-		if len(subs) > 0 {
+		{
 			prefix, _ := groupPrefix(v, g)
 			title := crumb(strings.TrimSuffix(prefix, "/"), wf, v.Bounds)
-			out = append(out, "", st.chrome(title)+st.dim("  by attempt"))
+			limit := len(out) + blockH
+			out = append(out, "", st.chrome(title)+st.dim(fmt.Sprintf("  by attempt (%d)", len(subs))))
 			s0, s1 := subs[0].start, subs[0].finish
 			for _, s := range subs {
 				if s.finish.After(s1) {
@@ -210,7 +224,7 @@ func timelinePane(st style, m *model, w, h int) []string {
 				col2 = 1
 			}
 			for _, s := range subs {
-				if len(out) >= h {
+				if len(out) >= limit || len(out) >= h {
 					break
 				}
 				row := make([]string, sw)

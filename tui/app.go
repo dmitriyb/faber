@@ -44,6 +44,7 @@ type model struct {
 	frows   []frow   // the flow view's rows
 	fsel    int      // the flow cursor
 	tgroups []string // the timeline's rows
+	tshow   bool     // the timeline shows the selected row's attempts below the rows
 	tsel    int      // the timeline cursor
 	tzoom   int      // the timeline zoom exponent (columns x 2^tzoom)
 	view    string   // "tree" | "flow" | "timeline"
@@ -67,7 +68,7 @@ type prompt struct {
 
 func newApp(o Options, uo config.UIOptions) *model {
 	return &model{opts: o, uo: uo, st: style{color: uo.Color}, now: o.Now, screen: "home", focus: "runs", view: "tree", follow: true,
-		open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
+		tshow: true, open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
 }
 
 func (m *model) selectedRun() *RunRow {
@@ -599,6 +600,10 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 			m.tzoom--
 		}
 	case k.name == "enter":
+		if m.view == "timeline" {
+			m.tshow = !m.tshow
+			break
+		}
 		if r := m.selectedRow(); r != nil && r.kind == "iter" {
 			m.open[r.id] = !m.open[r.id]
 			m.rebuildRows()

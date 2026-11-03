@@ -15,7 +15,7 @@ type model struct {            // re-derived from the store at every tick/key
     run *RunView; preview bool
     rows []row; sel int                   // tree
     frows []frow; fsel int                // flow
-    tgroups []string; tsel, tzoom int     // timeline
+    tgroups []string; tsel, tzoom int; tshow bool   // timeline; tshow = the attempts block is shown
     view string; follow bool; filter string; open map[string]bool; selLines []string
     prompt *prompt; quitCmd, status string; bellNext bool
 }

@@ -696,3 +696,43 @@ func TestReplayCacheByStat(t *testing.T) {
 		t.Errorf("the new attempt is missing from the history: %v", m.stats)
 	}
 }
+
+// Verifies 1d5d7c4db2fe: the timeline keeps room for the selected row's
+// attempts whatever the row count — forty-five iterations on a short
+// terminal still show the selected iteration's steps — and enter hides
+// or shows that block.
+func TestTimelineKeepsRoomForTheSelection(t *testing.T) {
+	rp := &failure.Replay{Header: failure.Header{RunID: "r", Workflow: "epic", Started: t0}, Results: map[failure.Key]failure.ResultRecord{}}
+	for i := 1; i <= 45; i++ {
+		at := t0.Add(time.Duration(i) * 10 * time.Minute)
+		for j, step := range []string{"implement", "review", "merge"} {
+			id := fmt.Sprintf("epic/cycles@%d/%s", i, step)
+			s := at.Add(time.Duration(j) * 3 * time.Minute)
+			rp.Results[failure.Key{StepID: id, InputHash: "h"}] = failure.ResultRecord{StepID: id, InputHash: "h", Result: okRes(s, s.Add(2*time.Minute), `{}`)}
+		}
+	}
+	v := &RunView{ID: "r", Replay: rp, Report: &pipeline.RunReport{}, Bounds: map[string]int{"epic/cycles": 45}}
+	m := &model{st: style{}, now: func() time.Time { return fixed.Add(10 * time.Hour) }, screen: "run", run: v, view: "timeline", tshow: true, tsel: 20}
+	m.tgroups = timelineGroups(v, m.now())
+	if len(m.tgroups) != 45 {
+		t.Fatalf("%d timeline rows, want 45", len(m.tgroups))
+	}
+	plain := func(rows []string) string { return stripSGR(strings.Join(rows, "\n")) }
+	out := plain(timelinePane(m.st, m, 100, 24))
+	if !strings.Contains(out, "> cycles@21") {
+		t.Errorf("selected row not visible:\n%s", out)
+	}
+	if !strings.Contains(out, "by attempt (3)") || !strings.Contains(out, "review") || !strings.Contains(out, "merge") {
+		t.Errorf("the selected iteration's steps are missing:\n%s", out)
+	}
+	if n := strings.Count(out, "\n") + 1; n > 24 {
+		t.Errorf("pane overflows: %d rows", n)
+	}
+	m.handle(context.Background(), key{name: "enter"})
+	if out := plain(timelinePane(m.st, m, 100, 24)); strings.Contains(out, "by attempt") || !strings.Contains(out, "enter steps") {
+		t.Errorf("enter did not hide the block:\n%s", out)
+	}
+	if m.view != "timeline" {
+		t.Errorf("enter switched the view to %q", m.view)
+	}
+}

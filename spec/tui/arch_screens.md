@@ -108,8 +108,11 @@ over OUTPUT, and the footer.
   so a short step is never hidden by the long one after it at a coarse
   scale. The timeline has its own cursor over its rows, the selected row
   is the selection bar, STEP follows its iteration, and the block below
-  expands that row's attempts one per line with durations. `+`/`-` zoom
-  the columns by powers of two, the window centred on the selected row.
+  expands that row's attempts one per line with durations. The block keeps
+  its room whatever the row count — the rows scroll in the rest, so a
+  forty-five-iteration run on a short terminal still shows the selected
+  iteration's steps — and enter hides or shows it. `+`/`-` zoom the
+  columns by powers of two, the window centred on the selected row.
 - **STEP**: breadcrumb, status, reason or since, attempt, duration, usually,
   outputs, then the error, handoff, re-enter command (`printed on q`), or
   the halt. **OUTPUT**: the newest attempt's `output.log` tail,
@@ -118,7 +121,7 @@ over OUTPUT, and the footer.
 Keys: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
 `n` the next FAIL/HALT/WAIT — each on the cursor of the view shown — `/` a filter over id, name and status, `f`
 toggles follow (selection on the newest running step, else the first
-problem), `enter` opens or closes an iteration, `t`/`w`/`l` switch tree, workflow, timeline,
+problem), `enter` opens or closes an iteration (on the timeline: the attempts block), `t`/`w`/`l` switch tree, workflow, timeline,
 `q` returns to Home — and, with a failed step selected, remembers its
 re-enter command (or the run's resume command) to print on stdout when the
 view exits.

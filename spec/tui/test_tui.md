@@ -83,6 +83,11 @@ docker. The screens are rendered into frames and compared colour-stripped.
     unchanged; appending a record to a journal bumps it, the history
     follows, and the new step's attempt appears in it.
 
+17. **Timeline keeps room for the selection.** Forty-five iterations of
+    three steps on a 24-row pane: the selected row is visible, its three
+    attempts are listed below with `by attempt (3)`, nothing overflows;
+    enter hides the block and leaves the view on the timeline.
+
 ## Edge cases
 
 - Narrow terminals: the runs table folds its columns, the header is cut

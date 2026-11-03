@@ -10,7 +10,7 @@ TIMELINE   +/- zoom                      | STEP
                                          |
   50s per column   letters: step initial |
                                          |
-review-cycle 1/3  by attempt             |
+review-cycle 1/3  by attempt (2)         |
   review              #####      4m00s   |
   fix                     ###### 5m00s   | OUTPUT
                                          | -------------------------------------
