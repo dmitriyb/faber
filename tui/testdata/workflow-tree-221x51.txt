@@ -16,11 +16,11 @@ STEPS                                                                           
                                                                                                                                      |
                                                                                                                                      | implement
                                                                                                                                      |   template  implement
-                                                                                                                                     |   history   p50 3m00s  p90 3m00s  p99 3m00s   over 2 attempts
                                                                                                                                      |
-                                                                                                                                     |
-                                                                                                                                     |
-                                                                                                                                     |
+                                                                                                                                     |   history   2 attempts of this step in the store
+                                                                                                                                     |     p50     3m00s
+                                                                                                                                     |     p90     3m00s
+                                                                                                                                     |     p99     3m00s
                                                                                                                                      |
                                                                                                                                      |
                                                                                                                                      |

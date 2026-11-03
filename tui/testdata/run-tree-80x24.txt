@@ -9,9 +9,9 @@ STEPS                                    | STEP
     @1                        ok         |   reason    agent-failed
     @2                        FAIL       |   attempt   1
       review                  FAIL       |   duration  3m00s
-      fix                     not reache |   usually   p50 4m00s  p90 4m00s  p99
-    @3                        not reache |
-  merge                       not reache | error
+      fix                     not reache |
+    @3                        not reache |   history   1 attempt of this step in
+  merge                       not reache |     p50     4m00s
                                          | OUTPUT   attempt 1   output.log
                                          | -------------------------------------
                                          | prelude: fetch-pr #17 ok

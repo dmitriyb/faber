@@ -127,7 +127,7 @@ func renderWorkflow(f *frame, st style, m *model) {
 			}
 		}
 		if s, ok := v.Stats[leaf(r.id)]; ok {
-			right = append(right, cols([]string{"  history", statsText(s) + st.dim("   over "+plural(s.N, "attempt"))}, []int{12, rightW - 12}))
+			right = append(right, historyBlock(st, s, rightW)...)
 		}
 	}
 	for i, row := range panes(st, [][]string{left, right}, []int{leftW, rightW}, bodyH) {
@@ -144,9 +144,19 @@ func plural(n int, word string) string {
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
-// statsText renders a distribution as "p50 4m10s  p90 9m01s  p99 20m05s".
-func statsText(s Stats) string {
-	return fmt.Sprintf("p50 %s  p90 %s  p99 %s", durText(int(s.P50.Seconds())), durText(int(s.P90.Seconds())), durText(int(s.P99.Seconds())))
+// historyBlock renders a step's history as its own block: an empty line,
+// then the sample count and one percentile per line, labels dim and
+// values plain, so the eye reads a column of numbers rather than a
+// sentence.
+func historyBlock(st style, s Stats, w int) []string {
+	row := func(k, val string) string { return cols([]string{"  " + st.dim(k), val}, []int{12, w - 12}) }
+	return []string{
+		"",
+		row("history", plural(s.N, "attempt")+st.dim(" of this step in the store")),
+		row("  p50", durText(int(s.P50.Seconds()))),
+		row("  p90", durText(int(s.P90.Seconds()))),
+		row("  p99", durText(int(s.P99.Seconds()))),
+	}
 }
 
 // loopShape is one loop of the workflow as the author wrote it: its path
@@ -297,7 +307,7 @@ func stepPane(st style, m *model, w, h int) []string {
 	}
 	wf := v.Replay.Header.Workflow
 	out = append(out, st.ident(crumb(r.id, wf, v.Bounds)))
-	kv := func(k, val string) { out = append(out, cols([]string{"  " + k, val}, []int{12, w - 12})) }
+	kv := func(k, val string) { out = append(out, cols([]string{"  " + st.dim(k), val}, []int{12, w - 12})) }
 	line, _ := m.lineOf(r.id)
 	kv("status", st.status(r.status))
 	rec, hasRec := v.Replay.LastByStep[r.id]
@@ -313,10 +323,13 @@ func stepPane(st style, m *model, w, h int) []string {
 		kv("attempt", fmt.Sprintf("%d", rec.Result.Attempt))
 	}
 	if line != nil && line.Duration != "" {
-		kv("duration", fmtDur(line.Duration))
-	}
-	if s, ok := v.Stats[leaf(r.id)]; ok {
-		kv("usually", statsText(s)+st.dim("   over "+plural(s.N, "attempt")+" in the store"))
+		dur := fmtDur(line.Duration)
+		if s, ok := v.Stats[leaf(r.id)]; ok {
+			if d, err := time.ParseDuration(line.Duration); err == nil && s.P90 > 0 && d > s.P90 {
+				dur += "   " + st.status("slow") + st.dim("  past this step's p90")
+			}
+		}
+		kv("duration", dur)
 	}
 	if line != nil && len(line.Outputs) > 0 {
 		var parts []string
@@ -324,6 +337,9 @@ func stepPane(st style, m *model, w, h int) []string {
 			parts = append(parts, fmt.Sprintf("%s=%v", k, line.Outputs[k]))
 		}
 		kv("outputs", trunc(strings.Join(parts, "  "), w-12))
+	}
+	if s, ok := v.Stats[leaf(r.id)]; ok {
+		out = append(out, historyBlock(st, s, w)...)
 	}
 	if line != nil && line.Error != nil {
 		out = append(out, "", st.chrome("error"), "  "+trunc(line.Error.Detail, w-2))

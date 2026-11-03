@@ -500,7 +500,7 @@ func TestStatsDistribution(t *testing.T) {
 	m.follow = true
 	m.rebuildRows()
 	frame := m.render(221, 51).plain()
-	if !strings.Contains(frame, "p50 4m00s  p90 4m00s  p99 4m00s   over 1 attempt in the store") {
+	if !strings.Contains(frame, "history   1 attempt of this step in the store") || !strings.Contains(frame, "    p90     4m00s") {
 		t.Errorf("STEP lacks the distribution:\n%s", frame)
 	}
 	m.handle(context.Background(), key{r: 'q'})

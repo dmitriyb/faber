@@ -7,11 +7,11 @@ STEPS                                    | STEP
   implement                   ok         | implement
   review-cycle                absent     |   status    ok
   merge                       absent     |   attempt   1
-                                         |   duration  16m00s
-                                         |   usually   p50 3m00s  p90 3m00s  p99
+                                         |   duration  16m00s   slow  past this
                                          |   outputs   branch=work/y  pr=18
                                          |
-                                         |
+                                         |   history   2 attempts of this step i
+                                         |     p50     3m00s
                                          | OUTPUT   attempt 1   output.log
                                          | -------------------------------------
                                          |   no output captured

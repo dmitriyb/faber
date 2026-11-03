@@ -9,9 +9,13 @@ STEPS                                                                           
     @1                        ok           9m00s     review . fix                            |   reason    agent-failed
     @2                        FAIL         3m00s                                             |   attempt   1
       review                  FAIL         3m00s     agent-failed                            |   duration  3m00s
-      fix                     not reached            after review                            |   usually   p50 4m00s  p90 4m00s  p99 4m00s   over 1 attempt in the store
-    @3                        not reached            after review-cycle@2/review             |
-  merge                       not reached            after review-cycle@2/review             | error
+      fix                     not reached            after review                            |
+    @3                        not reached            after review-cycle@2/review             |   history   1 attempt of this step in the store
+  merge                       not reached            after review-cycle@2/review             |     p50     4m00s
+                                                                                             |     p90     4m00s
+                                                                                             |     p99     4m00s
+                                                                                             |
+                                                                                             | error
                                                                                              |   agent exited 1
                                                                                              |
                                                                                              | handoff
@@ -20,10 +24,6 @@ STEPS                                                                           
                                                                                              | re-enter   printed on q
                                                                                              |   faber resume 20260902-170408-d0feb66b \
                                                                                              |     --interactive task/review-cycle@2/review
-                                                                                             |
-                                                                                             |
-                                                                                             |
-                                                                                             |
                                                                                              |
                                                                                              |
                                                                                              | OUTPUT   attempt 1   output.log
