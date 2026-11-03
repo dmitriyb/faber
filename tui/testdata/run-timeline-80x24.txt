@@ -3,16 +3,16 @@ run   20260902-170408-d0feb66b   FAILED   task   it~ started 19:04   wall 15m00s
 --------------------------------------------------------------------------------
 TIMELINE   +/- zoom                      | STEP
 ---------------------------------------- | -------------------------------------
-                    19:04           19   |
-  implement         iiii                 | review-cycle 1/3
-  > review-cycle@1     rrrrrrffffff      |
+                      19:04              |
+  implement           iiii               | review-cycle 1/3
+  > review-cycle@1       rrrrrfffff      |
   review-cycle@2                  XXXX   |   select a step for its details
                                          |
-  50s per column   letters: step initial |
+  56s per column   letters: step initial |
                                          |
-review-cycle 1/3  by attempt (2)         |
-  review              #####      4m00s   |
-  fix                     ###### 5m00s   | OUTPUT
+                                         |
+                                         |
+                                         | OUTPUT
                                          | -------------------------------------
                                          |
                                          |

@@ -40,20 +40,43 @@ func spansOf(v *RunView, now time.Time) []span {
 	return out
 }
 
-// timelineGroups is the timeline's row order: one row per outermost
-// iteration ("cycles@8") or top-level step, in first-start order.
-func timelineGroups(v *RunView, now time.Time) []string {
+// trow is one timeline row: an outermost iteration or top-level step,
+// or — under an opened iteration — one executed attempt inside it.
+type trow struct {
+	group  string // "cycles@8" or "implement"
+	id     string // the iteration prefix ("<wf>/cycles@8/") or the step id
+	iter   bool   // a group row that is an iteration (openable)
+	sub    bool   // an attempt row under an opened iteration
+	status string // sub rows: the attempt's status
+	spans  []span // what the bar draws
+}
+
+// timelineRows is the timeline's row order: one row per outermost
+// iteration or top-level step in first-start order, and under an opened
+// iteration its executed attempts in start order. Iterations open and
+// close with the same map the tree folds by.
+func timelineRows(v *RunView, open map[string]bool, now time.Time) []trow {
 	wf := v.Replay.Header.Workflow
 	var order []string
-	seen := map[string]bool{}
+	byGroup := map[string][]span{}
 	for _, s := range spansOf(v, now) {
 		g := groupKey(s.id, wf)
-		if !seen[g] {
-			seen[g] = true
+		if _, seen := byGroup[g]; !seen {
 			order = append(order, g)
 		}
+		byGroup[g] = append(byGroup[g], s)
 	}
-	return order
+	var out []trow
+	for _, g := range order {
+		prefix, iter := groupPrefix(v, g)
+		out = append(out, trow{group: g, id: prefix, iter: iter, spans: byGroup[g]})
+		if iter && open[prefix] {
+			for _, s := range byGroup[g] {
+				out = append(out, trow{group: g, id: s.id, sub: true, status: s.status, spans: []span{s}})
+			}
+		}
+	}
+	return out
 }
 
 // groupPrefix maps a timeline row back to the ids it covers: an iteration
@@ -66,13 +89,13 @@ func groupPrefix(v *RunView, group string) (prefix string, iter bool) {
 	return wf + "/" + group, false
 }
 
-// timelinePane draws one row per outermost iteration or step: a bar of
-// the executed attempts' step initials coloured by status on an axis
-// scaled to the width and the zoom, the running step extended to now,
-// the selected row as the selection bar; below, the selected row's
-// attempts one row each. A letter already written in a column is never
-// overwritten by a later step, so a short step keeps its mark at any
-// scale.
+// timelinePane draws the rows: a bar of the executed attempts' step
+// initials coloured by status on an axis scaled to the width and the
+// zoom, the running step extended to now; under an opened iteration each
+// attempt on its own row, a solid bar on the same axis, so the cursor
+// walks into the iteration and STEP follows the attempt. A letter already
+// written in a column is never overwritten by a later step, so a short
+// step keeps its mark at any scale.
 func timelinePane(st style, m *model, w, h int) []string {
 	v := m.run
 	now := m.now()
@@ -90,7 +113,7 @@ func timelinePane(st style, m *model, w, h int) []string {
 			t1 = s.finish
 		}
 	}
-	label := 20
+	label := 22
 	bw := w - label - 2
 	if bw < 10 {
 		bw = 10
@@ -111,20 +134,12 @@ func timelinePane(st style, m *model, w, h int) []string {
 		}
 		return i
 	}
-	groups := m.tgroups
-	byGroup := map[string][]span{}
-	wf := v.Replay.Header.Workflow
-	for _, s := range spans {
-		g := groupKey(s.id, wf)
-		byGroup[g] = append(byGroup[g], s)
-	}
+	rows := m.trows
 	// the visible window: all of it at zoom 1, else centred on the
 	// selected row's first span
 	off := 0
-	if zoom > 1 && m.tsel < len(groups) {
-		if gs := byGroup[groups[m.tsel]]; len(gs) > 0 {
-			off = c(gs[0].start) - bw/4
-		}
+	if zoom > 1 && m.tsel < len(rows) && len(rows[m.tsel].spans) > 0 {
+		off = c(rows[m.tsel].spans[0].start) - bw/4
 		if off > total-bw {
 			off = total - bw
 		}
@@ -143,17 +158,7 @@ func timelinePane(st style, m *model, w, h int) []string {
 		}
 	}
 	out = append(out, strings.Repeat(" ", label)+st.dim(string(axis)))
-	// the expansion keeps its room whatever the row count: the rows scroll
-	// in the rest, so a 45-iteration run still shows the selected one's steps
-	var subs []span
-	if m.tshow && m.tsel < len(groups) {
-		subs = byGroup[groups[m.tsel]]
-	}
-	blockH := 0
-	if len(subs) > 0 {
-		blockH = min(len(subs)+2, max(3, (h-len(out)-2)/2))
-	}
-	avail := h - len(out) - 2 - blockH
+	avail := h - len(out) - 2
 	if avail < 3 {
 		avail = 3
 	}
@@ -161,20 +166,22 @@ func timelinePane(st style, m *model, w, h int) []string {
 	if m.tsel >= avail {
 		start = m.tsel - avail + 1
 	}
-	for gi := start; gi < len(groups) && gi-start < avail; gi++ {
-		g := groups[gi]
+	for ri := start; ri < len(rows) && ri-start < avail; ri++ {
+		r := rows[ri]
 		cells := make([]string, bw)
 		plain := make([]byte, bw)
 		for i := range cells {
 			cells[i] = " "
 			plain[i] = ' '
 		}
-		for _, s := range byGroup[g] {
+		for _, s := range r.spans {
 			ch := "?"
-			if l := leaf(s.id); l != "" {
+			if r.sub {
+				ch = "#"
+			} else if l := leaf(s.id); l != "" {
 				ch = l[:1]
 			}
-			if s.status == "FAIL" || s.status == "HALT" {
+			if !r.sub && (s.status == "FAIL" || s.status == "HALT") {
 				ch = "X"
 			}
 			for i := c(s.start); i <= c(s.finish); i++ {
@@ -189,62 +196,28 @@ func timelinePane(st style, m *model, w, h int) []string {
 				cells[x] = colorCell(st, ch, s.status)
 			}
 		}
-		name := "  " + st.ident(trunc(g, label-3))
+		text, indent := r.group, "  "
+		if r.sub {
+			text, indent = strings.TrimPrefix(r.id, groupPrefixOf(v, r.group)), "    "
+		}
+		name := indent + st.ident(trunc(text, label-len(indent)-1))
 		line := pad(name, label) + strings.Join(cells, "")
-		if gi == m.tsel {
-			line = st.rev(pad("  > "+trunc(g, label-5), label) + string(plain))
+		if ri == m.tsel {
+			line = st.rev(pad(indent+"> "+trunc(text, label-len(indent)-3), label) + string(plain))
 		}
 		out = append(out, line)
 	}
-	hint := "enter steps"
-	if m.tshow {
-		hint = "enter hide"
+	hint := "enter open/close iteration"
+	if m.tsel < len(rows) && rows[m.tsel].sub {
+		hint = "enter close iteration"
 	}
 	out = append(out, "", st.dim(fmt.Sprintf("  %ds per column   letters: step initial   X failed   zoom x%d   %s", int(col), zoom, hint)))
-	// expanded: the selected row's attempts, one row each, in the room kept above
-	if blockH > 0 {
-		g := groups[m.tsel]
-		{
-			prefix, _ := groupPrefix(v, g)
-			title := crumb(strings.TrimSuffix(prefix, "/"), wf, v.Bounds)
-			limit := len(out) + blockH
-			out = append(out, "", st.chrome(title)+st.dim(fmt.Sprintf("  by attempt (%d)", len(subs))))
-			s0, s1 := subs[0].start, subs[0].finish
-			for _, s := range subs {
-				if s.finish.After(s1) {
-					s1 = s.finish
-				}
-			}
-			sw := w - 30
-			if sw < 10 {
-				sw = 10
-			}
-			col2 := s1.Sub(s0).Seconds() / float64(sw)
-			if col2 <= 0 {
-				col2 = 1
-			}
-			for _, s := range subs {
-				if len(out) >= limit || len(out) >= h {
-					break
-				}
-				row := make([]string, sw)
-				for i := range row {
-					row[i] = " "
-				}
-				a, b := int(s.start.Sub(s0).Seconds()/col2), int(s.finish.Sub(s0).Seconds()/col2)
-				if b >= sw {
-					b = sw - 1
-				}
-				for i := a; i <= b && i < sw; i++ {
-					row[i] = colorCell(st, "#", s.status)
-				}
-				d := durText(int(s.finish.Sub(s.start).Seconds()))
-				name := strings.TrimPrefix(s.id, prefix)
-				out = append(out, pad("  "+st.ident(trunc(name, 18)), 22)+strings.Join(row, "")+" "+d)
-			}
-		}
-	}
 	return out
+}
+
+func groupPrefixOf(v *RunView, group string) string {
+	p, _ := groupPrefix(v, group)
+	return p
 }
 
 // colorCell colours one bar cell by status.

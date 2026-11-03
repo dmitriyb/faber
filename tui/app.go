@@ -41,13 +41,12 @@ type model struct {
 	run     *RunView
 	rows    []row
 	sel     int
-	frows   []frow   // the flow view's rows
-	fsel    int      // the flow cursor
-	tgroups []string // the timeline's rows
-	tshow   bool     // the timeline shows the selected row's attempts below the rows
-	tsel    int      // the timeline cursor
-	tzoom   int      // the timeline zoom exponent (columns x 2^tzoom)
-	view    string   // "tree" | "flow" | "timeline"
+	frows   []frow // the flow view's rows
+	fsel    int    // the flow cursor
+	trows   []trow // the timeline's rows: iterations, and the attempts of opened ones
+	tsel    int    // the timeline cursor
+	tzoom   int    // the timeline zoom exponent (columns x 2^tzoom)
+	view    string // "tree" | "flow" | "timeline"
 	follow  bool
 	filter  string
 	open    map[string]bool
@@ -68,7 +67,7 @@ type prompt struct {
 
 func newApp(o Options, uo config.UIOptions) *model {
 	return &model{opts: o, uo: uo, st: style{color: uo.Color}, now: o.Now, screen: "home", focus: "runs", view: "tree", follow: true,
-		tshow: true, open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
+		open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
 }
 
 func (m *model) selectedRun() *RunRow {
@@ -80,19 +79,19 @@ func (m *model) selectedRun() *RunRow {
 
 func (m *model) selectedRow() *row {
 	if m.view == "timeline" {
-		if m.tsel < 0 || m.tsel >= len(m.tgroups) {
+		if m.tsel < 0 || m.tsel >= len(m.trows) {
 			return nil
 		}
-		prefix, iter := groupPrefix(m.run, m.tgroups[m.tsel])
-		if iter {
-			return &row{id: prefix, kind: "iter", name: m.tgroups[m.tsel]}
+		t := m.trows[m.tsel]
+		if t.iter {
+			return &row{id: t.id, kind: "iter", name: t.group}
 		}
 		for i := range m.rows {
-			if m.rows[i].id == prefix && m.rows[i].kind == "step" {
+			if m.rows[i].id == t.id && m.rows[i].kind == "step" {
 				return &m.rows[i]
 			}
 		}
-		return &row{id: prefix, kind: "step", name: m.tgroups[m.tsel]}
+		return &row{id: t.id, kind: "step", name: leaf(t.id), status: t.status}
 	}
 	if m.view == "flow" {
 		if m.fsel < 0 || m.fsel >= len(m.frows) {
@@ -130,11 +129,10 @@ func (m *model) nextProblem() {
 			}
 		}
 	case "timeline":
-		for i := 1; i <= len(m.tgroups); i++ {
-			j := (m.tsel + i) % len(m.tgroups)
-			prefix, _ := groupPrefix(m.run, m.tgroups[j])
-			for _, r := range m.rows {
-				if strings.HasPrefix(r.id, prefix) && r.kind == "step" && problem(r.status) {
+		for i := 1; i <= len(m.trows); i++ {
+			j := (m.tsel + i) % len(m.trows)
+			for _, s := range m.trows[j].spans {
+				if problem(s.status) {
 					m.tsel = j
 					return
 				}
@@ -155,7 +153,7 @@ func (m *model) nextProblem() {
 // skips frame edges, which are not things.
 func (m *model) moveDown() {
 	if m.view == "timeline" {
-		if m.tsel < len(m.tgroups)-1 {
+		if m.tsel < len(m.trows)-1 {
 			m.tsel++
 		}
 		return
@@ -280,9 +278,9 @@ func (m *model) refresh(ctx context.Context) {
 
 func (m *model) rebuildRows() {
 	m.frows = flowRows(m.run, m.preview, m.now())
-	m.tgroups = timelineGroups(m.run, m.now())
-	if m.tsel >= len(m.tgroups) {
-		m.tsel = max(0, len(m.tgroups)-1)
+	m.trows = timelineRows(m.run, m.open, m.now())
+	if m.tsel >= len(m.trows) {
+		m.tsel = max(0, len(m.trows)-1)
 	}
 	if m.fsel >= len(m.frows) {
 		m.fsel = 0
@@ -320,8 +318,8 @@ func (m *model) rebuildRows() {
 		}
 		if len(m.run.Running) > 0 {
 			g := groupKey(m.run.Running[0].Step, m.run.Replay.Header.Workflow)
-			for i, tg := range m.tgroups {
-				if tg == g {
+			for i, tr := range m.trows {
+				if tr.group == g && !tr.sub {
 					m.tsel = i
 				}
 			}
@@ -600,8 +598,14 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 			m.tzoom--
 		}
 	case k.name == "enter":
-		if m.view == "timeline" {
-			m.tshow = !m.tshow
+		if m.view == "timeline" && m.tsel < len(m.trows) && m.trows[m.tsel].sub {
+			// closing from inside: the cursor lands on the iteration row
+			t := m.trows[m.tsel]
+			for m.tsel > 0 && m.trows[m.tsel].sub {
+				m.tsel--
+			}
+			m.open[groupPrefixOf(m.run, t.group)] = false
+			m.rebuildRows()
 			break
 		}
 		if r := m.selectedRow(); r != nil && r.kind == "iter" {

@@ -57,8 +57,11 @@ docker. The screens are rendered into frames and compared colour-stripped.
    20be39bb9bb7`.
 
 10. **Timeline cursor, letters, zoom.** Rows are `implement`,
-    `review-cycle@1`, `review-cycle@2`; `j` twice selects iteration 2,
-    marks its row and expands it below; at a 12-column scale the
+    `review-cycle@1`, `review-cycle@2`; `j` twice selects iteration 2 and
+    marks its row; enter opens it in place (`review` follows as an
+    indented row), `j` selects that attempt and STEP reads `review-cycle
+    2/3 > review`, enter on the attempt closes the iteration with the
+    cursor back on its row; at a 12-column scale the
     3-minute implement keeps its letter beside the review that follows;
     `+` and `-` zoom in and out and the legend says `zoom x2`.
 11. **History as a distribution.** The store's `review` attempts give
@@ -83,10 +86,10 @@ docker. The screens are rendered into frames and compared colour-stripped.
     unchanged; appending a record to a journal bumps it, the history
     follows, and the new step's attempt appears in it.
 
-17. **Timeline keeps room for the selection.** Forty-five iterations of
-    three steps on a 24-row pane: the selected row is visible, its three
-    attempts are listed below with `by attempt (3)`, nothing overflows;
-    enter hides the block and leaves the view on the timeline.
+17. **Timeline opens in place.** Forty-five iterations of three steps:
+    enter on `cycles@21` adds its three attempts under its row, `j` twice
+    selects `review`, and a 24-row pane shows the iteration and its
+    selected attempt without overflowing.
 
 ## Edge cases
 

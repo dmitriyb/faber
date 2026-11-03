@@ -443,7 +443,18 @@ func TestTimelineCursorAndLetters(t *testing.T) {
 	m.openRun("20260902-170408-d0feb66b")
 	m.view = "timeline"
 	m.follow = false
-	if got := strings.Join(m.tgroups, " "); got != "implement review-cycle@1 review-cycle@2" {
+	groups := func() string {
+		var g []string
+		for _, r := range m.trows {
+			if r.sub {
+				g = append(g, "  "+leaf(r.id))
+			} else {
+				g = append(g, r.group)
+			}
+		}
+		return strings.Join(g, " ")
+	}
+	if got := groups(); got != "implement review-cycle@1 review-cycle@2" {
 		t.Fatalf("timeline rows %q", got)
 	}
 	m.tsel = 0
@@ -456,8 +467,25 @@ func TestTimelineCursorAndLetters(t *testing.T) {
 	if !strings.Contains(frame, "> review-cycle@2") {
 		t.Errorf("selected row not marked:\n%s", frame)
 	}
-	if !strings.Contains(frame, "review-cycle 2/3  by attempt") {
-		t.Errorf("expanded block does not follow the cursor:\n%s", frame)
+	// enter opens the iteration in place; j walks into it; STEP follows the attempt
+	m.handle(context.Background(), key{name: "enter"})
+	if got := groups(); got != "implement review-cycle@1 review-cycle@2   review" {
+		t.Fatalf("opened timeline rows %q", got)
+	}
+	if m.view != "timeline" {
+		t.Fatalf("enter switched the view to %q", m.view)
+	}
+	m.handle(context.Background(), key{r: 'j'})
+	if r := m.selectedRow(); r == nil || r.kind != "step" || r.id != "task/review-cycle@2/review" {
+		t.Errorf("timeline selection %+v, want the review attempt", r)
+	}
+	frame = m.render(120, 40).plain()
+	if !strings.Contains(frame, "    > review") || !strings.Contains(frame, "review-cycle 2/3 > review") {
+		t.Errorf("attempt row not selected or STEP not following:\n%s", frame)
+	}
+	m.handle(context.Background(), key{name: "enter"}) // from inside: closes, cursor on the iteration
+	if got := groups(); got != "implement review-cycle@1 review-cycle@2" || m.tsel != 2 {
+		t.Errorf("close from inside: rows %q, cursor %d", got, m.tsel)
 	}
 	// at 12 columns the 3-minute implement shares a column with the review
 	// that starts right after it; the earlier letter must survive
@@ -697,11 +725,10 @@ func TestReplayCacheByStat(t *testing.T) {
 	}
 }
 
-// Verifies 1d5d7c4db2fe: the timeline keeps room for the selected row's
-// attempts whatever the row count — forty-five iterations on a short
-// terminal still show the selected iteration's steps — and enter hides
-// or shows that block.
-func TestTimelineKeepsRoomForTheSelection(t *testing.T) {
+// Verifies 1d5d7c4db2fe: a long run opens an iteration in place — forty-five
+// iterations on a short pane, the opened one's attempts under its row, the
+// cursor walking them with the window following, nothing overflowing.
+func TestTimelineOpensInPlace(t *testing.T) {
 	rp := &failure.Replay{Header: failure.Header{RunID: "r", Workflow: "epic", Started: t0}, Results: map[failure.Key]failure.ResultRecord{}}
 	for i := 1; i <= 45; i++ {
 		at := t0.Add(time.Duration(i) * 10 * time.Minute)
@@ -712,27 +739,26 @@ func TestTimelineKeepsRoomForTheSelection(t *testing.T) {
 		}
 	}
 	v := &RunView{ID: "r", Replay: rp, Report: &pipeline.RunReport{}, Bounds: map[string]int{"epic/cycles": 45}}
-	m := &model{st: style{}, now: func() time.Time { return fixed.Add(10 * time.Hour) }, screen: "run", run: v, view: "timeline", tshow: true, tsel: 20}
-	m.tgroups = timelineGroups(v, m.now())
-	if len(m.tgroups) != 45 {
-		t.Fatalf("%d timeline rows, want 45", len(m.tgroups))
+	m := &model{st: style{}, now: func() time.Time { return fixed.Add(10 * time.Hour) }, screen: "run", run: v, view: "timeline", open: map[string]bool{}, alerted: map[string]bool{}}
+	m.rebuildRows()
+	if len(m.trows) != 45 {
+		t.Fatalf("%d timeline rows, want 45", len(m.trows))
 	}
-	plain := func(rows []string) string { return stripSGR(strings.Join(rows, "\n")) }
-	out := plain(timelinePane(m.st, m, 100, 24))
-	if !strings.Contains(out, "> cycles@21") {
-		t.Errorf("selected row not visible:\n%s", out)
+	m.tsel = 20
+	m.handle(context.Background(), key{name: "enter"})
+	if len(m.trows) != 48 || !m.trows[21].sub || m.trows[21].id != "epic/cycles@21/implement" {
+		t.Fatalf("enter did not open cycles@21 in place: %d rows, row 21 %+v", len(m.trows), m.trows[21])
 	}
-	if !strings.Contains(out, "by attempt (3)") || !strings.Contains(out, "review") || !strings.Contains(out, "merge") {
-		t.Errorf("the selected iteration's steps are missing:\n%s", out)
+	m.handle(context.Background(), key{r: 'j'})
+	m.handle(context.Background(), key{r: 'j'})
+	if r := m.selectedRow(); r == nil || r.id != "epic/cycles@21/review" {
+		t.Fatalf("selection %+v, want the review attempt", r)
+	}
+	out := stripSGR(strings.Join(timelinePane(m.st, m, 100, 24), "\n"))
+	if !strings.Contains(out, "    > review") || !strings.Contains(out, "  cycles@21") {
+		t.Errorf("opened iteration and its selected attempt not visible:\n%s", out)
 	}
 	if n := strings.Count(out, "\n") + 1; n > 24 {
 		t.Errorf("pane overflows: %d rows", n)
-	}
-	m.handle(context.Background(), key{name: "enter"})
-	if out := plain(timelinePane(m.st, m, 100, 24)); strings.Contains(out, "by attempt") || !strings.Contains(out, "enter steps") {
-		t.Errorf("enter did not hide the block:\n%s", out)
-	}
-	if m.view != "timeline" {
-		t.Errorf("enter switched the view to %q", m.view)
 	}
 }
