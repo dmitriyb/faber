@@ -17,7 +17,7 @@ STEPS                                                                           
                                                                                                                                      | implement
                                                                                                                                      |   template  implement
                                                                                                                                      |
-                                                                                                                                     |   history   2 attempts of this step in the store
+                                                                                                                                     |   history   2 attempts   all runs of task
                                                                                                                                      |     p50     3m00s
                                                                                                                                      |     p90     3m00s
                                                                                                                                      |     p99     3m00s

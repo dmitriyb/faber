@@ -45,7 +45,7 @@ type Project struct {
 	Templates []TemplateInfo
 	cfg       *config.Config
 	irs       map[string]*config.IR // every workflow desugared, for the reporter's targets
-	stats     map[string]Stats      // the store's per-step history, for the preview
+	stats     History               // the store's per-step history, for the preview
 	mtime     time.Time             // the config file's mtime this was derived from
 }
 
@@ -314,42 +314,76 @@ func runningOf(rp *failure.Replay) []Running {
 	return out
 }
 
-// Stats is a step name's duration distribution across every ok executed
-// attempt in the store: p50 is the "usually" beside a running step, p90
-// and p99 say how bad it gets, n how much history backs them.
+// Stats is a step name's duration distribution across ok executed
+// attempts: p50 is the "usually" beside a running step, p90 and p99 say
+// how bad it gets, n how much history backs them.
 type Stats struct {
 	P50, P90, P99 time.Duration
 	N             int
 }
 
-// stats computes the per-leaf-step-name distributions over every replay
-// the cache holds. Keyed by the id's last segment because that is what
-// repeats across loops, instances, and runs. Recomputed when the cache's
-// version moves (a journal grew), never per tick.
-func stats(cache *replayCache) map[string]Stats {
-	samples := map[string][]time.Duration{}
+// History is the store's distributions by workflow, then by step name (an
+// id's last segment, which repeats across loops, instances and runs). A
+// step is the same step only within its workflow: "review" in task and
+// "review" in another workflow never share a bucket.
+type History map[string]map[string]Stats
+
+// stats computes the history over every replay the cache holds.
+// Recomputed when the cache's version moves (a journal grew), never per
+// tick.
+func stats(cache *replayCache) History {
+	samples := map[string]map[string][]time.Duration{}
 	for _, e := range cache.entries {
-		rp := e.rp
-		for key, rec := range rp.Results {
-			if key.InputHash == "" || rec.Result.Status != failure.StatusOK {
-				continue
-			}
-			d := rec.Result.Timing.Finished.Sub(rec.Result.Timing.Started)
-			if d <= 0 {
-				continue
-			}
-			leaf := key.StepID[strings.LastIndex(key.StepID, "/")+1:]
-			samples[leaf] = append(samples[leaf], d)
-		}
+		collect(samples, e.rp)
 	}
+	out := History{}
+	for wf, byLeaf := range samples {
+		out[wf] = distributions(byLeaf)
+	}
+	return out
+}
+
+// runStats is one run's own history: the same distributions over this
+// replay alone, for the "this run" scope.
+func runStats(rp *failure.Replay) map[string]Stats {
+	samples := map[string]map[string][]time.Duration{}
+	collect(samples, rp)
+	return distributions(samples[rp.Header.Workflow])
+}
+
+func collect(samples map[string]map[string][]time.Duration, rp *failure.Replay) {
+	wf := rp.Header.Workflow
+	if samples[wf] == nil {
+		samples[wf] = map[string][]time.Duration{}
+	}
+	for key, rec := range rp.Results {
+		if key.InputHash == "" || rec.Result.Status != failure.StatusOK {
+			continue
+		}
+		d := rec.Result.Timing.Finished.Sub(rec.Result.Timing.Started)
+		if d <= 0 {
+			continue
+		}
+		leaf := key.StepID[strings.LastIndex(key.StepID, "/")+1:]
+		samples[wf][leaf] = append(samples[wf][leaf], d)
+	}
+}
+
+func distributions(byLeaf map[string][]time.Duration) map[string]Stats {
 	out := map[string]Stats{}
-	for leaf, ds := range samples {
+	for leaf, ds := range byLeaf {
 		sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
 		pct := func(p float64) time.Duration { return ds[int(float64(len(ds)-1)*p)] }
 		out[leaf] = Stats{P50: pct(0.5), P90: pct(0.9), P99: pct(0.99), N: len(ds)}
 	}
 	return out
 }
+
+// HistoryScope names which attempts a view's Stats cover.
+const (
+	ScopeAllRuns = "all runs" // every run of this workflow in the store
+	ScopeThisRun = "this run" // this run's own attempts
+)
 
 // RunView is one run as the Run screen shows it.
 type RunView struct {
@@ -361,22 +395,28 @@ type RunView struct {
 	Running []Running
 	Bounds  map[string]int
 	RunDir  string
-	Stats   map[string]Stats
-	Err     error // the config could not be re-derived; the journal still shows
+	Stats   map[string]Stats // the history in force, by step name
+	Scope   string           // ScopeAllRuns or ScopeThisRun: what Stats cover, said on screen
+	Err     error            // the config could not be re-derived; the journal still shows
 }
 
 // loadRun replays the journal (through the cache), re-derives the IR from
 // the header's config the way resume does (through the IR cache), and
 // reports; a config that no longer loads, or a relative journaled path,
 // leaves the IR nil and the report journal-only with the reason on Err.
-func loadRun(cache *replayCache, irs *irCache, id string, st map[string]Stats, now time.Time) (*RunView, error) {
+func loadRun(cache *replayCache, irs *irCache, id string, h History, scope string, now time.Time) (*RunView, error) {
 	_ = now
 	rp, err := cache.get(id)
 	if err != nil {
 		return nil, err
 	}
 	store := cache.store
-	v := &RunView{ID: id, Replay: rp, Live: store.RunLive(id), RunDir: store.RunDir(id), Stats: st}
+	v := &RunView{ID: id, Replay: rp, Live: store.RunLive(id), RunDir: store.RunDir(id), Scope: scope}
+	if scope == ScopeThisRun {
+		v.Stats = runStats(rp)
+	} else {
+		v.Stats = h[rp.Header.Workflow]
+	}
 	targets, cerr := irs.get(rp.Header.ConfigPath)
 	if cerr != nil {
 		v.Err = cerr
@@ -416,7 +456,7 @@ func previewWorkflow(p *Project, name string) (*RunView, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RunView{ID: name, Replay: rp, Report: report, IR: ir, Bounds: config.LoopBounds(ir), Stats: p.stats}, nil
+	return &RunView{ID: name, Replay: rp, Report: report, IR: ir, Bounds: config.LoopBounds(ir), Stats: p.stats[name], Scope: ScopeAllRuns}, nil
 }
 
 // outputTail reads the last n lines of an attempt's output.log.

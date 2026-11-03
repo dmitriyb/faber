@@ -10,7 +10,7 @@ FLOW                                     | STEP
   +------------------------------------^ |   attempt   1
      merge           if review.verdict~  |   duration  3m00s
                                          |
-                                         |   history   1 attempt of this step in
+                                         |   history   1 attempt   all runs of t
                                          |     p50     4m00s
                                          | OUTPUT   attempt 1   output.log
                                          | -------------------------------------
@@ -21,4 +21,4 @@ FLOW                                     | STEP
                                          |
                                          |
                                          |
-j/k move   n next problem   t/w/l views   f follow   q back
+j/k move   n next problem   h history   t/w/l views   f follow   q back

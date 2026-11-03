@@ -503,7 +503,7 @@ func TestTimelineCursorAndLetters(t *testing.T) {
 	if !strings.Contains(frame, "TIMELINE   review-cycle 2/3") || !strings.Contains(frame, "in task") || !strings.Contains(frame, "review-cycle 2/3 > review") {
 		t.Errorf("breadcrumb, parent bar or STEP missing inside the iteration:\n%s", frame)
 	}
-	if !strings.Contains(frame, "enter/-> in   <-/esc up") {
+	if !strings.Contains(frame, "-> in   <- up") {
 		t.Errorf("the timeline footer does not name the level keys:\n%s", frame)
 	}
 	m.handle(context.Background(), key{name: "left"})
@@ -532,7 +532,7 @@ func TestStatsDistribution(t *testing.T) {
 	defer release()
 	m := testModel(t, store)
 	// only ok attempts count: the failed 3-minute review is not history
-	s, ok := m.stats["review"]
+	s, ok := m.stats["task"]["review"]
 	if !ok || s.N != 1 || s.P50 != 4*time.Minute || s.P90 != 4*time.Minute || s.P99 != 4*time.Minute {
 		t.Fatalf("review stats %+v, want n=1 p50=p90=p99=4m", s)
 	}
@@ -540,8 +540,29 @@ func TestStatsDistribution(t *testing.T) {
 	m.follow = true
 	m.rebuildRows()
 	frame := m.render(221, 51).plain()
-	if !strings.Contains(frame, "history   1 attempt of this step in the store") || !strings.Contains(frame, "    p90     4m00s") {
+	if !strings.Contains(frame, "history   1 attempt   all runs of task   h to switch") || !strings.Contains(frame, "    p90     4m00s") {
 		t.Errorf("STEP lacks the distribution:\n%s", frame)
+	}
+	// the scope is a toggle that says what it covers: implement ran ok in
+	// both runs, once in this one
+	m.follow = false
+	m.sel = 0
+	if r := m.selectedRow(); r == nil || r.name != "implement" {
+		t.Fatalf("row 0 is %+v, want implement", r)
+	}
+	if frame := m.render(221, 51).plain(); !strings.Contains(frame, "history   2 attempts   all runs of task") {
+		t.Errorf("all-runs scope for implement:\n%s", frame)
+	}
+	m.handle(context.Background(), key{r: 'h'})
+	if m.run.Scope != ScopeThisRun || m.sel != 0 {
+		t.Fatalf("h: scope %q cursor %d", m.run.Scope, m.sel)
+	}
+	if frame := m.render(221, 51).plain(); !strings.Contains(frame, "history   1 attempt   this run   h to switch") {
+		t.Errorf("this-run scope for implement:\n%s", frame)
+	}
+	m.handle(context.Background(), key{r: 'h'})
+	if m.run.Scope != ScopeAllRuns {
+		t.Fatalf("h again: scope %q", m.run.Scope)
 	}
 	m.handle(context.Background(), key{r: 'q'})
 	m.handle(context.Background(), key{r: '\t'})
@@ -732,7 +753,7 @@ func TestReplayCacheByStat(t *testing.T) {
 	if m.statsVer != m.cache.version {
 		t.Errorf("stats at version %d, cache at %d", m.statsVer, m.cache.version)
 	}
-	if _, ok := m.stats["merge"]; !ok {
+	if _, ok := m.stats["task"]["merge"]; !ok {
 		t.Errorf("the new attempt is missing from the history: %v", m.stats)
 	}
 }

@@ -134,7 +134,7 @@ func renderWorkflow(f *frame, st style, m *model) {
 			}
 		}
 		if s, ok := v.Stats[leaf(r.id)]; ok {
-			right = append(right, historyBlock(st, s, rightW)...)
+			right = append(right, historyBlock(st, s, "all runs of "+v.ID, "", rightW)...)
 		}
 	}
 	for i, row := range panes(st, [][]string{left, right}, []int{leftW, rightW}, bodyH) {
@@ -144,6 +144,13 @@ func renderWorkflow(f *frame, st style, m *model) {
 }
 
 // plural renders "1 attempt" / "2 attempts".
+func scopeText(v *RunView) string {
+	if v.Scope == ScopeAllRuns {
+		return "all runs of " + v.Replay.Header.Workflow
+	}
+	return v.Scope
+}
+
 func plural(n int, word string) string {
 	if n == 1 {
 		return "1 " + word
@@ -155,11 +162,11 @@ func plural(n int, word string) string {
 // then the sample count and one percentile per line, labels dim and
 // values plain, so the eye reads a column of numbers rather than a
 // sentence.
-func historyBlock(st style, s Stats, w int) []string {
+func historyBlock(st style, s Stats, where, hint string, w int) []string {
 	row := func(k, val string) string { return cols([]string{"  " + st.dim(k), val}, []int{12, w - 12}) }
 	return []string{
 		"",
-		row("history", plural(s.N, "attempt")+st.dim(" of this step in the store")),
+		row("history", plural(s.N, "attempt")+st.dim("   "+where+hint)),
 		row("  p50", durText(int(s.P50.Seconds()))),
 		row("  p90", durText(int(s.P90.Seconds()))),
 		row("  p99", durText(int(s.P99.Seconds()))),
@@ -346,7 +353,9 @@ func stepPane(st style, m *model, w, h int) []string {
 		kv("outputs", trunc(strings.Join(parts, "  "), w-12))
 	}
 	if s, ok := v.Stats[leaf(r.id)]; ok {
-		out = append(out, historyBlock(st, s, w)...)
+		out = append(out, historyBlock(st, s, scopeText(v), "   h to switch", w)...)
+	} else {
+		out = append(out, "", cols([]string{"  " + st.dim("history"), st.dim("no ok attempt   " + scopeText(v) + "   h to switch")}, []int{12, w - 12}))
 	}
 	if line != nil && line.Error != nil {
 		out = append(out, "", st.chrome("error"), "  "+trunc(line.Error.Detail, w-2))

@@ -10,7 +10,7 @@ STEPS                                                                           
     @2                        FAIL         3m00s                                             |   attempt   1
       review                  FAIL         3m00s     agent-failed                            |   duration  3m00s
       fix                     not reached            after review                            |
-    @3                        not reached            after review-cycle@2/review             |   history   1 attempt of this step in the store
+    @3                        not reached            after review-cycle@2/review             |   history   1 attempt   all runs of task   h to switch
   merge                       not reached            after review-cycle@2/review             |     p50     4m00s
                                                                                              |     p90     4m00s
                                                                                              |     p99     4m00s
@@ -48,4 +48,4 @@ STEPS                                                                           
                                                                                              |
                                                                                              |
                                                                                              |
-j/k move   enter open/close iteration   n next problem   / filter   t/w/l views   f follow   q back                                                                                                     = faber runs + report
+j/k move   enter open/close iteration   n next problem   / filter   h history   t/w/l views   f follow   q back                                                                                         = faber runs + report

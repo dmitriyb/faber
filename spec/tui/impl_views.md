@@ -11,7 +11,7 @@ func (u *UI) Run(ctx, config.UIOptions) error   // signal.NotifyContext(SIGINT, 
 type model struct {            // re-derived from the store at every tick/key
     screen string              // "home" | "run"
     project *Project; runs []RunRow; runSel, wfSel int; focus string
-    cache *replayCache; irs *irCache; stats map[string]Stats; statsVer int; loadErr string
+    cache *replayCache; irs *irCache; stats History; hscope string; statsVer int; loadErr string
     run *RunView; preview bool
     rows []row; sel int                   // tree
     frows []frow; fsel int                // flow
@@ -37,8 +37,9 @@ replayCache.get(id) (*failure.Replay, error)      // Store.Load keyed on the jou
 loadRuns(cache, now) ([]RunRow, error)            // AuditRuns + each replay: config.RunState, wall, live step, failed
 runState(audit, rp) string                        // the faber runs vocabulary, FAILED/ok by the failed count when settled
 runningOf(rp) []Running                           // failure.Replay.Running: last start per step with no result finished after it
-stats(cache) map[string]Stats                     // per leaf step name: p50/p90/p99 and N over every ok executed attempt
-loadRun(cache, irs, id, stats, now) (*RunView, error) // replay, IR via the header's config (Err when it no longer loads), RunReporter{Targets}, bounds
+stats(cache) History                              // by workflow, then leaf step name: p50/p90/p99 and N over every ok executed attempt in the store
+runStats(rp) map[string]Stats                     // the same over one replay: the "this run" scope
+loadRun(cache, irs, id, history, scope, now) (*RunView, error) // replay, IR via the header's config (Err when it no longer loads), RunReporter{Targets}, bounds, Stats in the scope
 previewWorkflow(project, name) (*RunView, error)  // an empty replay over the IR: the preview
 outputTail(runDir, nodeID, attempt, n) []string   // pipeline.AttemptDir + OutputLogName; n <= 0 reads nothing
 crumb(id, workflow, bounds) string                // the stream's breadcrumb

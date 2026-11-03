@@ -29,8 +29,9 @@ type model struct {
 	runSel   int
 	wfSel    int
 	focus    string // Home: "runs" | "workflows"
-	stats    map[string]Stats
-	preview  bool // the Run screen is a static workflow preview (no journal)
+	stats    History
+	hscope   string // the history scope in force: ScopeAllRuns or ScopeThisRun
+	preview  bool   // the Run screen is a static workflow preview (no journal)
 	cache    *replayCache
 	irs      *irCache
 	statsVer int      // the cache version the stats were computed at (-1 = never)
@@ -69,7 +70,7 @@ type prompt struct {
 
 func newApp(o Options, uo config.UIOptions) *model {
 	return &model{opts: o, uo: uo, st: style{color: uo.Color}, now: o.Now, screen: "home", focus: "runs", view: "tree", follow: true,
-		open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
+		hscope: ScopeAllRuns, open: map[string]bool{}, alerted: map[string]bool{}, cache: newReplayCache(o.Store), irs: newIRCache(), statsVer: -1}
 }
 
 func (m *model) selectedRun() *RunRow {
@@ -118,6 +119,18 @@ func (m *model) selectedRow() *row {
 		return nil
 	}
 	return &m.rows[m.sel]
+}
+
+// openRunKeepingPlace reloads the open run under the current history
+// scope, cursors and levels untouched.
+func (m *model) openRunKeepingPlace(id string) {
+	v, err := loadRun(m.cache, m.irs, id, m.stats, m.hscope, m.now())
+	if err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.run = v
+	m.rebuildRows()
 }
 
 // tprefix is the id prefix of the timeline's current level: the run's
@@ -241,7 +254,7 @@ func (m *model) computeSelectedLines() {
 	if sel == nil {
 		return
 	}
-	v, err := loadRun(m.cache, m.irs, sel.ID, m.stats, m.now())
+	v, err := loadRun(m.cache, m.irs, sel.ID, m.stats, m.hscope, m.now())
 	if err != nil {
 		m.selLines = []string{"  " + m.st.dim(err.Error())}
 		return
@@ -291,7 +304,7 @@ func (m *model) refresh(ctx context.Context) {
 		m.computeSelectedLines()
 	}
 	if m.screen == "run" && m.run != nil && !m.preview {
-		v, err := loadRun(m.cache, m.irs, m.run.ID, m.stats, m.now())
+		v, err := loadRun(m.cache, m.irs, m.run.ID, m.stats, m.hscope, m.now())
 		if err != nil {
 			m.status = "run " + m.run.ID + ": " + err.Error()
 		} else {
@@ -395,7 +408,7 @@ func (m *model) bells() {
 
 // openRun switches to the Run screen on a run id.
 func (m *model) openRun(id string) {
-	v, err := loadRun(m.cache, m.irs, id, m.stats, m.now())
+	v, err := loadRun(m.cache, m.irs, id, m.stats, m.hscope, m.now())
 	if err != nil {
 		m.status = err.Error()
 		return
@@ -463,11 +476,11 @@ func (m *model) workflowKeys() [][2]string {
 func (m *model) runKeys() [][2]string {
 	switch m.view {
 	case "timeline":
-		return [][2]string{{"j/k", "move"}, {"enter/->", "in"}, {"<-/esc", "up"}, {"+/-", "zoom"}, {"n", "problem"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+		return [][2]string{{"j/k", "move"}, {"->", "in"}, {"<-", "up"}, {"+/-", "zoom"}, {"n", "problem"}, {"h", "history"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 	case "flow":
-		return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+		return [][2]string{{"j/k", "move"}, {"n", "next problem"}, {"h", "history"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 	}
-	return [][2]string{{"j/k", "move"}, {"enter", "open/close iteration"}, {"n", "next problem"}, {"/", "filter"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+	return [][2]string{{"j/k", "move"}, {"enter", "open/close iteration"}, {"n", "next problem"}, {"/", "filter"}, {"h", "history"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 }
 
 // handle applies one key; it returns false when the app should exit.
@@ -619,6 +632,13 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 	case k.r == 'f':
 		m.follow = !m.follow
 		m.rebuildRows()
+	case k.r == 'h':
+		if m.hscope == ScopeAllRuns {
+			m.hscope = ScopeThisRun
+		} else {
+			m.hscope = ScopeAllRuns
+		}
+		m.openRunKeepingPlace(m.run.ID)
 	case k.r == 't':
 		m.view = "tree"
 	case k.r == 'w':

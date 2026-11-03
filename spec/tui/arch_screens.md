@@ -33,13 +33,21 @@ a cursor position).
   the report journal-only), the reporter with every workflow as a generate
   target so instances read in dependency order, loop caps from the IR and
   the journal, the attempt directory for `output.log`, and the
-  **history**: per step name (an id's last segment, which repeats across
-  loops, instances and runs) the duration distribution of every ok
-  executed attempt in the store — p50, p90, p99 and the sample count. p50
-  is the `usually 4m10s` beside a running step (`slow` past twice); STEP
-  shows all three with the count; the workflow preview shows p50 and p90
-  on every step row, so a preview reads as "what this workflow costs, from
-  your own history".
+  **history**: per workflow and step name (an id's last segment, which
+  repeats across loops, instances and runs; a step is the same step only
+  within its workflow) the duration distribution of ok executed attempts
+  — p50, p90, p99 and the sample count — in one of two scopes: **all
+  runs** of this workflow in the store (the default: the step, not the
+  run, sets its duration, and the sample is large enough for p90 to mean
+  something) or **this run** (is this cycle slower than the others under
+  the same conditions). `h` toggles the scope for the open run, and the
+  screen always says which is in force: STEP's history line reads `89
+  attempts   all runs of task   h to switch` or `12 attempts   this run
+  …`, and `usually`/`slow` follow the same scope. p50 is the `usually
+  4m10s` beside a running step (`slow` past twice); STEP shows all three
+  with the count; the workflow preview has no run, so it shows p50 and
+  p90 from all runs on every step row and says so, and reads as "what
+  this workflow costs, from your own history".
 
 ## Home
 
@@ -114,9 +122,10 @@ over OUTPUT, and the footer.
   wide bars; nesting goes as deep as the ids do. The breadcrumb above the
   axis carries the full path (`cycles 21/45 > review-cycle 1/3`), and one
   dim line draws the parent's bar with this level's window marked, so the
-  place in the whole run stays visible. Right arrow or enter drills in;
-  left arrow or esc (backspace too) goes one level up with the cursor
-  back on the row entered; esc at the top leaves the run. The timeline has its own cursor, the selected row is the selection
+  place in the whole run stays visible. Right arrow drills in and left
+  arrow goes one level up with the cursor back on the row entered (enter,
+  esc and backspace are aliases of the two); esc at the top leaves the
+  run. The timeline has its own cursor, the selected row is the selection
   bar, STEP and OUTPUT follow a selected step. `+`/`-` zoom the columns
   by powers of two within a level, the window centred on the selected row.
 - **STEP**: breadcrumb, status, reason or since, attempt, duration, usually,
@@ -127,7 +136,7 @@ over OUTPUT, and the footer.
 Keys: `j`/`k` and arrows move (and turn follow off), page keys jump ten,
 `n` the next FAIL/HALT/WAIT — each on the cursor of the view shown — `/` a filter over id, name and status, `f`
 toggles follow (selection on the newest running step, else the first
-problem), `enter` opens or closes an iteration (on the timeline: `enter`/right drills into a group, left/`esc` comes up), `t`/`w`/`l` switch tree, workflow, timeline,
+problem), `enter` opens or closes an iteration (on the timeline: `enter`/right drills into a group, left/`esc` comes up), `h` switches the history scope, `t`/`w`/`l` switch tree, workflow, timeline,
 `q` returns to Home — and, with a failed step selected, remembers its
 re-enter command (or the run's resume command) to print on stdout when the
 view exits. The footer is per view and lists every key the view answers

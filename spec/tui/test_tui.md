@@ -61,14 +61,17 @@ docker. The screens are rendered into frames and compared colour-stripped.
     selects iteration 2 and marks its row; enter drills in: `review` is
     the only row, the breadcrumb reads `review-cycle 2/3`, the parent bar
     says `in task`, STEP reads `review-cycle 2/3 > review`, the footer
-    names `enter/-> in   <-/esc up`; left comes back up with the
+    names `-> in   <- up`; left comes back up with the
     cursor on iteration 2, right drills in again, esc comes up, and esc
     at the top leaves the run; at a 12-column scale the
     3-minute implement keeps its letter beside the review that follows;
     `+` and `-` zoom in and out and the legend says `zoom x2`.
-11. **History as a distribution.** The store's `review` attempts give
-    n=2, p50 3m, p90 and p99 4m; a run's STEP shows `p50 … p90 … p99 …
-    over 2 attempts in the store`; the preview rows carry `p50 … p90 …`.
+11. **History as a distribution, in a named scope.** The store's `task`
+    `review` attempts give n=1 (the failed one is not history), p50 = p90
+    = p99 = 4m; a run's STEP shows `history   1 attempt   all runs of
+    task   h to switch` with the three rows; on `implement`, which ran ok
+    in both runs, `h` switches to `1 attempt   this run` and back, the
+    cursor untouched; the preview rows carry `p50 … p90 …`.
 
 12. **Spawn is a faber child.** With `Options.Executable` pointing at a
     script, `r` runs `faber run task --param repo=x --config <abs>

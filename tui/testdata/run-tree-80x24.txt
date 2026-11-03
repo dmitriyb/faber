@@ -10,7 +10,7 @@ STEPS                                    | STEP
     @2                        FAIL       |   attempt   1
       review                  FAIL       |   duration  3m00s
       fix                     not reache |
-    @3                        not reache |   history   1 attempt of this step in
+    @3                        not reache |   history   1 attempt   all runs of t
   merge                       not reache |     p50     4m00s
                                          | OUTPUT   attempt 1   output.log
                                          | -------------------------------------
@@ -21,4 +21,4 @@ STEPS                                    | STEP
                                          |
                                          |
                                          |
-j/k move enter open/close iteration n next problem / filter t/w/l views f follow
+j/k move enter open/close iteration n next problem / filter h history t/w/l view

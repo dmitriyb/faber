@@ -10,7 +10,7 @@ STEPS                                                                           
                                                                                              |   duration  16m00s   slow  past this step's p90
                                                                                              |   outputs   branch=work/y  pr=18
                                                                                              |
-                                                                                             |   history   2 attempts of this step in the store
+                                                                                             |   history   2 attempts   all runs of task   h to switch
                                                                                              |     p50     3m00s
                                                                                              |     p90     3m00s
                                                                                              |     p99     3m00s
@@ -48,4 +48,4 @@ STEPS                                                                           
                                                                                              |
                                                                                              |
                                                                                              |
-j/k move   enter open/close iteration   n next problem   / filter   t/w/l views   f follow   q back                                                                                                     = faber runs + report
+j/k move   enter open/close iteration   n next problem   / filter   h history   t/w/l views   f follow   q back                                                                                         = faber runs + report

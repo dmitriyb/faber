@@ -10,7 +10,7 @@ TIMELINE   whole run   +/- zoom          | STEP
                                          |   duration  3m00s
   56s per column   letters: step initial |   outputs   branch=work/x  pr=17
                                          |
-                                         |   history   2 attempts of this step i
+                                         |   history   2 attempts   all runs of
                                          |     p50     3m00s
                                          | OUTPUT   attempt 1   output.log
                                          | -------------------------------------
@@ -21,4 +21,4 @@ TIMELINE   whole run   +/- zoom          | STEP
                                          |
                                          |
                                          |
-j/k move enter/-> in <-/esc up +/- zoom n problem t/w/l views f follow q back
+j/k move -> in <- up +/- zoom n problem h history t/w/l views f follow q back

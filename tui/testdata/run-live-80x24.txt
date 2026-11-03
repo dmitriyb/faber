@@ -10,7 +10,7 @@ STEPS                                    | STEP
                                          |   duration  16m00s   slow  past this
                                          |   outputs   branch=work/y  pr=18
                                          |
-                                         |   history   2 attempts of this step i
+                                         |   history   2 attempts   all runs of
                                          |     p50     3m00s
                                          | OUTPUT   attempt 1   output.log
                                          | -------------------------------------
@@ -21,4 +21,4 @@ STEPS                                    | STEP
                                          |
                                          |
                                          |
-j/k move enter open/close iteration n next problem / filter t/w/l views f follow
+j/k move enter open/close iteration n next problem / filter h history t/w/l view

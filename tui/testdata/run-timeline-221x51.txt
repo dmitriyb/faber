@@ -10,7 +10,7 @@ TIMELINE   whole run   +/- zoom                                                 
                                                                                              |   duration  3m00s
   13s per column   letters: step initials, X failed, # one step   zoom x1                    |   outputs   branch=work/x  pr=17
                                                                                              |
-                                                                                             |   history   2 attempts of this step in the store
+                                                                                             |   history   2 attempts   all runs of task   h to switch
                                                                                              |     p50     3m00s
                                                                                              |     p90     3m00s
                                                                                              |     p99     3m00s
@@ -48,4 +48,4 @@ TIMELINE   whole run   +/- zoom                                                 
                                                                                              |
                                                                                              |
                                                                                              |
-j/k move   enter/-> in   <-/esc up   +/- zoom   n problem   t/w/l views   f follow   q back                                                                                                             = faber runs + report
+j/k move   -> in   <- up   +/- zoom   n problem   h history   t/w/l views   f follow   q back                                                                                                           = faber runs + report
