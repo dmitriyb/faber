@@ -124,6 +124,13 @@ docker. The screens are rendered into frames and compared colour-stripped.
     says `not live`, `R` on the open live run says `is live`. At 80
     columns the tree footer folds to two rows and still ends in `q back`.
 
+21. **Runs table.** Thirty settled runs newer than the live one: the live
+    run is first, a blank line under it, the newest settled run right
+    after; the title reads `LIVE 1`; four page-downs clamp on the last row
+    and it is on screen with the live block still at the top; `/failed`
+    leaves the failed run alone and the title names the filter; esc clears
+    the filter, a second esc quits.
+
 ## Edge cases
 
 - Hooks are four fixed slots per template; Home never lists hooks as a

@@ -26,7 +26,9 @@ type model struct {
 
 	project    *Project
 	runs       []RunRow
-	runSel     int
+	shown      []RunRow // the runs Home lists: this config's, through the Home filter
+	rfilter    string   // the Home filter over id, name, workflow and state
+	runSel     int      // the cursor over shown
 	wfSel      int
 	focus      string // Home: "runs" | "workflows"
 	stats      History
@@ -80,10 +82,29 @@ func newApp(o Options, uo config.UIOptions) *model {
 }
 
 func (m *model) selectedRun() *RunRow {
-	if m.runSel < 0 || m.runSel >= len(m.runs) {
+	if m.runSel < 0 || m.runSel >= len(m.shown) {
 		return nil
 	}
-	return &m.runs[m.runSel]
+	return &m.shown[m.runSel]
+}
+
+// rebuildShown is the Home table: this config's runs, through the filter,
+// in the model's order (live first). The cursor is clamped onto it.
+func (m *model) rebuildShown() {
+	m.shown = m.shown[:0]
+	for _, r := range m.runs {
+		if r.ConfigPath != "" && m.project.cfg != nil && !sameConfig(r.ConfigPath, m.project.Path) {
+			continue
+		}
+		if f := strings.ToLower(m.rfilter); f != "" {
+			hay := strings.ToLower(r.ID + " " + r.Name + " " + r.Workflow + " " + r.State)
+			if !strings.Contains(hay, f) {
+				continue
+			}
+		}
+		m.shown = append(m.shown, r)
+	}
+	m.runSel = clamp(m.runSel, 0, len(m.shown)-1)
 }
 
 func (m *model) selectedRow() *row {
@@ -295,17 +316,12 @@ func (m *model) refresh(ctx context.Context) {
 		m.loadErr = ""
 		m.runs = runs
 	}
+	m.rebuildShown()
 	if m.cache.version != m.statsVer {
 		m.stats = stats(m.cache)
 		m.statsVer = m.cache.version
 	}
 	m.project.stats = m.stats
-	if m.runSel >= len(m.runs) {
-		m.runSel = len(m.runs) - 1
-	}
-	if m.runSel < 0 {
-		m.runSel = 0
-	}
 	if m.screen == "home" {
 		m.computeSelectedLines()
 	}
@@ -489,9 +505,9 @@ func (m *model) render(w, h int) *frame {
 
 func (m *model) homeKeys() [][2]string {
 	if m.focus == "workflows" {
-		return [][2]string{{"j/k", "move"}, {"enter", "preview"}, {"tab/->", "runs"}, {"r", "run workflow"}, {"q", "quit"}}
+		return [][2]string{{"j/k", "move"}, {"enter", "preview"}, {"tab/->", "runs"}, {"/", "filter"}, {"r", "run workflow"}, {"q", "quit"}}
 	}
-	return [][2]string{{"j/k", "move"}, {"enter", "open"}, {"tab/<-", "workflows"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
+	return [][2]string{{"j/k", "move"}, {"enter", "open"}, {"tab/<-", "workflows"}, {"/", "filter"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
 }
 
 func (m *model) workflowKeys() [][2]string {
@@ -563,8 +579,20 @@ func p(m *model) *prompt { return m.prompt }
 // second row rather than dropping one.
 func (m *model) handleHome(ctx context.Context, k key) bool {
 	switch {
+	case k.name == "esc" && m.rfilter != "":
+		m.rfilter = "" // back out one step: the filter goes before the screen
+		m.rebuildShown()
 	case k.r == 'q' || k.name == "esc":
 		return false
+	case k.r == '/':
+		m.prompt = &prompt{label: "filter runs:", done: func(text string) string {
+			m.rfilter = text
+			m.rebuildShown()
+			if text == "" {
+				return ""
+			}
+			return "filter: " + text + " (empty or esc to clear)"
+		}}
 	case k.r == '\t':
 		if m.focus == "runs" {
 			m.focus = "workflows"
@@ -627,7 +655,7 @@ func (m *model) homeMove(d int) {
 		m.wfSel = clamp(m.wfSel+d, 0, len(m.project.Workflows)-1)
 		return
 	}
-	m.runSel = clamp(m.runSel+d, 0, len(m.runs)-1)
+	m.runSel = clamp(m.runSel+d, 0, len(m.shown)-1)
 }
 
 func clamp(v, lo, hi int) int {
@@ -670,6 +698,9 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 	switch {
 	case (k.name == "esc" || back) && m.view == "timeline" && len(m.tpath) > 0:
 		m.timelineUp() // a level up comes before leaving the run
+	case k.name == "esc" && m.filter != "":
+		m.filter = "" // so does a filter
+		m.rebuildRows()
 	case back && m.view == "tree":
 		m.closeIteration()
 	case k.r == 'q' || k.name == "esc":
@@ -756,7 +787,7 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 			if text == "" {
 				return ""
 			}
-			return "filter: " + text + " (empty to clear)"
+			return "filter: " + text + " (empty or esc to clear)"
 		}}
 	}
 	return true

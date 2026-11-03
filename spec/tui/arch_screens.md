@@ -77,7 +77,12 @@ is a row with `faber build` and the tag hash it was looked up under, so
 "MISSING" is checkable against `docker image ls`. The runs
 pane is the `faber runs` table with wall and a `now` column (the live run's
 breadcrumb), folding to id / state / now under a hundred columns; the
-selection is a full reverse-video row. Below: `now` (the running step with
+selection is a full reverse-video row. Live runs are pinned at the top
+whatever their age, with a blank line under the block and the count in
+the title (`LIVE 2`); the history beneath is newest first and scrolls so
+the cursor stays visible while the live block never scrolls away. `/`
+filters the table over id, name, workflow and state (`live`, `failed`,
+`epic`), the title names the filter, and esc clears it before it quits. Below: `now` (the running step with
 elapsed and p50), `last` (the newest settlement) — computed on refresh,
 never while drawing. A quiet live run gets no `next` line: the journal
 cannot say what the scheduler waits on, so the view does not guess. Keys: `tab` (or

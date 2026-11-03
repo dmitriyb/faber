@@ -1028,3 +1028,87 @@ func TestKeysAreOneVocabulary(t *testing.T) {
 		t.Errorf("narrow footer did not fold (%d rows):\n%s\n%s", m.footerRows, prev, last)
 	}
 }
+
+// Verifies 1d5d7c4db2fe: the runs table pins live runs at the top whatever
+// their age with a blank line under them, scrolls the history so the
+// cursor stays visible, and filters on / over id, name, workflow and
+// state, esc clearing the filter before it quits.
+func TestRunsTablePinsLiveAndScrolls(t *testing.T) {
+	store, release := seedStore(t)
+	defer release()
+	abs, _ := filepath.Abs(refConfig)
+	// thirty settled runs, all newer than the live one
+	for i := 0; i < 30; i++ {
+		id := fmt.Sprintf("20261001-%06d-%08x", i, i)
+		j, err := store.Begin(failure.Header{RunID: id, ConfigPath: abs, Workflow: "epic", Name: fmt.Sprintf("h%02d", i), Started: fixed.Add(time.Duration(i) * time.Minute)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := j.AppendRunEnd(failure.RunEndRecord{Status: failure.RunEndSettled, Finished: fixed.Add(time.Duration(i)*time.Minute + 30*time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		j.Close()
+	}
+	m := testModel(t, store)
+	if len(m.shown) != 32 || m.shown[0].State != "LIVE" || m.shown[1].ID != "20261001-000029-0000001d" {
+		t.Fatalf("order: %d rows, first %s %s, second %s", len(m.shown), m.shown[0].ID, m.shown[0].State, m.shown[1].ID)
+	}
+	frame := m.render(120, 24).plain()
+	rows := strings.Split(frame, "\n")
+	liveRow, blank := -1, false
+	for i, r := range rows {
+		if strings.Contains(r, "| ") && strings.Contains(r, "20260915-180538-4fc8c4f3") { // the table row, not the SELECTED block
+			liveRow = i
+			break
+		}
+	}
+	if liveRow < 0 {
+		t.Fatalf("live run not on screen:\n%s", frame)
+	}
+	if strings.TrimSpace(strings.SplitN(rows[liveRow+1], "|", 2)[1]) == "" {
+		blank = true
+	}
+	if !blank || !strings.Contains(rows[liveRow+2], "20261001-000029") {
+		t.Errorf("no blank line under the live block, or history not right after it:\n%s", frame)
+	}
+	if !strings.Contains(frame, "LIVE 1") {
+		t.Errorf("header lacks the live count:\n%s", frame)
+	}
+	m.handle(context.Background(), key{name: "pgdn"})
+	m.handle(context.Background(), key{name: "pgdn"})
+	m.handle(context.Background(), key{name: "pgdn"})
+	m.handle(context.Background(), key{name: "pgdn"})
+	if m.runSel != 31 {
+		t.Fatalf("pgdn did not clamp at the end: %d", m.runSel)
+	}
+	frame = m.render(120, 24).plain()
+	onScreen := false
+	for _, r := range strings.Split(frame, "\n") {
+		if strings.Contains(r, "| ") && strings.Contains(r, "20260902-170408-d0feb66b") {
+			onScreen = true
+		}
+	}
+	if !onScreen {
+		t.Errorf("the cursor at the end is not on screen:\n%s", frame)
+	}
+	if !strings.Contains(frame, "20260915-180538-4fc8c4f3") {
+		t.Errorf("the live block scrolled away:\n%s", frame)
+	}
+	m.handle(context.Background(), key{r: '/'})
+	for _, r := range "failed" {
+		m.handle(context.Background(), key{r: r})
+	}
+	m.handle(context.Background(), key{name: "enter"})
+	if len(m.shown) != 1 || m.shown[0].ID != "20260902-170408-d0feb66b" {
+		t.Errorf("filter failed: %d rows", len(m.shown))
+	}
+	if frame := m.render(120, 24).plain(); !strings.Contains(frame, "filter failed") {
+		t.Errorf("header does not name the filter:\n%s", frame)
+	}
+	if !m.handle(context.Background(), key{name: "esc"}) || m.rfilter != "" || len(m.shown) != 32 {
+		t.Errorf("esc did not clear the filter first: filter %q, %d rows", m.rfilter, len(m.shown))
+	}
+	if m.handle(context.Background(), key{name: "esc"}) {
+		t.Error("esc with no filter did not quit")
+	}
+}

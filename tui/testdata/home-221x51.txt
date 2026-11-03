@@ -1,12 +1,12 @@
 faber   ../config/testdata/reference.yaml                                                                                                                                                                            19:49:08
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-PROJECT                                                            | RUNS   this config                                                                                                                  other configs: 0
+PROJECT                                                            | RUNS   this config   LIVE 1                                                                                                         other configs: 0
 ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------
                                                                    |
   workflow    params                                               |   run id                    name        workflow   state      started           wall       now
   epic        group=<required>  repo=<required>                    |   20260915-180538-4fc8c4f3  unnamed     task       LIVE       2026-09-02 19:29  20m00s     review-cycle 1/1 > review   running
-  task        item=<required>  repo=<required>                     |   20260902-170408-d0feb66b  unnamed     task       FAILED     2026-09-02 19:04  15m00s
-                                                                   |
+  task        item=<required>  repo=<required>                     |
+                                                                   |   20260902-170408-d0feb66b  unnamed     task       FAILED     2026-09-02 19:04  15m00s
   preflight                                                        |
   config           ok   valid                                      |
   images      4    not checked                                     |
@@ -48,4 +48,4 @@ SELECTED   20260915-180538-4fc8c4f3   task   started 2026-09-02 19:29   LIVE
   last  implement   ok
 
 
-j/k move   enter open   tab/<- workflows   r run workflow   p pause   R resume   q quit                                                                                                                          = faber runs
+j/k move   enter open   tab/<- workflows   / filter   r run workflow   p pause   R resume   q quit                                                                                                               = faber runs

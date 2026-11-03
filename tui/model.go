@@ -454,7 +454,15 @@ func loadRuns(cache *replayCache, now time.Time) ([]RunRow, error) {
 		}
 		rows = append(rows, row)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Started.After(rows[j].Started) })
+	// live runs first whatever their age — they are what the operator acts
+	// on — then newest first
+	sort.SliceStable(rows, func(i, j int) bool {
+		li, lj := rows[i].State == "LIVE", rows[j].State == "LIVE"
+		if li != lj {
+			return li
+		}
+		return rows[i].Started.After(rows[j].Started)
+	})
 	return rows, nil
 }
 

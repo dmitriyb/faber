@@ -22,11 +22,11 @@ func renderHome(f *frame, st style, m *model) {
 	}
 	rightW := w - leftW - 3
 	left := projectPane(st, m, leftW)
-	right := runsPane(st, m, rightW)
 	bodyH := h - 2 - 1 - 5 - 1 // header+rule, rule, selected block, footer
 	if bodyH < 4 {
 		bodyH = 4
 	}
+	right := runsPane(st, m, rightW, bodyH)
 	for i, row := range panes(st, [][]string{left, right}, []int{leftW, rightW}, bodyH) {
 		f.put(2+i, row)
 	}
@@ -181,8 +181,20 @@ func checkSummary(st style, label string, checks []Check, w int) []string {
 	return append(out, rows...)
 }
 
-func runsPane(st style, m *model, w int) []string {
+func runsPane(st style, m *model, w, h int) []string {
+	live := 0
+	for _, r := range m.shown {
+		if r.State == "LIVE" {
+			live++
+		}
+	}
 	title := st.chrome("RUNS") + "   this config"
+	if live > 0 {
+		title += "   " + st.status("LIVE") + fmt.Sprintf(" %d", live)
+	}
+	if m.rfilter != "" {
+		title += "   " + st.dim("filter "+m.rfilter)
+	}
 	if w >= 70 {
 		title = pad(title, w-20) + st.dim(fmt.Sprintf("other configs: %d", m.otherRuns()))
 	}
@@ -195,10 +207,14 @@ func runsPane(st style, m *model, w int) []string {
 		header = []string{"  run id", "state", "now"}
 	}
 	out = append(out, st.dim(cols(header, widths)))
-	for i, r := range m.runs {
-		if r.ConfigPath != "" && m.project.cfg != nil && !sameConfig(r.ConfigPath, m.project.Path) {
-			continue
+	if len(m.shown) == 0 {
+		if m.rfilter != "" {
+			return append(out, "  "+st.dim("no run matches the filter"))
 		}
+		return append(out, "  "+st.dim("no journaled runs"))
+	}
+	row := func(i int) string {
+		r := m.shown[i]
 		name := r.Name
 		if name == "" {
 			name = st.dim("unnamed")
@@ -222,10 +238,28 @@ func runsPane(st style, m *model, w int) []string {
 		case i == m.runSel:
 			line = st.dim(">") + line[1:] // the remembered selection, unfocused
 		}
-		out = append(out, line)
+		return line
 	}
-	if len(m.runs) == 0 {
-		out = append(out, "  "+st.dim("no journaled runs"))
+	// the live block is pinned at the top, a blank line under it; the
+	// history scrolls beneath so the cursor stays visible
+	gap := 0
+	if live > 0 && live < len(m.shown) {
+		gap = 1
+	}
+	avail := max(1, h-len(out)-gap)
+	for i := 0; i < live && i < avail; i++ {
+		out = append(out, row(i))
+	}
+	if gap == 1 {
+		out = append(out, "")
+	}
+	room := avail - live
+	start := live
+	if m.runSel >= live && m.runSel-live >= room {
+		start = m.runSel - room + 1
+	}
+	for i := start; i < len(m.shown) && i-start < room; i++ {
+		out = append(out, row(i))
 	}
 	return out
 }
