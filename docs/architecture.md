@@ -6,6 +6,7 @@ Faber turns one `orchestrator.yaml` into a deterministic JSON IR, then executes 
 - **The boundary.** The thing inside the container is untrusted. Every control is an externally enforced `docker run` binding: an internal network whose only route out is your allow-listing egress proxy, a single pinned git remote, an ephemeral ssh-agent holding exactly one role key, and credential *handles* — no secret is ever materialized inside a box (the explicit opt-out mounts a token as a read-only tmpfs file, shredded after the run).
 - **The DAG.** `${steps.X.field}` references *are* the edges, resolved and validated at compile time into the IR. Bounded loops are frontend sugar, unrolled into conditional chains; `generate` fans a named sub-workflow out over items emitted by your data-source command at run time, deriving inter-instance edges from each item's `deps`. The scheduler runs the DAG topologically and in parallel, gating each edge on a CEL condition (`when`, loop `until`) compiled at validate time.
 - **Failure is a record, not an absence.** Every step emits a structured result; an unfavorable-but-valid output (a review verdict of `changes`) is not a failure. Failures fail-stop their dependency chain, run your declared `on_failure` cleanup, optionally retry from a clean slate, and land in an append-only journal keyed `(step-id, input-hash)` that powers `faber resume`. A run accepts one process at a time (an advisory lock in the run dir), and every on-disk artifact carries a schema version: resume fails closed — never guesses — across a format, IR-schema, or image-derivation change, with `--fresh` as the escape.
+- **The live view.** `faber watch` reads the same journal and IR the CLI does and draws them: the project's preflight (images, role keys, hook scripts, the credential resolver — looked up, never run), each run as a loop-aware tree, the workflow as written, or a timeline, with the selected step's record and its box output. Every action it offers is a named `faber` command spawned as a detached child; the view can do nothing the CLI cannot.
 
 This page is a summary; the authoritative, requirement-level specification is under `spec/**`:
 
@@ -14,6 +15,7 @@ This page is a summary; the authoritative, requirement-level specification is un
 - `spec/config/arch_desugarer.md`, `arch_ir_model.md` — the IR: loop unrolling, `$ref` resolution, reference-to-edge compilation.
 - `spec/pipeline/arch_scheduler.md`, `arch_condition_evaluator.md`, `arch_generate_expander.md` — parallel scheduling, CEL conditions, `generate` fan-out.
 - `spec/failure/arch_failure_policy.md`, `arch_journal.md`, `arch_recovery_modes.md` — on_failure/retry, the journal, resume/fresh/interactive recovery.
+- `spec/tui/arch_screens.md`, `arch_renderer.md`, `flow_live_view.md` — the live view's screens, the 16-colour renderer, the watch flow.
 
 ## Guiding principle
 

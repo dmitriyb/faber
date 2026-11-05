@@ -41,14 +41,15 @@ directory; override with `state_dir` in `~/.config/faber/host.json`) holds:
 - `runs/<run-id>/journal.jsonl` — the append-only run journal plus per-box attempt directories (result records, failure handoffs). This is the only state `faber resume` needs; treat it as disposable-after-triage or archive it for audit. Journals never contain resolved input values or secrets — only hashes, statuses, and error records.
 - `infra/images.jsonl` — append-only bookkeeping of loaded images for a
   future GC command.
+- `logs/<command>-<timestamp>-<pid>.log` — the output of each `faber run` or `faber resume` the live view started as a detached child.
 
-One journal directory per run; nothing coordinates across runs in v0.1, so
+One journal directory per run; nothing coordinates across runs, so
 give concurrent pipelines distinct state dirs (or accept append-only
 coexistence under `runs/`). Run it per-project: the state dir beside the
 `orchestrator.yaml` that produced it keeps resume's config-path re-derivation
 working.
 
-Image and Nix-store growth is **manual GC** in v0.1: prune with
+Image and Nix-store growth is **manual GC**: prune with
 `docker image prune` / `nix-collect-garbage` on your own schedule; superseded
 `faber/<template>:<hash>` tags are safe to delete (a rebuild recreates them
 deterministically).
@@ -140,7 +141,8 @@ startup rather than silently not enforcing.
 - **Failures**: the run report names each failed step, its reason, and a ready-made `faber resume <run-id> --interactive <step>` line that reopens the failed box (same image, bindings, inputs, with the failure handoff mounted read-only) for diagnosis.
 - **Resume**: `faber resume <run-id>` skips journal hits by `(step-id, input-hash)` — a changed input, template, or image tag re-runs automatically. The journal pins the IR hash; if the config drifted, resume refuses (fix the config back, or `--fresh` to re-run everything under a new run id).
 - **Upgrades**: `faber upgrade` moves faber and its coupled `faber-box` forward to the latest signed release in place — it runs the active-runs guard first, then replaces both binaries as a unit via the embedded, already-verified `install.sh` (`--check`/`--dry-run`, `--version vX.Y.Z`, `--rollback`, `--force`). Upgrade is forward-only: a resolved latest OLDER than the installed version is a rollback anomaly (a compromised origin serving an old release as "latest") and is hard-refused, non-overridable — to install an older release deliberately, name it with `--version`, which installs any release in any direction. The active-runs guard encodes "faber is not upgraded mid-run": the plain path refuses (non-zero) while any run is live (its lock is held) or unfinished (no run-end marker in its journal), listing them; `--force` overrides that guard and only that guard. `faber upgrade --check` runs the same audit but only warns about active runs (it reports availability and exits 0 without blocking), subsuming the former standalone `upgrade-check` command. The binary swap is otherwise external. On-disk artifacts are schema-versioned (journal format, IR version, the faber↔faber-box contract, per-template image tags recorded at run start), and resume fails closed on any mismatch — an engine-side change is named as such, never blamed on your config, and there is no auto-migration: finish in-flight runs on the old binary or `--fresh` them. Same YAML must still produce byte-identical IR (`validate --emit-ir` is diffable and golden-tested).
-- **Abort**: SIGINT/SIGTERM cancels the run; in-flight containers are killed by name and bindings torn down. There are no per-step timeouts in v0.1 — bound runaway steps with metering budgets or external supervision.
+- **Watching**: `faber watch` (bare `faber` at a terminal) opens the live view on this config's runs: live runs pinned above the history, each run as a tree, workflow or timeline, the running step with its usual duration from the history, `n` to the next problem. `r`, `R` and `p` start, resume and pause through the same `faber` commands as the CLI, as detached children logged under the state directory's `logs/`; see `docs/commands.md#the-live-view`.
+- **Abort**: SIGINT/SIGTERM cancels the run; in-flight containers are killed by name and bindings torn down. There are no per-step timeouts — bound runaway steps with metering budgets or external supervision.
 
 ## CI
 
