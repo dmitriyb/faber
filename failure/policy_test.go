@@ -231,9 +231,10 @@ exit 0
 
 	errRec := ErrorRecord{Reason: ReasonAgent, Detail: "died", Handoff: "handoff/task-one"}
 	inv := HookInvocation{
-		Script:  script,
-		StepID:  "task/one",
-		Attempt: 2,
+		Script:    script,
+		StepID:    "task/one",
+		Attempt:   2,
+		ResultDir: filepath.Join(dir, "attempt-2", "result"),
 		Inputs: map[string]any{
 			"text":   "plain value",
 			"count":  7,
@@ -254,6 +255,7 @@ exit 0
 	for _, want := range []string{
 		"FABER_STEP_ID=task/one",
 		"FABER_ATTEMPT=2",
+		"FABER_RESULT_DIR=" + filepath.Join(dir, "attempt-2", "result"),
 		"FABER_INPUT_TEXT=plain value",
 		"FABER_INPUT_COUNT=7",
 		`FABER_INPUT_NESTED={"key":"value"}`,

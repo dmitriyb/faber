@@ -170,7 +170,9 @@ the field path is the contract, asserted by tests. Errors aggregate via
 
 - Whether hook scripts, overlay files, skill dirs, or key files exist — run-machine
   concerns, checked at run start, not config validity (the config may be authored
-  on a different machine than it runs on). Note this is about *file existence*:
+  on a different machine than it runs on). The hook check is the pipeline's run
+  preflight, over `CheckHookFile` — the one predicate this module exports for
+  it, which the live view's preflight shares. Note this is about *file existence*:
   the paths are still resolved to absolute (declarer-relative) at assembly, and
   an `include:` target that cannot be read is a hard `Load`/`Assemble` error, since
   a missing include means the config is not fully known.

@@ -184,7 +184,7 @@
       "name": "tui",
       "path": "tui",
       "description": "The live view: Home (project, images, runs) and Run (tree, workflow, timeline, step, output) screens over the journal, rendered with our own 16-colour ASCII renderer; actions spawn detached faber children.",
-      "requires_module": ["51be984560a5", "6c710a720719", "ac15b2db7263"]
+      "requires_module": ["51be984560a5", "38eac7b92e62", "6c710a720719", "ac15b2db7263"]
     }
   ],
   "milestones": [

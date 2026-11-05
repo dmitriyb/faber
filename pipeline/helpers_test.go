@@ -343,10 +343,14 @@ func wantStates(t *testing.T, got map[string]string, want map[string]string) {
 	}
 }
 
+// pkgDir is the package directory at process start: tests that move into
+// a stub working directory (stubHooks) still find the fixtures by it.
+var pkgDir, _ = os.Getwd()
+
 // loadReferenceIR reads one of the config module's golden IR fixtures.
 func loadReferenceIR(t *testing.T, name string) *config.IR {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "config", "testdata", name))
+	raw, err := os.ReadFile(filepath.Join(pkgDir, "..", "config", "testdata", name))
 	if err != nil {
 		t.Fatalf("read reference IR: %v", err)
 	}
@@ -354,8 +358,63 @@ func loadReferenceIR(t *testing.T, name string) *config.IR {
 	if err := json.Unmarshal(raw, &ir); err != nil {
 		t.Fatalf("parse reference IR: %v", err)
 	}
+	stubHooks(t, &ir)
 	return &ir
 }
+
+// stubHooks makes the fixture's CWD-relative hook paths resolve, the way a
+// run resolves them: the test moves into a directory holding a stub script
+// at each path, so the run preflight — which proves every declared hook on
+// this machine — passes and the IR (and its hash, pinned by the report
+// goldens) stays as the config module's golden left it.
+func stubHooks(t *testing.T, ir *config.IR) {
+	t.Helper()
+	stubMu.Lock()
+	dir, moved := stubDirs[t]
+	if !moved {
+		dir = t.TempDir()
+		stubDirs[t] = dir
+	}
+	stubMu.Unlock()
+	stub := func(p string) {
+		if p == "" {
+			return
+		}
+		path := filepath.Join(dir, p)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var walk func(*config.IR)
+	walk = func(g *config.IR) {
+		for i := range g.Nodes {
+			n := &g.Nodes[i]
+			if tpl := n.Template; tpl != nil {
+				stub(tpl.Hooks.Context)
+				stub(tpl.Hooks.Prelude)
+				stub(tpl.Hooks.Postlude)
+				stub(tpl.Hooks.OnFailure)
+			}
+			if n.Sub != nil {
+				walk(n.Sub)
+			}
+		}
+	}
+	walk(ir)
+	if !moved {
+		t.Chdir(dir)
+	}
+}
+
+// stubDirs is the stub working directory per test, so a test that loads
+// two reference IRs (an epic and its task) stubs both into one place.
+var (
+	stubMu   sync.Mutex
+	stubDirs = map[*testing.T]string{}
+)
 
 // verdict builds the reference review payload.
 func verdict(v string) failure.Result {

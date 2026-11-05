@@ -122,6 +122,14 @@ dead daemon or an unbuilt image. The preflight applies to every execute mode,
 resume included: uniform fail-fast, at the cost of requiring images present
 even for a fully-cached replay.
 
+The same pass proves every hook script those templates declare, in all four
+slots, on this machine — present, a regular file, executable, starting with
+`#!` — through the config module's one predicate (`config.CheckHookFile`,
+which the live view's preflight shares, so the two never disagree). The
+refusal names the template, the slot and the path as the YAML spells it.
+Config validation deliberately leaves file presence to this point: a config
+may be authored where it does not run.
+
 ## Failure and halt propagation
 
 When a node settles `failed` (final, after retries), the scheduler walks its

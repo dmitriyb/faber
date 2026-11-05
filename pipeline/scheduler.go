@@ -800,6 +800,7 @@ func (s *scheduler) boxWorker(ctx context.Context, job boxJob) {
 		Inputs:    job.inputs,
 		Retry:     job.retry,
 		OnFailure: job.onFailure,
+		ResultDir: func(attempt int) string { return ResultDir(s.runDir, job.id, attempt) },
 	}, runner)
 	if res.Error != nil && res.Error.Reason == failure.ReasonCanceled {
 		// The loop-head cancel returned before the first attempt's runner ran,
@@ -864,11 +865,12 @@ func (s *scheduler) cleanupAfterDefer(ctx context.Context, job boxJob, errRec *f
 		err = fmt.Errorf("step declares on_failure but no hook runner is wired")
 	} else {
 		err = s.policy.Hooks.RunOnFailure(hctx, failure.HookInvocation{
-			Script:  job.onFailure,
-			StepID:  job.id,
-			Attempt: attempt,
-			Inputs:  job.inputs,
-			Error:   *errRec,
+			Script:    job.onFailure,
+			StepID:    job.id,
+			Attempt:   attempt,
+			Inputs:    job.inputs,
+			Error:     *errRec,
+			ResultDir: ResultDir(s.runDir, job.id, attempt),
 		})
 	}
 	rec := failure.CleanupRecord{StepID: job.id, InputHash: job.hash, Attempt: attempt, OK: err == nil}

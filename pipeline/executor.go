@@ -477,14 +477,28 @@ func (e *Executor) render(runID, journalPath string, ir *config.IR, log *slog.Lo
 // image tag, and the docker daemon must already hold each image. One early,
 // aggregated refusal replaces a cascade of per-step launch failures each
 // burning its full retry budget against a dead daemon or an unbuilt image.
-// nil ImageCheck or nil Images (unit wiring) skips the check.
+// The same pass proves every hook script a template declares, in all four
+// slots, on this machine (config validation deliberately leaves file
+// presence to run start). nil ImageCheck or nil Images (unit wiring) skips
+// the image check only.
 func (e *Executor) preflight(ctx context.Context, ir *config.IR) error {
-	if e.ImageCheck == nil || e.Images == nil {
-		return nil
-	}
 	var errs []error
+	templates := collectTemplates(ir, e.Workflows)
+	for _, tpl := range templates {
+		for _, h := range [][2]string{{"context", tpl.Hooks.Context}, {"prelude", tpl.Hooks.Prelude}, {"postlude", tpl.Hooks.Postlude}, {"on_failure", tpl.Hooks.OnFailure}} {
+			if h[1] == "" {
+				continue
+			}
+			if err := config.CheckHookFile(h[1]); err != nil {
+				errs = append(errs, fmt.Errorf("pipeline: preflight: template %s: hooks.%s %s: %v", tpl.Name, h[0], h[1], err))
+			}
+		}
+	}
+	if e.ImageCheck == nil || e.Images == nil {
+		return errors.Join(errs...)
+	}
 	var missing []string
-	for _, tpl := range collectTemplates(ir, e.Workflows) {
+	for _, tpl := range templates {
 		tag, err := e.Images.Tag(tpl)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pipeline: preflight: template %s: %w", tpl.Name, err))

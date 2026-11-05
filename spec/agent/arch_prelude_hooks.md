@@ -61,6 +61,15 @@ the `BRANCH` side-effect declaration) are captured then, so a postlude's
 writes into the bundle are snapshotted on failure but never interpreted —
 declare side-effects from the prelude only.
 
+A hook that wants to tell the operator what it did — the PR it opened, the
+push it verified, why it halted and what to do next — appends one JSON
+object per event to `$FABER_RESULT_DIR/hooks/events.jsonl`, the events
+file the hook and result contracts define. The engine never acts on an
+event: the live view shows them verbatim, understanding only a `halt`
+event's `next` sentence and a `result` field's `ok` or `failed`. The
+on_failure hook, which runs host-side, receives the same result directory
+for the same purpose.
+
 The split of labor is convention, not enforcement: `context` gathers and
 derives (read-only — resolve the work item, collect the authoritative
 documents), `prelude` acts (create the branch, claim the item with a signed

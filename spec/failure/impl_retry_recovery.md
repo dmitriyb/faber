@@ -50,9 +50,13 @@ type HookRunner interface {
 ```
 
 The exec implementation: `exec.CommandContext(ctx, script)`, env = the parent
-env plus `FABER_STEP_ID`, `FABER_ATTEMPT`, and one `FABER_INPUT_<SLOT>` per
-resolved input (scalars verbatim, objects as JSON); stdin = the error record
-as JSON; stdout/stderr captured. `cleanup` wraps it:
+env plus `FABER_STEP_ID`, `FABER_ATTEMPT`, `FABER_RESULT_DIR` (the failed
+attempt's result directory on the host — the box's own, so the cleanup hook
+appends to the same `hooks/events.jsonl` the in-box hooks wrote; the step
+spec names it per attempt, absent when the runner keeps no attempt
+directories), and one `FABER_INPUT_<SLOT>` per resolved input (scalars
+verbatim, objects as JSON); stdin = the error record as JSON; stdout/stderr
+captured. `cleanup` wraps it:
 
 ```go
 func (p *Policy) cleanup(ctx context.Context, st StepSpec, res Result) {

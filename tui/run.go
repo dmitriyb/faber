@@ -1,12 +1,13 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/dmitriyb/faber/agent/contract"
 	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/failure"
 	"github.com/dmitriyb/faber/pipeline"
@@ -55,7 +56,12 @@ func renderRun(f *frame, st style, m *model) {
 	default:
 		left = treePane(st, m, leftW, bodyH)
 	}
+	// STEP takes the larger share when the hooks wrote about the attempt;
+	// OUTPUT keeps a quarter
 	stepH := bodyH * 55 / 100
+	if r := m.selectedRow(); bodyH >= 24 && r != nil && r.kind == "step" && m.hasEvents(r.id) {
+		stepH = bodyH * 75 / 100
+	}
 	rightCol := append(stepPane(st, m, rightW, stepH), outputPane(st, m, rightW, bodyH-stepH)...)
 	for i, row := range panes(st, [][]string{left, rightCol}, []int{leftW, rightW}, bodyH) {
 		f.put(3+i, row)
@@ -213,7 +219,11 @@ func (m *model) nowStrip(st style) string {
 		return line
 	}
 	if fails := m.problemIDs(); len(fails) > 0 && !v.Live {
-		return "  now   " + st.dim("nothing running") + "   failed at " + st.ident(crumb(fails[0], wf, v.Bounds)) + "   next: resume"
+		next := "resume"
+		if n := m.haltNext(fails[0]); n != "" {
+			next = trunc(sanitize(n), 60)
+		}
+		return "  now   " + st.dim("nothing running") + "   failed at " + st.ident(crumb(fails[0], wf, v.Bounds)) + "   next: " + next
 	}
 	if last := m.lastSettled(); last != "" {
 		return "  last  " + st.ident(crumb(last, wf, v.Bounds)) + "   " + st.status(m.stateOf(last))
@@ -308,17 +318,108 @@ func stepPane(st style, m *model, w, h int) []string {
 	} else {
 		out = append(out, "", cols([]string{"  " + st.dim("history"), st.dim("no ok attempt   " + scopeText(v) + "   h to switch")}, []int{12, w - 12}))
 	}
+	// the error, handoff and halt keep their room; the hooks' account of
+	// the attempt takes what is left, newest lines first to go
+	var tail []string
 	if line != nil && line.Error != nil {
-		out = append(out, "", st.chrome("error"), "  "+trunc(line.Error.Detail, w-2))
+		tail = append(tail, "", st.chrome("error"), "  "+trunc(line.Error.Detail, w-2))
 		if line.Error.Handoff != "" {
-			out = append(out, "", st.chrome("handoff"), "  "+trunc(line.Error.Handoff, w-2))
-			out = append(out, "", st.chrome("re-enter")+st.dim("   printed on q"), "  faber resume "+v.ID+" \\", "    --interactive "+r.id)
+			tail = append(tail, "", st.chrome("handoff"), "  "+trunc(line.Error.Handoff, w-2))
+			tail = append(tail, "", st.chrome("re-enter")+st.dim("   printed on q"), "  faber resume "+v.ID+" \\", "    --interactive "+r.id)
 		}
 	}
 	if line != nil && line.Halt != nil {
-		out = append(out, "", st.chrome("halt"), "  "+trunc(line.Halt.Detail, w-2))
+		tail = append(tail, "", st.chrome("halt"), "  "+trunc(line.Halt.Detail, w-2))
 	}
-	return padRows(out, h)
+	out = append(out, hooksBlock(st, m, r.id, h-len(out)-len(tail), w)...)
+	return padRows(append(out, tail...), h)
+}
+
+// hooksBlock is the attempt's hooks events file as the hooks wrote it:
+// one row per event — writer, event, then the fields as key=value — with
+// a halt event and a failed result in the FAIL colour, an ok result in the
+// ok colour, and every line the reader refused shown as malformed with its
+// line number. Nothing when no hook wrote anything.
+func hooksBlock(st style, m *model, id string, avail, w int) []string {
+	attempt := lastAttempt(m.run.Replay, id)
+	ev, err := pipeline.AttemptEvents(m.run.RunDir, id, attempt)
+	if err != nil {
+		return []string{"", st.chrome("hooks"), "  " + st.dim(trunc(sanitize(err.Error()), w-2))}
+	}
+	if len(ev.Events) == 0 && len(ev.Malformed) == 0 {
+		return nil
+	}
+	type row struct {
+		line int
+		text string
+	}
+	var rows []row
+	for _, e := range ev.Events {
+		name := sanitize(e.Name)
+		if e.Name == contract.EventHalt {
+			name = st.wrap(sgrRed, name)
+		}
+		var parts []string
+		for _, k := range e.SortedFieldKeys() {
+			kv := sanitize(k) + "=" + sanitize(e.Fields[k])
+			if k == contract.EventResult {
+				switch e.Fields[k] {
+				case contract.ResultOK:
+					kv = st.wrap(sgrGreen, kv)
+				case contract.ResultFailed:
+					kv = st.wrap(sgrRed, kv)
+				}
+			}
+			parts = append(parts, kv)
+		}
+		rows = append(rows, row{e.Line, cols([]string{"  " + st.ident(sanitize(e.Hook)), name, strings.Join(parts, "  ")}, []int{18, 20, w - 38})})
+	}
+	for _, bad := range ev.Malformed {
+		rows = append(rows, row{bad.Line, "  " + st.wrap(sgrRed, "malformed") + st.dim(fmt.Sprintf("  line %d: %s", bad.Line, trunc(sanitize(bad.Err), w-24)))})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].line < rows[j].line })
+	if avail < 3 {
+		return nil
+	}
+	title := st.chrome("hooks") + st.dim(fmt.Sprintf("   attempt %d   %s", attempt, plural(len(ev.Events), "event")))
+	if len(ev.Malformed) > 0 {
+		title += "   " + st.wrap(sgrRed, plural(len(ev.Malformed), "malformed line"))
+	}
+	if ev.Truncated {
+		title += st.dim("   oldest not read")
+	}
+	if n := avail - 2; len(rows) > n {
+		title += st.dim(fmt.Sprintf("   %d earlier not shown", len(rows)-n))
+		rows = rows[len(rows)-n:]
+	}
+	out := []string{"", title}
+	for _, r := range rows {
+		out = append(out, r.text)
+	}
+	return out
+}
+
+// hasEvents reports whether a hook wrote anything about the step's newest
+// attempt.
+func (m *model) hasEvents(id string) bool {
+	ev, err := pipeline.AttemptEvents(m.run.RunDir, id, lastAttempt(m.run.Replay, id))
+	return err == nil && (len(ev.Events) > 0 || len(ev.Malformed) > 0)
+}
+
+// haltNext is the operator's next step as the failed step's own halt event
+// states it, or empty.
+func (m *model) haltNext(id string) string {
+	ev, err := pipeline.AttemptEvents(m.run.RunDir, id, lastAttempt(m.run.Replay, id))
+	if err != nil {
+		return ""
+	}
+	next := ""
+	for _, e := range ev.Events {
+		if e.Name == contract.EventHalt && e.Fields[contract.EventNext] != "" {
+			next = e.Fields[contract.EventNext]
+		}
+	}
+	return next
 }
 
 // outputPane tails the selected step's newest attempt output.
@@ -596,8 +697,11 @@ func previewPane(st style, m *model, w int) []string {
 			}
 			set++
 			hs := st.status("ok")
-			if _, err := os.Stat(h[1]); err != nil {
+			if err := config.CheckHookFile(h[1]); err != nil {
 				hs = st.wrap(sgrRed, "MISSING")
+				if !errors.Is(err, config.ErrHookNotFound) {
+					hs += st.dim("  " + err.Error())
+				}
 				hmissing++
 			}
 			hrows = append(hrows, cols([]string{"      " + st.ident(h[0]), relPath(m.project.Dir, h[1]) + "   " + hs}, []int{18, w - 18}))

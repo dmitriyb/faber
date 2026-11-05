@@ -37,9 +37,9 @@ func renderStable(t *testing.T, h *harness, ir *config.IR, runID string) (string
 // UPDATE_GOLDEN=1.
 func checkGolden(t *testing.T, name, got string) {
 	t.Helper()
-	path := filepath.Join("testdata", name)
+	path := filepath.Join(pkgDir, "testdata", name)
 	if os.Getenv("UPDATE_GOLDEN") == "1" {
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("mkdir testdata: %v", err)
 		}
 		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {

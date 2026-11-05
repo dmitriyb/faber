@@ -91,6 +91,27 @@ A step's `with:` values and a `when`/`until` condition bind from a closed set: a
 A template picks exactly one form per aspect — the loader rejects setting both.
 Named references exist so one toolset/hook/skill tree can be shared across templates and `include:` files without repeating it.
 
+## Hook events
+
+A hook talks to the operator through one file: `$FABER_RESULT_DIR/hooks/events.jsonl`, one JSON object per line — `ts` (RFC 3339), `hook` (your script's name), `event` (a word), and any further fields as strings. The live view shows them under STEP exactly as written (`post-review   decision   mss=clean  pr=17  result=landable`); `faber` itself never acts on one. Two words are reserved: an event named `halt` carries `next`, the one sentence the operator should act on (shown on the run's now strip); a field named `result` is coloured when it says `ok` or `failed`. The on_failure hook, which runs on the host, gets the same `FABER_RESULT_DIR`, so all four slots write one file per attempt. A line that is not a JSON object, or lacks one of the three names, is shown as malformed with its line number rather than dropped. A copy-paste helper for POSIX `sh` with `jq`:
+
+```sh
+_hook="post-review"                                  # your script's name
+_hooks_dir="${FABER_RESULT_DIR:-}/hooks"
+if [ -n "${FABER_RESULT_DIR:-}" ] && mkdir -p "$_hooks_dir" 2>/dev/null; then :; else _hooks_dir=""; fi
+_emit() {                                            # _emit <event> [key=value…]
+	[ -n "$_hooks_dir" ] || return 0
+	_e="$1"; shift
+	jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg hook "$_hook" --arg event "$_e" --args \
+		'{ts:$ts,hook:$hook,event:$event} + ($ARGS.positional|map(split("=")|{(.[0]):(.[1:]|join("="))})|add // {})' \
+		"$@" >> "$_hooks_dir/events.jsonl" 2>/dev/null || true
+}
+_emit push_verify ref="$branch" result=ok
+_emit halt reason=approval-not-boolean pr="$pr" next="clear the reservation on PR #$pr, then resume"
+```
+
+Before a run starts, every hook path a reachable template declares is checked on this machine — present, a regular file, executable, starting with `#!` — and a run is refused naming the template, the slot and the path. `faber validate` does not do this: a config may be authored where it does not run.
+
 ## Invocation profiles
 
 An `invoke_profiles:` entry describes one agent CLI's headless dialect; a template opts in with `invoke: {profile: <name>, …}`, inline fields overriding the named profile's field-by-field (they compose — this aspect is deliberately not either/or).

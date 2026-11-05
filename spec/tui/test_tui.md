@@ -135,6 +135,16 @@ docker. The screens are rendered into frames and compared colour-stripped.
     image absent, the task preview's NEEDS reads `4 images` with
     `implement   MISSING   faber build   20be39bb9bb7` and `review`; the
     epic preview lists its own templates' images.
+
+23. **STEP shows the hooks' events.** The failed review's attempt carries
+    an events file with a verified push, a failed checks read and one line
+    that is not JSON: STEP reads `hooks   attempt 1   2 events   1
+    malformed line`, then `fetch-change   push_verify   ref=work/x
+    result=ok`, `checks_read   attempts=3  pr=17  result=failed` and
+    `malformed  line 3: not a JSON object`; the now strip reads `next:
+    resume`. A `halt` event appended with a `next` sentence puts that
+    sentence after `next:`. The live run's implement, which no hook wrote
+    about, has no hooks block.
 ## Edge cases
 
 - Hooks are four fixed slots per template; Home never lists hooks as a

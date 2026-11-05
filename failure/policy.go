@@ -31,6 +31,9 @@ type StepSpec struct {
 	Inputs    map[string]any
 	Retry     int
 	OnFailure string
+	// ResultDir names an attempt's result directory on the host for the
+	// on_failure hook; nil when the runner keeps no attempt directories.
+	ResultDir func(attempt int) string
 }
 
 // StepRunner launches one whole attempt of the step — a fresh container from
@@ -164,13 +167,17 @@ func (p *Policy) cleanup(ctx context.Context, spec StepSpec, res Result, log *sl
 	if p.Hooks == nil {
 		err = errNoHookRunner
 	} else {
-		err = p.Hooks.RunOnFailure(hctx, HookInvocation{
+		inv := HookInvocation{
 			Script:  spec.OnFailure,
 			StepID:  spec.ID,
 			Attempt: res.Attempt,
 			Inputs:  spec.Inputs,
 			Error:   *res.Error,
-		})
+		}
+		if spec.ResultDir != nil {
+			inv.ResultDir = spec.ResultDir(res.Attempt)
+		}
+		err = p.Hooks.RunOnFailure(hctx, inv)
 	}
 	rec := CleanupRecord{
 		StepID:    spec.ID,

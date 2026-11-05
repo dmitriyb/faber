@@ -152,9 +152,16 @@ over OUTPUT, and the footer.
   bar, STEP and OUTPUT follow a selected step. `+`/`-` zoom the columns
   by powers of two within a level, the window centred on the selected row.
 - **STEP**: breadcrumb, status, reason or since, attempt, duration, usually,
-  outputs, then the error, handoff, re-enter command (`printed on q`), or
-  the halt. **OUTPUT**: the newest attempt's `output.log` tail,
-  terminal-sanitized.
+  outputs, then the hooks' own account of the attempt — its events file,
+  one row per event: writer, event, fields as `key=value`, a `halt` event
+  and a `result=failed` in the FAIL colour, `result=ok` in the ok colour,
+  every line the reader refused as `malformed  line N` — taking the room
+  the error, handoff, re-enter command (`printed on q`) and halt leave
+  (STEP grows to three quarters of the column when there are events and
+  the screen is tall enough), the newest rows kept when short. A halt
+  event's `next` sentence replaces `resume` on the now strip's
+  `failed at … next:`. **OUTPUT**: the newest attempt's `output.log` tail,
+  terminal-sanitized, as the events are.
 
 One key vocabulary on every screen: `j`/`k`, arrows and page keys move
 the list that has the cursor; `tab` and left/right move between panes

@@ -15,6 +15,11 @@ STEPS                                                                           
                                                                                              |     p90     4m00s
                                                                                              |     p99     4m00s
                                                                                              |
+                                                                                             | hooks   attempt 1   2 events   1 malformed line
+                                                                                             |   fetch-change    push_verify         ref=work/x  result=ok
+                                                                                             |   fetch-change    checks_read         attempts=3  pr=17  result=failed
+                                                                                             |   malformed  line 3: not a JSON object
+                                                                                             |
                                                                                              | error
                                                                                              |   agent exited 1
                                                                                              |
@@ -26,21 +31,16 @@ STEPS                                                                           
                                                                                              |     --interactive task/review-cycle@2/review
                                                                                              |
                                                                                              |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
+                                                                                             |
                                                                                              | OUTPUT   attempt 1   output.log
                                                                                              | ------------------------------------------------------------------------------------------------------------------------------
                                                                                              | prelude: fetch-pr #17 ok
                                                                                              | agent: claude --print ... started
                                                                                              | agent: exit 1
-                                                                                             |
-                                                                                             |
-                                                                                             |
-                                                                                             |
-                                                                                             |
-                                                                                             |
-                                                                                             |
-                                                                                             |
-                                                                                             |
-                                                                                             |
                                                                                              |
                                                                                              |
                                                                                              |
