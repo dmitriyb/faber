@@ -155,6 +155,30 @@ resource/mount flags and the image name; it never parses or reorders it.
 `Assembled.SecretsStdin` rides alongside into `RunSpec.StdinSecrets`, where
 infra streams it on the container's stdin.
 
+## Check composition (security/check.go)
+
+```go
+const ContainerCheckRemote = "/faber/remote"
+
+func NewCheckBindingSet(identity *IdentityBinding, remoteDir, sourceRepo, keyPath string,
+    runner infra.CommandRunner, logger *slog.Logger) *BindingSet
+// bindings: noNetworkBinding{}, &checkRemoteBinding{...}, &checkIdentityBinding{inner, key}, runtimeBinding{}
+```
+
+- `noNetworkBinding` (name `network`): `--network none`, always.
+- `checkRemoteBinding` (name `remote`): nothing for a repo-less step; else
+  `checkRepoShape`, then `<remoteDir>/<repo>.git` cloned once under a mutex
+  (`git clone --bare --quiet <sourceRepo> <bare>` through the command
+  runner; a missing `sourceRepo` — no repository in the working directory —
+  fails the step before launch, saying so), contributing
+  `-v <remoteDir>:/faber/remote` and `-e FABER_REMOTE_URL=/faber/remote/<repo>.git`.
+  No host-key material.
+- `checkIdentityBinding` (name `identity`): nothing when the template
+  declares no identity; else the inner binding's Prepare with
+  `Identity = {Key: keyPath}` and an empty role — path form, one agent
+  shared by every role. `Close` delegates.
+- No credentials binding: `Assembled.SecretsStdin` is always empty.
+
 ## Determinism
 
 No maps are iterated anywhere in assembly: `no_proxy` is a YAML list,

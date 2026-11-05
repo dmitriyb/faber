@@ -169,36 +169,56 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 		return fmt.Errorf("faber: cap-free IR hash for the journal header: %w", err)
 	}
 
-	var resolver security.Resolver
-	if cfg.Credentials.Resolver != "" {
-		resolver = security.NewExecResolver(cfg.Credentials.Resolver, infra.NewCommandRunner(logger))
-	}
-	netBinding := security.NewNetworkBinding(w.docker, logger)
-	remoteBinding := security.NewRemoteBinding(logger)
 	identityBinding := security.NewIdentityBinding(security.NewAgentController(logger), logger)
-	// The registry+locator resolve a template `identity: <name>` that carries
-	// no explicit key path. A path-form identity (every current config) never
-	// consults them, so a missing or empty registry leaves existing runs
-	// byte-identical; a malformed registry is a hard, loud error.
-	reg, err := security.LoadRegistry(security.RegistryPath())
-	if err != nil {
-		return err
-	}
-	identityBinding.Registry = reg
-	identityBinding.Locator = security.NewKeyLocator(logger)
 	identityBinding.SocketGroup = w.host.AgentSocketGroup
-	bindings := security.NewBindingSet(
-		netBinding,
-		remoteBinding,
-		identityBinding,
-		security.NewCredentialBroker(resolver, logger),
-		logger)
-	// Interactive re-entry composes no credential broker: the debug shell only
-	// observes a failed step, never runs the agent, and cannot materialize a
-	// stdin secrets payload — so it resolves no tokens (no GetToken side effect)
-	// and streams none. Network/remote/identity stay so clone and observe still
-	// work; an operator who needs a secret sets it by hand inside the shell.
-	reentryBindings := security.NewBindingSetWithoutCredentials(netBinding, remoteBinding, identityBinding, logger)
+	var bindings, reentryBindings *security.BindingSet
+	reg := security.Registry{}
+	store := w.store
+	services := cfg.Credentials.Services
+	// A check run swaps the whole security surface for the sandbox and keeps
+	// its journal out of the run store: nothing it does is a run of record.
+	var sandbox *checkSandbox
+	if opts.Check {
+		sb, err := newCheckSandbox(ctx, opts.Keep, w.stderr, logger)
+		if err != nil {
+			return err
+		}
+		defer sb.close()
+		sandbox = sb
+		bindings = security.NewCheckBindingSet(identityBinding, sb.remoteDir, sb.source, sb.key, infra.NewCommandRunner(logger), logger)
+		store = failure.NewStore(filepath.Join(sb.dir, "runs"), logger)
+		services = nil
+	} else {
+		var resolver security.Resolver
+		if cfg.Credentials.Resolver != "" {
+			resolver = security.NewExecResolver(cfg.Credentials.Resolver, infra.NewCommandRunner(logger))
+		}
+		netBinding := security.NewNetworkBinding(w.docker, logger)
+		remoteBinding := security.NewRemoteBinding(logger)
+		// The registry+locator resolve a template `identity: <name>` that carries
+		// no explicit key path. A path-form identity (every current config) never
+		// consults them, so a missing or empty registry leaves existing runs
+		// byte-identical; a malformed registry is a hard, loud error.
+		var err error
+		reg, err = security.LoadRegistry(security.RegistryPath())
+		if err != nil {
+			return err
+		}
+		identityBinding.Registry = reg
+		identityBinding.Locator = security.NewKeyLocator(logger)
+		bindings = security.NewBindingSet(
+			netBinding,
+			remoteBinding,
+			identityBinding,
+			security.NewCredentialBroker(resolver, logger),
+			logger)
+		// Interactive re-entry composes no credential broker: the debug shell only
+		// observes a failed step, never runs the agent, and cannot materialize a
+		// stdin secrets payload — so it resolves no tokens (no GetToken side effect)
+		// and streams none. Network/remote/identity stay so clone and observe still
+		// work; an operator who needs a secret sets it by hand inside the shell.
+		reentryBindings = security.NewBindingSetWithoutCredentials(netBinding, remoteBinding, identityBinding, logger)
+	}
 
 	network := &cfg.Network
 	if cfg.Network.Name == "" && cfg.Network.Proxy == "" && len(cfg.Network.NoProxy) == 0 && !cfg.Network.Nftables {
@@ -216,11 +236,18 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 	for role, e := range reg {
 		gitIdentities[role] = pipeline.GitIdentity{Name: e.GitName, Email: e.GitEmail}
 	}
+	if sandbox != nil {
+		// Every role commits as the check identity: there is no forge to
+		// verify against, and the registry's addresses stay out of a sandbox.
+		for role := range cfg.Identities {
+			gitIdentities[role] = pipeline.GitIdentity{Name: checkGitName, Email: checkGitEmail}
+		}
+	}
 
 	entry := boxBinary(w.host)
 	images := imageTagger{b: w.builder}
 	ex := &pipeline.Executor{
-		Store: w.store,
+		Store: store,
 		Boxes: &pipeline.AgentBoxes{
 			Containers:    infra.NewContainerRunner(w.docker, logger),
 			Bindings:      bindings,
@@ -228,8 +255,9 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			Network:       network,
 			Remote:        remote,
 			Identities:    cfg.Identities,
-			Services:      cfg.Credentials.Services,
+			Services:      services,
 			GitIdentities: gitIdentities,
+			Check:         opts.Check,
 			Log:           logger,
 		},
 		Hooks:      &failure.ExecHookRunner{Log: logger},
@@ -237,7 +265,16 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 		Workflows:  opts.Targets,
 		Images:     images,
 		ImageCheck: w.docker,
-		Reentry: &pipeline.Reentry{
+		Meta: pipeline.RunMeta{
+			ConfigPath:    opts.ConfigPath,
+			ConfigHash:    configHash,
+			Supplied:      opts.Supplied,
+			IRHashCapFree: capFree,
+		},
+		Out: w.stdout,
+	}
+	if reentryBindings != nil {
+		ex.Reentry = &pipeline.Reentry{
 			IR:          ir,
 			Images:      images,
 			Bindings:    reentryBindings,
@@ -246,14 +283,7 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			Network:     network,
 			Remote:      remote,
 			Identities:  cfg.Identities,
-		},
-		Meta: pipeline.RunMeta{
-			ConfigPath:    opts.ConfigPath,
-			ConfigHash:    configHash,
-			Supplied:      opts.Supplied,
-			IRHashCapFree: capFree,
-		},
-		Out: w.stdout,
+		}
 	}
 	// The progress stream is the operator surface, on stderr beside (not
 	// inside) the diagnostic log; the CLI resolved which sink and whether

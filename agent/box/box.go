@@ -310,6 +310,7 @@ func (b *Box) failStop(ctx context.Context, phaseName string, err error) {
 		// A failure after an honored skip (a failing postlude, an unmet
 		// output contract) still records that no agent ran.
 		AgentSkipped: b.skipAgent,
+		Check:        b.Env.Check,
 		Timing:       b.Timing,
 		Attempt:      b.Env.Attempt,
 	}

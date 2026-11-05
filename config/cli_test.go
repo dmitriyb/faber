@@ -718,3 +718,33 @@ func TestCLIWatchNeedsTerminal(t *testing.T) {
 		t.Fatalf("watch without a UI: code %d: %s", code, stderr)
 	}
 }
+
+// Verifies 67c77533453d: faber check shares run's entry — a missing
+// required param launches nothing — and reaches the executor with the check
+// mode and --keep in the run options, the rest as run would pass them.
+func TestCLICheckEntry(t *testing.T) {
+	exec := &fakeExecutor{}
+	code, _, stderr := runCLI(t, Deps{Executor: exec}, "check", "task",
+		"--config", "testdata/reference.yaml", "--param", "repo=sandbox")
+	if code != 1 || !strings.Contains(stderr, "params.item: required param missing") || exec.called {
+		t.Fatalf("missing param: code %d called %v: %s", code, exec.called, stderr)
+	}
+
+	exec = &fakeExecutor{}
+	code, _, stderr = runCLI(t, Deps{Executor: exec}, "check", "task",
+		"--config", "testdata/reference.yaml", "--param", "repo=sandbox", "--param", "item=I-1", "--keep", "--max-parallel", "2")
+	if code != 0 || !exec.called {
+		t.Fatalf("check entry: code %d called %v: %s", code, exec.called, stderr)
+	}
+	if !exec.opts.Check || !exec.opts.Keep || exec.opts.MaxParallel != 2 || exec.opts.Workflow != "task" || exec.opts.Config == nil || exec.opts.Targets == nil || exec.opts.Sessions || exec.opts.Mode != "" {
+		t.Fatalf("check options: %+v", exec.opts)
+	}
+	if exec.opts.Supplied["item"] != "I-1" {
+		t.Fatalf("params not threaded: %+v", exec.opts.Supplied)
+	}
+
+	code, _, stderr = runCLI(t, Deps{Executor: &fakeExecutor{}}, "check")
+	if code != 2 || !strings.Contains(stderr, checkUsageText) {
+		t.Fatalf("no workflow must be a usage error, got %d: %s", code, stderr)
+	}
+}

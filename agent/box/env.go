@@ -117,13 +117,19 @@ type BoxEnv struct {
 	// opt-in.
 	AgentOptional bool
 
-	// rawSchema, rawAttempt, rawTOFU, rawContract, rawAgentOptional and
-	// rawInvoke hold the undecoded values for the env phase.
+	// Check reports FABER_CHECK=1: a check run — the agent phase is a no-op
+	// and the result phase fills unwritten outputs with placeholders. Set by
+	// the env phase only for the exact contract value "1".
+	Check bool
+
+	// rawSchema, rawAttempt, rawTOFU, rawContract, rawAgentOptional,
+	// rawCheck and rawInvoke hold the undecoded values for the env phase.
 	rawSchema        string
 	rawAttempt       string
 	rawTOFU          string
 	rawContract      string
 	rawAgentOptional string
+	rawCheck         string
 	rawInvoke        string
 }
 
@@ -166,6 +172,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		rawTOFU:          get(security.EnvHostKeyTOFU),
 		rawContract:      get(contract.EnvContractVersion),
 		rawAgentOptional: get(contract.EnvAgentOptional),
+		rawCheck:         get(contract.EnvCheck),
 		rawInvoke:        get(contract.EnvInvokeProfile),
 	}
 	if raw := strings.TrimSpace(get(contract.EnvInputSlots)); raw != "" {
@@ -248,6 +255,14 @@ func (e *BoxEnv) validate() error {
 		e.AgentOptional = true
 	default:
 		errs = append(errs, fmt.Errorf("%s: %q is not the contract value \"1\" — refusing to guess whether the agent is skippable", contract.EnvAgentOptional, e.rawAgentOptional))
+	}
+	switch e.rawCheck {
+	case "":
+		// A real run.
+	case "1":
+		e.Check = true
+	default:
+		errs = append(errs, fmt.Errorf("%s: %q is not the contract value \"1\" — refusing to guess whether this is a check run", contract.EnvCheck, e.rawCheck))
 	}
 	// The invocation dialect: absent means the built-in default (the tolerated
 	// absence serving direct invocations and pre-profile hosts); present means

@@ -112,3 +112,26 @@ func TestParseOutputSchema(t *testing.T) {
 		t.Fatal("malformed schema JSON must error")
 	}
 }
+
+// Verifies c563d2055eb9: the placeholder payload a check run threads
+// satisfies the schema it was built from — a zero value per type, an
+// enum's first value — and names nothing the schema does not.
+func TestPlaceholderPayloadSatisfiesSchema(t *testing.T) {
+	schema := OutputSchema{
+		"pr":      {Type: "int", Required: true},
+		"verdict": {Type: "string", Enum: []string{"approve", "changes"}, Required: true},
+		"branch":  {Type: "string"},
+		"done":    {Type: "bool", Required: true},
+		"meta":    {Type: "object"},
+	}
+	p := PlaceholderPayload(schema)
+	if v, extras := ValidateOutput(schema, p); len(v) != 0 || len(extras) != 0 {
+		t.Fatalf("placeholders must validate: violations %v extras %v payload %v", v, extras, p)
+	}
+	if p["verdict"] != "approve" || p["branch"] != "" || p["pr"] != float64(0) || p["done"] != false {
+		t.Errorf("payload %v", p)
+	}
+	if len(PlaceholderPayload(OutputSchema{})) != 0 {
+		t.Error("an empty schema yields an empty payload")
+	}
+}

@@ -227,7 +227,7 @@ func (e *Executor) Execute(ctx context.Context, ir *config.IR, params config.Par
 
 	// The report runs unconditionally — whatever reached the journal is
 	// reportable, even when the run aborted mid-flight.
-	e.render(runID, journalPath, ir, log)
+	e.render(runID, journalPath, ir, opts.Check, log)
 
 	if runErr != nil {
 		return runErr
@@ -448,7 +448,7 @@ func (e *Executor) checkImageDrift(ir *config.IR, journaled map[string]string) e
 // render loads the journal back and emits the report. Reporting is best
 // effort next to a run error: failures here are logged, never masking the
 // run's own outcome.
-func (e *Executor) render(runID, journalPath string, ir *config.IR, log *slog.Logger) *RunReport {
+func (e *Executor) render(runID, journalPath string, ir *config.IR, check bool, log *slog.Logger) *RunReport {
 	rp, err := e.Store.Load(runID)
 	if err != nil {
 		log.Error("load journal for report", "err", err)
@@ -458,6 +458,9 @@ func (e *Executor) render(runID, journalPath string, ir *config.IR, log *slog.Lo
 	if err != nil {
 		log.Error("derive report", "err", err)
 		return nil
+	}
+	if check {
+		report.Check = checkLines(report, e.Store.RunDir(runID), ir, e.Workflows)
 	}
 	if e.Out != nil {
 		if err := report.Text(e.Out); err != nil {

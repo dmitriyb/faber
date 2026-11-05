@@ -23,6 +23,9 @@ type RunReport struct {
 	// Loops folds the unrolled top-level loops back into iterations ran /
 	// cap, additive beside Steps (which stays complete for machines).
 	Loops []LoopRollup `json:"loops,omitempty"`
+	// Check is a check run's per-step account of its hooks: present only
+	// for faber check, beside the ordinary lines.
+	Check []CheckLine `json:"check,omitempty"`
 
 	// items is the human text's reading order: plain lines and loop
 	// rollups interleaved in dependency order; sels maps selector ids to
@@ -77,6 +80,7 @@ type StepLine struct {
 	// AgentSkipped marks a step whose attempt ran without an agent phase
 	// (the prelude of an agent-skippable template made the decision).
 	AgentSkipped bool                 `json:"agent_skipped,omitempty"`
+	Check        bool                 `json:"check,omitempty"` // a check run's attempt: no agent, placeholder outputs
 	Duration     string               `json:"duration,omitempty"`
 	Attempts     int                  `json:"attempts,omitempty"`
 	Deferred     int                  `json:"deferred,omitempty"`
@@ -464,6 +468,7 @@ func lineFromRecord(id string, rec failure.ResultRecord) StepLine {
 	deferred, deferredFor, cached, _ := decodeAnnotations(res.Attempts)
 	line.Cached = cached
 	line.AgentSkipped = res.AgentSkipped
+	line.Check = res.Check
 	line.Deferred = deferred
 	if deferredFor > 0 {
 		line.DeferredFor = deferredFor.String()

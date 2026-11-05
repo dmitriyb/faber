@@ -42,6 +42,7 @@ func ExtractResult(dir string, schema OutputSchema) (Result, error) {
 				Detail: fmt.Sprintf("result record carries contract v%d, host speaks v%d — check the host config's box_bin (a mismatched faber-box binary)", rec.Contract, contract.ContractVersion),
 			},
 			AgentSkipped: rec.AgentSkipped,
+			Check:        rec.Check,
 			Timing:       rec.Timing,
 			Attempt:      rec.Attempt,
 		}, nil
@@ -79,6 +80,7 @@ func ExtractResult(dir string, schema OutputSchema) (Result, error) {
 				Detail: "host re-validation: " + contract.JoinViolations(violations),
 			},
 			AgentSkipped: rec.AgentSkipped,
+			Check:        rec.Check,
 			Timing:       rec.Timing,
 			Attempt:      rec.Attempt,
 		}, nil

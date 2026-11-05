@@ -24,6 +24,13 @@
       "description": "A hook's own account of an attempt for the operator is a file under the result directory, hooks/events.jsonl: one JSON object per line with ts (RFC 3339), hook (the writer's name), event (a word) and any further fields as opaque strings. Hooks write it, the box never reads it, nothing fails over it; the host-side on_failure hook is given the same result directory under the same FABER_RESULT_DIR name, so all four slots share one file per attempt. A reader returns malformed lines with their line numbers, never drops them, and bounds the read. The only reserved words: an event named halt, whose next field is the sentence an operator should act on, and a field named result whose value ok or failed is a status a view may colour. No other vocabulary is defined — a hook's events are its own."
     },
     {
+      "id": "c563d2055eb9",
+      "preq_id": "299d74b42425",
+      "type": "functional",
+      "title": "Check run",
+      "description": "Under FABER_CHECK=1 — set by the host for every box of a check run, tolerated absent, no contract-version bump — the agent phase is a logged no-op whatever the template declares, and the result phase fills the declared outputs no hook wrote with placeholders (the type's zero value, an enum's first value) so the step settles ok, its dependents bind, and their hooks run too; a hook that did write output.json is held to the schema as always; side-effect verification still runs, against the check's remote. The record carries check beside agent_skipped, journaled and reported. Any value other than 1 is an env-contract violation, never a guessed mode."
+    },
+    {
       "id": "ae434449cac9",
       "preq_id": "299d74b42425",
       "type": "functional",
@@ -58,7 +65,7 @@
       "name": "PhaseSequencer",
       "description": "The in-container entry program that owns the fixed phase order: chowns the writable mounts (including the /run/secrets tmpfs when present, and the daemon-created intermediate components of the FABER_SESSIONS_DIR bind under HOME when session capture is on) and drops to the run user, validates the step's env contract, materializes file-mode secrets from the stdin payload into /run/secrets and exports them to env, applies host-key policy, clones from the gateway remote, configures commit signing from the forwarded agent, then drives context -> prelude -> agent -> postlude -> result with fail-stop between phases and a post-phase halt-request check (halt.json -> a halted attempt record) after each user-filled phase.",
       "content": "arch_phase_sequencer.md",
-      "implements": ["93ba0858d75f"],
+      "implements": ["93ba0858d75f", "c563d2055eb9"],
       "uses": ["c7c205f95b84", "53965d3ef136", "17c51bae5f80"]
     },
     {
@@ -80,7 +87,7 @@
       "name": "ResultExtractor",
       "description": "Reads the result file from the result directory, validates it against the template's output schema, writes the fallback record when absent, runs post-result verification, and passes a halted record through unextracted (payload dropped, halt reason asserted host-side). Owns the deferred non-JSON artifact seam. Owns the faber↔faber-box result-contract schema version (contract: 1), stamped into the box env and into result.json and asserted host-side on extract — a mismatch detects a stale or foreign box binary (host-config `box_bin`), never a migration path.",
       "content": "arch_result_extractor.md",
-      "implements": ["ff8e85704b0a", "f1ce19e94daa"]
+      "implements": ["ff8e85704b0a", "f1ce19e94daa", "c563d2055eb9"]
     }
   ],
   "impl_sections": [

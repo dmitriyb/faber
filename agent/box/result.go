@@ -23,6 +23,11 @@ func (b *Box) emitResult(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if fallback && b.Env.Check {
+		// A check run has no agent to write the outputs; a hook that did
+		// write them is held to the schema below as always.
+		payload = contract.PlaceholderPayload(b.Env.Schema)
+	}
 	violations, extras := contract.ValidateOutput(b.Env.Schema, payload)
 	if len(violations) > 0 {
 		// The fallback with required outputs is a quiet agent, not a shape
@@ -49,6 +54,7 @@ func (b *Box) emitResult(ctx context.Context) error {
 		Unthreaded:   extras,
 		Fallback:     fallback,
 		AgentSkipped: b.skipAgent,
+		Check:        b.Env.Check,
 		Timing:       b.Timing,
 		Attempt:      b.Env.Attempt,
 	}

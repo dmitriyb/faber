@@ -112,6 +112,8 @@ _emit halt reason=approval-not-boolean pr="$pr" next="clear the reservation on P
 
 Before a run starts, every hook path a reachable template declares is checked on this machine — present, a regular file, executable, starting with `#!` — and a run is refused naming the template, the slot and the path. `faber validate` does not do this: a config may be authored where it does not run.
 
+To run the hooks themselves without a real run, `faber check <workflow> --param …` executes them in a sandbox: the same images and phase order, a bare repository cloned from the working directory as the only remote (pushes land there and nowhere else), `--network none`, one key generated for the check that every role signs with, no credentials, and no agent — outputs no hook wrote are placeholders (a type's zero value, an enum's first value) so the steps after it run their hooks too. Every box carries `FABER_CHECK=1`; a hook may read it to skip a call it knows cannot work, or leave it and let the call fail, which the `check:` block of the report names by step and phase. What a check cannot tell you: anything that needs the gate, a service or a token.
+
 ## Invocation profiles
 
 An `invoke_profiles:` entry describes one agent CLI's headless dialect; a template opts in with `invoke: {profile: <name>, …}`, inline fields overriding the named profile's field-by-field (they compose — this aspect is deliberately not either/or).
