@@ -94,6 +94,12 @@ func seedStore(t *testing.T) (*failure.Store, func()) {
 	dir := pipeline.AttemptDir(store.RunDir("20260902-170408-d0feb66b"), "task/review-cycle@2/review", 1)
 	os.MkdirAll(dir, 0o755)
 	os.WriteFile(filepath.Join(dir, pipeline.OutputLogName), []byte("prelude: fetch-pr #17 ok\nagent: claude --print ... started\nagent: exit 1\n"), 0o644)
+	// and the hooks' own account of that attempt, with one line a hook got wrong
+	events := filepath.Join(pipeline.ResultDir(store.RunDir("20260902-170408-d0feb66b"), "task/review-cycle@2/review", 1), "hooks", "events.jsonl")
+	os.MkdirAll(filepath.Dir(events), 0o755)
+	os.WriteFile(events, []byte(`{"ts":"2026-09-02T19:16:10Z","hook":"fetch-change","event":"push_verify","ref":"work/x","result":"ok"}`+"\n"+
+		`{"ts":"2026-09-02T19:16:40Z","hook":"fetch-change","event":"checks_read","pr":"17","result":"failed","attempts":"3"}`+"\n"+
+		"fetch-change: cannot reach the gate\n"), 0o644)
 
 	// live run
 	live := "20260915-180538-4fc8c4f3"

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -282,8 +283,12 @@ func missingSlots(t *config.ResolvedTemplate, dir string) []Check {
 		if h[1] == "" {
 			continue
 		}
-		if _, err := os.Stat(h[1]); err != nil {
-			out = append(out, Check{Name: t.Name, Detail: h[0], Fix: relPath(dir, h[1]), State: "MISSING", Used: true})
+		if err := config.CheckHookFile(h[1]); err != nil {
+			fix := relPath(dir, h[1])
+			if !errors.Is(err, config.ErrHookNotFound) {
+				fix += "   " + err.Error()
+			}
+			out = append(out, Check{Name: t.Name, Detail: h[0], Fix: fix, State: "MISSING", Used: true})
 		}
 	}
 	return out

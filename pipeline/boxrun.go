@@ -123,8 +123,8 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	attemptDir := filepath.Join(box.RunDir, "boxes", pathToken(box.NodeID), "attempt-"+strconv.Itoa(box.Attempt))
-	resultDir := filepath.Join(attemptDir, "result")
+	attemptDir := AttemptDir(box.RunDir, box.NodeID, box.Attempt)
+	resultDir := ResultDir(box.RunDir, box.NodeID, box.Attempt)
 	scratchDir := filepath.Join(attemptDir, "scratch")
 	// A reused attempt dir (a resumed run's attempt numbering restarts; a
 	// crashed launch may have deposited files) can hold a stale result.json
@@ -553,6 +553,19 @@ func skillsLink(t *config.ResolvedTemplate) string {
 // reader (the TUI) finds them without re-deriving the path token.
 func AttemptDir(runDir, nodeID string, attempt int) string {
 	return filepath.Join(runDir, "boxes", pathToken(nodeID), "attempt-"+strconv.Itoa(attempt))
+}
+
+// ResultDir is the attempt's result directory: the box's mounted
+// $FABER_RESULT_DIR on the host, where the records and the hooks' events
+// file live.
+func ResultDir(runDir, nodeID string, attempt int) string {
+	return filepath.Join(AttemptDir(runDir, nodeID, attempt), "result")
+}
+
+// AttemptEvents reads the attempt's hooks events file, so a view finds it
+// without re-deriving the path.
+func AttemptEvents(runDir, nodeID string, attempt int) (contract.Events, error) {
+	return contract.ReadEvents(filepath.Join(ResultDir(runDir, nodeID, attempt), contract.HooksEventsFile))
 }
 
 // pathToken maps a node id onto a filesystem-safe directory name. A short

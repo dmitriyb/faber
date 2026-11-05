@@ -7,7 +7,7 @@
       "preq_id": "22b7aed35041",
       "type": "functional",
       "title": "Journal-fed live view",
-      "description": "Every fact on screen is re-derived from the run store at each tick and keystroke (journals by stat, replayed only when they grew): runs and their states from the audit scan and the run lock (live), steps from the reporter's loop-aware reading order over the replayed journal, 'running since' from a start record with no later result, loop caps from the IR and the journal, the duration distribution (p50, p90, p99, count) per workflow and step name — across every journal in the store, or this run's alone, a toggle the screen names — and an attempt's output from its output.log. A run started by another process is watched the same way. Nothing is held that the journal does not hold; a crash loses a cursor position."
+      "description": "Every fact on screen is re-derived from the run store at each tick and keystroke (journals by stat, replayed only when they grew): runs and their states from the audit scan and the run lock (live), steps from the reporter's loop-aware reading order over the replayed journal, 'running since' from a start record with no later result, loop caps from the IR and the journal, the duration distribution (p50, p90, p99, count) per workflow and step name — across every journal in the store, or this run's alone, a toggle the screen names — and an attempt's output from its output.log and the hooks' account of it from its events file. A run started by another process is watched the same way. Nothing is held that the journal does not hold; a crash loses a cursor position."
     },
     {
       "id": "1d5d7c4db2fe",

@@ -47,6 +47,8 @@ runStats(rp) map[string]Stats                     // the same over one replay: t
 loadRun(cache, irs, id, history, scope, now) (*RunView, error) // replay, IR via the header's config (Err when it no longer loads), RunReporter{Targets}, bounds, Stats in the scope
 previewWorkflow(project, name) (*RunView, error)  // an empty replay over the IR: the preview
 outputTail(runDir, nodeID, attempt, n) []string   // pipeline.AttemptDir + OutputLogName; n <= 0 reads nothing
+hooksBlock(st, m, id, avail, w) []string          // pipeline.AttemptEvents on the newest attempt; nil without events or room
+haltNext(id) string                               // the newest halt event's next field, for the now strip
 crumb(id, workflow, bounds) string                // the stream's breadcrumb
 treeRows(v, open, now) []row                      // ReadingOrder folded; row{indent,status,name,dur,note,id,kind,since}
 flowRows(v, preview, now) []frow                  // structure from iteration 1, state from the current iteration

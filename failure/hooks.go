@@ -23,7 +23,17 @@ type HookInvocation struct {
 	Attempt int
 	Inputs  map[string]any
 	Error   ErrorRecord
+	// ResultDir is the failed attempt's result directory on the host, the
+	// same place the box's hooks write their events; empty when the caller
+	// has none (a step that never had an attempt directory).
+	ResultDir string
 }
+
+// EnvResultDir is the box contract's result-directory variable, exported
+// to the host-side hook so all four hook slots share one events file per
+// attempt. The agent module owns the name; the pipeline's cross-package
+// test holds the two equal.
+const EnvResultDir = "FABER_RESULT_DIR"
 
 // HookRunner executes on_failure cleanup hooks. It is an interface so tests
 // (and future execution surfaces) can substitute a fake; the production
@@ -57,6 +67,9 @@ func (r *ExecHookRunner) RunOnFailure(ctx context.Context, inv HookInvocation) e
 		"FABER_STEP_ID="+inv.StepID,
 		"FABER_ATTEMPT="+strconv.Itoa(inv.Attempt),
 	)
+	if inv.ResultDir != "" {
+		env = append(env, EnvResultDir+"="+inv.ResultDir)
+	}
 	slots := make([]string, 0, len(inv.Inputs))
 	for name := range inv.Inputs {
 		slots = append(slots, name)

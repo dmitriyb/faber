@@ -144,6 +144,48 @@ is size-bounded like every container-boundary record, and a file that exists
 but does not parse or lacks a reason converts into a `halt-invalid` failure
 instead of a guess.
 
+## The events file
+
+`$FABER_RESULT_DIR/hooks/events.jsonl` (`contract.HooksEventsFile`) is the
+hooks' own account of the attempt for the operator — which PR this cycle
+is on, whether the push landed, why the hook halted and what to do next.
+Hooks write it (creating `hooks/` themselves); the box never reads or
+creates it, and nothing fails over it. The host-side on_failure hook is
+given the same directory under the same `FABER_RESULT_DIR` name by the
+failure module's hook runner, so all four slots share one file per attempt.
+
+One JSON object per line:
+
+```json
+{"ts":"2026-11-04T10:00:05Z","hook":"post-review","event":"decision","pr":"17","result":"landable","mss":"clean"}
+{"ts":"2026-11-04T10:00:09Z","hook":"post-review","event":"halt","reason":"approval-not-boolean","pr":"17","next":"clear the reservation on the PR, then resume"}
+```
+
+- `ts` RFC 3339, `hook` the writer's own name (a script does not know which
+  slot mounted it), `event` a non-empty word; every further field a string,
+  opaque, shown as `key=value`.
+- Reserved words, and only these: an event named `halt` (`contract.EventHalt`)
+  is the hook's account of a halt, whose `next` field is the one sentence an
+  operator should act on; a field named `result` whose value is `ok` or
+  `failed` is a status a view may colour. Nothing else is interpreted.
+
+```go
+type Event struct { Line int; TS time.Time; Hook, Name string; Fields map[string]string }
+type Malformed struct { Line int; Err string }
+type Events struct { Events []Event; Malformed []Malformed; Truncated bool }
+
+func ReadEvents(path string) (Events, error)
+```
+
+`ReadEvents` never drops a line: one that is not a JSON object, lacks `ts`,
+`hook` or `event`, carries a non-string field, or exceeds
+`MaxEventLineBytes` comes back as `Malformed` with its line number. A
+missing file is no events and no error. The read is bounded like every
+container-boundary record, by `MaxEventsBytes` from the end of the file —
+the newest lines, cut at a line boundary, with `Truncated` set and the line
+numbers still true to the file. `pipeline.AttemptEvents` locates the file by
+the attempt's result directory for the host side.
+
 ## The host half
 
 ```go

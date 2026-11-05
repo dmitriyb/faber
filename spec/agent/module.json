@@ -17,6 +17,13 @@
       "description": "context and prelude are opaque user scripts run deterministically (no agent, no credentials beyond the delegated handles) before the agent starts. Contract: they receive the step's typed inputs as environment, must produce the context bundle (a prompt-body document plus optional machine-readable sidecars) in a well-known directory, and must exit 0. A failed or bundle-less prelude aborts the step with a structured handoff record — the agent never starts."
     },
     {
+      "id": "3fe064781899",
+      "preq_id": "299d74b42425",
+      "type": "functional",
+      "title": "Hook events contract",
+      "description": "A hook's own account of an attempt for the operator is a file under the result directory, hooks/events.jsonl: one JSON object per line with ts (RFC 3339), hook (the writer's name), event (a word) and any further fields as opaque strings. Hooks write it, the box never reads it, nothing fails over it; the host-side on_failure hook is given the same result directory under the same FABER_RESULT_DIR name, so all four slots share one file per attempt. A reader returns malformed lines with their line numbers, never drops them, and bounds the read. The only reserved words: an event named halt, whose next field is the sentence an operator should act on, and a field named result whose value ok or failed is a status a view may colour. No other vocabulary is defined — a hook's events are its own."
+    },
+    {
       "id": "ae434449cac9",
       "preq_id": "299d74b42425",
       "type": "functional",
@@ -57,9 +64,9 @@
     {
       "id": "c7c205f95b84",
       "name": "PreludeHooks",
-      "description": "The context/prelude/postlude hook contract: input environment, the context-bundle output convention, exit-code semantics, the halt.json operator-stop request, and the structured handoff record written when a hook fails. Owns the deferred context-resolver seam.",
+      "description": "The context/prelude/postlude hook contract: input environment, the context-bundle output convention, exit-code semantics, the halt.json operator-stop request, the hooks/events.jsonl events file, and the structured handoff record written when a hook fails. Owns the deferred context-resolver seam.",
       "content": "arch_prelude_hooks.md",
-      "implements": ["b880aa49b3b9", "db9815889696"]
+      "implements": ["b880aa49b3b9", "3fe064781899", "db9815889696"]
     },
     {
       "id": "53965d3ef136",

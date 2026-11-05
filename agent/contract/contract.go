@@ -225,6 +225,21 @@ const (
 	// reported tier reads; the box never interprets it.
 	UsageFile = "usage.json"
 
+	// HooksEventsFile is the hooks' own account of an attempt for the
+	// operator, under the result directory: one JSON object per line with
+	// ts (RFC 3339), hook (the writer's name), event (a word) and any further
+	// fields as opaque strings. Hooks write it, the box never reads it, and
+	// nothing fails over it. The only words the engine's readers know: an
+	// event named EventHalt, whose EventNext field is the sentence an
+	// operator should act on, and a field named EventResult whose value is
+	// ResultOK or ResultFailed.
+	HooksEventsFile = "hooks/events.jsonl"
+	EventHalt       = "halt"
+	EventNext       = "next"
+	EventResult     = "result"
+	ResultOK        = "ok"
+	ResultFailed    = "failed"
+
 	// HookContext, HookPrelude, and HookPostlude are the per-phase hook file
 	// names under the hooks directory. Context and Prelude run before the
 	// agent; Postlude runs after it, before result extraction.
