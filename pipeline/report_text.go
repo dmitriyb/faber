@@ -82,6 +82,12 @@ func (r *RunReport) Text(w io.Writer) error {
 			p("  %s", l)
 		}
 	}
+	if len(r.Check) > 0 {
+		p("check:")
+		for _, c := range r.Check {
+			p("  %s", c.Text())
+		}
+	}
 	// The footer counts what a human counts: unused cap is not a step that
 	// did not run, so it is neither not-needed nor not-reached here (the JSON
 	// totals keep every node's state).
@@ -370,6 +376,9 @@ func stepText(line StepLine, scope string) string {
 	}
 	if line.AgentSkipped {
 		sb.WriteString("  (agent-skipped)")
+	}
+	if line.Check {
+		sb.WriteString("  (check)")
 	}
 	if line.Duration != "" {
 		fmt.Fprintf(&sb, "  %s", line.Duration)

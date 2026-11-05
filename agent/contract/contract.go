@@ -124,6 +124,16 @@ const (
 	// value means the agent always runs.
 	EnvAgentOptional = "FABER_AGENT_OPTIONAL"
 
+	// EnvCheck marks a check run (faber check): set to "1" by the host for
+	// every box of one. The agent phase is a logged no-op whatever the
+	// template declares, and the result phase fills outputs no hook wrote
+	// with placeholders (PlaceholderPayload) so the step settles and its
+	// dependents run their hooks too; the record says so (Result.Check).
+	// Hooks may read it to skip what they know cannot work in a sandbox.
+	// Absent means a real run; per the additive rule, no ContractVersion
+	// bump.
+	EnvCheck = "FABER_CHECK"
+
 	// EnvSecretsStdin signals that file-mode credential tokens ride the
 	// container's stdin: set to "1" by the host-side RunSpec assembler exactly
 	// when a SecretsStdin payload is attached, and the secrets phase gates its

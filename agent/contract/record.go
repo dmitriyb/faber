@@ -81,6 +81,11 @@ type Result struct {
 	// show that no agent ran.
 	AgentSkipped bool `json:"agent_skipped,omitempty"`
 
+	// Check marks an attempt of a check run (EnvCheck): no agent ran, and
+	// outputs no hook wrote are placeholders. Honesty metadata beside any
+	// status, journaled and reported.
+	Check bool `json:"check,omitempty"`
+
 	// Error describes a failed attempt.
 	Error *ResultError `json:"error,omitempty"`
 

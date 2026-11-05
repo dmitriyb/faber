@@ -89,6 +89,10 @@ func (b *Box) runAgent(ctx context.Context) error {
 		b.Log.InfoContext(ctx, "agent skipped by prelude", "skill", b.Env.Skill)
 		return nil
 	}
+	if b.Env.Check {
+		b.Log.InfoContext(ctx, "agent skipped: check run", "skill", b.Env.Skill)
+		return nil
+	}
 	inv := Invocation{
 		CLI:       b.Env.AgentCLI,
 		Profile:   b.Env.Invoke,

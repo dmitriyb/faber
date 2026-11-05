@@ -104,6 +104,11 @@ type AgentBoxes struct {
 	// fail-fast for an unregistered committer identity.
 	GitIdentities map[string]GitIdentity
 
+	// Check marks a check run: every box gets FABER_CHECK=1 (no agent,
+	// placeholder outputs). The sandbox itself is the Bindings the wiring
+	// composed; this field only tells the box.
+	Check bool
+
 	Log *slog.Logger
 }
 
@@ -189,6 +194,7 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		GitName:      b.GitIdentities[box.Template.Identity].Name,
 		GitEmail:     b.GitIdentities[box.Template.Identity].Email,
 		SessionsDir:  sessionsDir,
+		Check:        b.Check,
 	})
 	if err != nil {
 		return BoxResult{}, err
@@ -280,6 +286,7 @@ func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult, log *
 	out := failure.Result{
 		Attempt:      box.Attempt,
 		AgentSkipped: rec.AgentSkipped,
+		Check:        rec.Check,
 		Timing: failure.Timing{
 			Started:  runRes.Started,
 			Finished: runRes.Started.Add(runRes.Duration),
@@ -292,6 +299,7 @@ func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult, log *
 				Status:       failure.StatusFailed,
 				Error:        &failure.ErrorRecord{Reason: contract.ReasonOutputSchema, Detail: fmt.Sprintf("encode payload: %v", err)},
 				AgentSkipped: rec.AgentSkipped,
+				Check:        rec.Check,
 				Attempt:      box.Attempt,
 				Timing:       out.Timing,
 			}

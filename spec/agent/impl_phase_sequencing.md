@@ -321,3 +321,14 @@ skip so the diagnosis names the prelude, not a silent agent.
 No global state anywhere: `Box` is constructed in `main` from `os.Environ()`,
 the runner and logger are injected, and every phase is a method taking the
 context — the whole sequence unit-tests as a plain value with a fake runner.
+
+## Check runs
+
+`FABER_CHECK=1` (`contract.EnvCheck`, parsed by the env phase into
+`BoxEnv.Check`; any other value is an env-contract violation) changes two
+phases and nothing else in the table: `runAgent` returns after logging
+"agent skipped: check run" whatever the template declares — the hooks
+before and after it run unchanged — and `emitResult`, when `readOutput`
+reports the fallback, threads `contract.PlaceholderPayload(schema)` instead
+of the empty payload before validating as usual. Every record of the
+attempt, ok or failed, carries `check: true`.

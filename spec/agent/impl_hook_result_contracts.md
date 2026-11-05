@@ -186,6 +186,18 @@ the newest lines, cut at a line boundary, with `Truncated` set and the line
 numbers still true to the file. `pipeline.AttemptEvents` locates the file by
 the attempt's result directory for the host side.
 
+## Check runs
+
+A check run (`FABER_CHECK=1`) has no agent to write `output.json`. When no
+hook wrote it either, the result phase threads `PlaceholderPayload(schema)`
+— `""` or an enum's first value for a string, `0` for an int, `false` for a
+bool, `{}` for an object — which validates by construction, so the step
+settles ok, its dependents bind, and their hooks run against typed values.
+A hook that did write `output.json` is held to the schema exactly as in a
+run. The record carries `check: true` beside `agent_skipped`; the host's
+`ExtractResult` and the pipeline's adapter copy it through to the journal
+and the report (`(check)` on the step line).
+
 ## The host half
 
 ```go

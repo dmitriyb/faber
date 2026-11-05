@@ -101,6 +101,10 @@ type BoxSpec struct {
 	// template whose profile names none is a refusal (the pair-set guard).
 	// Empty means no capture — no mount, no env, byte-identical run specs.
 	SessionsDir string
+
+	// Check marks a check run: emitted as FABER_CHECK=1, the box skips the
+	// agent and fills unwritten outputs with placeholders.
+	Check bool
 }
 
 // BuildRunSpec assembles the engine half of the box run contract: container
@@ -244,6 +248,9 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	setIf(contract.EnvSessionsDir, sessionsContainer)
 	if tpl.AgentOptional {
 		env[contract.EnvAgentOptional] = "1"
+	}
+	if spec.Check {
+		env[contract.EnvCheck] = "1"
 	}
 	// The box starts as root and drops to the host user: its uid:gid so the
 	// files the box writes to the result bind stay host-owned.

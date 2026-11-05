@@ -62,6 +62,14 @@ type RunOptions struct {
 	Progress string
 	Color    bool
 
+	// Check marks a check run (faber check): the hooks run for real in a
+	// sandbox the wiring composes — a throwaway remote, no network, a key
+	// generated for the check, no credentials, no agent — with the journal
+	// under a temporary directory. Keep keeps that directory and prints
+	// its path.
+	Check bool
+	Keep  bool
+
 	// Wiring context: the CLI fills these so the integration-level Executor
 	// can assemble per-run capabilities (journal header identity, security
 	// bindings, generate targets) without re-reading or re-validating the
@@ -294,6 +302,7 @@ func NewRootCmd(deps Deps) *cobra.Command {
 		newBuildCmd(deps),
 		newRunCmd(deps),
 		newResumeCmd(deps),
+		newCheckCmd(deps),
 		newRunsCmd(deps),
 		newWatchCmd(deps),
 		newUpgradeCmd(deps),

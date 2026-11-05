@@ -534,3 +534,25 @@ func TestReservedPathListsAgree(t *testing.T) {
 		}
 	}
 }
+
+// Verifies c563d2055eb9: a check run reaches the box as FABER_CHECK=1 and
+// a real run emits no such variable — pre-check run specs stay
+// byte-identical.
+func TestBuildRunSpecCheck(t *testing.T) {
+	spec := validSpec()
+	rs, err := BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rs.Env[contract.EnvCheck]; ok {
+		t.Fatalf("a real run must not emit %s", contract.EnvCheck)
+	}
+	spec.Check = true
+	rs, err = BuildRunSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rs.Env[contract.EnvCheck]; got != "1" {
+		t.Errorf("env[%s] = %q, want 1", contract.EnvCheck, got)
+	}
+}

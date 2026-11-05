@@ -132,3 +132,28 @@ func jsonKind(val any) string {
 		return fmt.Sprintf("%T", val)
 	}
 }
+
+// PlaceholderPayload is what a check run threads for a template's declared
+// outputs when no hook wrote output.json: the type's zero value, an enum's
+// first value — a payload that satisfies the schema by construction, so the
+// step settles and its dependents' hooks run against something typed.
+func PlaceholderPayload(schema OutputSchema) map[string]any {
+	out := make(map[string]any, len(schema))
+	for name, def := range schema {
+		switch def.Type {
+		case "string":
+			if len(def.Enum) > 0 {
+				out[name] = def.Enum[0]
+			} else {
+				out[name] = ""
+			}
+		case "int":
+			out[name] = float64(0)
+		case "bool":
+			out[name] = false
+		case "object":
+			out[name] = map[string]any{}
+		}
+	}
+	return out
+}

@@ -88,6 +88,17 @@ run stopped without parsing JSON — and each `skipped-halt` line names the
 halting ancestor. Halted and halt-skipped steps have their own totals in the
 footer.
 
+## The check account
+
+A check run's report carries, after the halts, one line per executed step
+(`RunReport.Check`, `check:` in the text, `check` in the JSON): the status,
+the id, the hook slots the step's template declares, the number of events
+its hooks wrote (the attempt's events file), and for a failure the handoff
+record's phase with the reason and detail —
+`FAIL  w/b  events 0  phase prelude  hook-failed: hook prelude exited 1`.
+Derived after the fact from what the run left on disk (the journal, the
+IRs, the result directories); a real run has no such section.
+
 ## Output modes
 
 - **Human text** to stdout: the ordered lines above with loops folded, a

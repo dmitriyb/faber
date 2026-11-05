@@ -40,6 +40,25 @@ it. This knob deliberately stays optional — the trust model treats the
 container boundary as expendable (the gate and the egress lock are the
 walls), so hardening it is a preference, not a pillar.
 
+## The check composition
+
+`faber check` runs a workflow's hooks for real and lets them reach
+nothing. It is the same set in the same order with three members
+substituted and the fourth absent (`NewCheckBindingSet`): the network
+member contributes `--network none` whatever the config's section says —
+companion services go with it, by intent; the remote member serves a bare
+repository under the check's temporary directory, cloned on first use from
+the working directory's repository and bind mounted read-write at
+`/faber/remote`, so the box's one remote is a local path (no host-key
+policy applies to one) and its pushes land where nothing else looks; the
+identity member is the real IdentityBinding with every role resolved to one
+key generated for the check, in path form — neither the registry, the
+locator nor the operator's own keys are consulted, and commits are signed
+with it through the same proxy and queue; there is no credential broker at
+all. The runtime knob stays. The box learns the mode from one variable
+(`FABER_CHECK`, the agent module's); the sandbox itself is entirely this
+composition.
+
 ## Failure semantics
 
 A binding's setup failure fails the step *before* any container exists:

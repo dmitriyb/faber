@@ -155,6 +155,22 @@ policy, so it lives beside the run, not in orchestrator.yaml. SIGINT/SIGTERM can
 the context (`signal.NotifyContext`); the executor owns graceful shutdown (failure
 module's deferred cancellation item tracks the richer semantics).
 
+### runCheckE (config/cmd_check.go)
+
+```
+configPath := filepath.Abs(--config)
+runEntry(configPath, workflow, params)   # run's entry, verbatim
+deps.Executor.Execute(ctx, ir, params, RunOptions{Check: true, Keep: --keep, ...}, logger)
+```
+
+`--param`, `--max-parallel`, `--report-json` and the progress flags as
+`run`; no `--name`, `--budget`, `--metering` or `--sessions` — a check is
+not a run of record and meters nothing. The wiring reads `Check` and
+composes the sandbox (`spec/security/arch_binding_set.md`, the check
+composition) with the journal store under a temporary directory it removes
+afterwards; `Keep` keeps it and prints the path on stderr. Exit codes as
+`run`.
+
 ### runResumeE (config/cmd_resume.go)
 
 ```

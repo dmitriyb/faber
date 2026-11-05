@@ -62,6 +62,9 @@ type Result struct {
 	// status (never part of the union Validate enforces), journaled and
 	// reported so cost accounting shows that no agent ran.
 	AgentSkipped bool `json:"agent_skipped,omitempty"`
+	// Check marks an attempt of a check run: no agent, placeholder outputs
+	// where no hook wrote any. Honesty metadata like AgentSkipped.
+	Check bool `json:"check,omitempty"`
 }
 
 // ErrorRecord is the structured failure description inside a failed Result.

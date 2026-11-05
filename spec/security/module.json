@@ -45,6 +45,13 @@
       "description": "An optional per-template or workflow-level runtime setting maps to docker run --runtime (e.g. runsc/gVisor on Linux) for hardened container isolation. Default is the platform runtime; the knob changes only the argv, never the image."
     },
     {
+      "id": "fb62c46ab1c1",
+      "preq_id": "932a73dcb170",
+      "type": "functional",
+      "title": "Check sandbox",
+      "description": "A check run (faber check) composes the binding set with three members substituted and the fourth absent, in the fixed order: no network at all (--network none, whatever the config's section says — companion services included), a bare repository under a temporary directory as the only remote (cloned on first use from the working directory's repository, bind mounted read-write, a local-path URL the box applies no host-key policy to), the real identity binding with every role resolved to one key generated for the check (path form: neither the registry, the locator nor the operator's keys are consulted; commits are signed with it through the same proxy and queue), and no credential broker (no resolver call, no handle, no secret). The runtime knob stays. Every role commits as an explicit check identity. A hook that reaches for the gate, the forge or an API fails at that call, which is the check's answer."
+    },
+    {
       "id": "0157d30de15f",
       "preq_id": "eddb5adc5adb",
       "type": "functional",
@@ -115,7 +122,7 @@
       "name": "BindingSet",
       "description": "Composes the per-step binding contributions (network, remote, identity, credentials, runtime knob) into the ordered argv fragment and lifecycle hooks (pre-run setup, post-run teardown) that infra's ContainerRunner consumes.",
       "content": "arch_binding_set.md",
-      "implements": ["41bb811a34e8"],
+      "implements": ["41bb811a34e8", "fb62c46ab1c1"],
       "uses": ["dae6b6a1caec", "ff26f2559558", "948717b7fe5b", "8608d80a273e"]
     }
   ],
