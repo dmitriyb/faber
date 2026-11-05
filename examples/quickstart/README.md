@@ -9,6 +9,7 @@ cd examples/quickstart
 faber validate --config orchestrator.yaml --emit-ir
 faber build    --config orchestrator.yaml
 faber run brief --config orchestrator.yaml --param topic="what our retry policy does"
+faber watch --config orchestrator.yaml   # in a second terminal: the run live, then its journal
 ```
 
 Before `faber run`, wire the credential once:

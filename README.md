@@ -7,7 +7,7 @@
 [![license](https://img.shields.io/github/license/dmitriyb/faber)](LICENSE)
 [![ci](https://github.com/dmitriyb/faber/actions/workflows/ci.yml/badge.svg)](https://github.com/dmitriyb/faber/actions/workflows/ci.yml)
 
-<!-- terminal recording: faber validate --emit-ir, build and run on examples/quickstart. Placeholder until recorded. -->
+<!-- terminal recording: faber validate --emit-ir, build, run and the live view (faber watch) on examples/quickstart. Placeholder until recorded. -->
 
 `faber` turns one `orchestrator.yaml` into a deterministic JSON IR, builds
 immutable agent images from a pinned Nix package set, and executes the workflow
@@ -34,6 +34,7 @@ orchestrator.yaml ──validate──▶ JSON IR (acyclic, byte-deterministic)
 - **One box per step, fixed phase order.** context → prelude → agent → postlude → result, driven by an engine-owned sequencer; the typed output is enforced at the container boundary. Egress proxy, one pinned git remote, one role key in an ephemeral ssh-agent and credentials as handles are all bound from outside.
 - **A host-side DAG.** Topological and parallel, CEL conditions on edges, bounded loops unrolled at compile time, `generate` fan-out over a data-source command at run time, and an append-only journal that `faber resume` picks up from.
 - **No domain words.** Trackers, review gates, spec tools and agent vendors are user configuration: opaque scripts, typed params, data-source commands and companion services on a docker network faber treats as opaque. A change that teaches faber one of them is wrong by construction.
+- **A live view.** `faber watch` (bare `faber` at a terminal) opens the project and its runs over the same journal and IR the CLI reads: a preflight that names what is missing before a run starts, each run as a loop-aware tree, the workflow as written, or a timeline, with the selected step's facts and its box output. It shows nothing the CLI cannot show and does nothing the CLI cannot do; every action is a named `faber` command.
 
 Everything wrong with a config surfaces at `validate`, never mid-run. See [`docs/architecture.md`](docs/architecture.md).
 
@@ -72,10 +73,11 @@ cd examples/quickstart                                # config paths are read re
 faber validate --config orchestrator.yaml --emit-ir   # the IR: one node, typed inputs and output; needs nix, not docker
 faber build    --config orchestrator.yaml             # nix-build the template image, load it into docker
 faber run brief --config orchestrator.yaml --param topic="what our retry policy does"   # one box; prints the run report and the journal path
+faber watch --config orchestrator.yaml                # the live view, in a second terminal: the run as a tree, workflow or timeline; bare `faber` opens it too
 faber resume <run-id>                                 # continue a stopped or failed run from its journal
 ```
 
-That is one full cycle: compile the config, build the image, run one claude box against a typed output schema, then resume from the journal. `run` needs a token; the four steps to wire it are in [`examples/quickstart/README.md`](examples/quickstart/README.md), and the sealed shape with an egress lock, a pinned git gateway and one role key per box is in [`docs/deploy.md`](docs/deploy.md). Every flag is in [`docs/commands.md`](docs/commands.md).
+That is one full cycle: compile the config, build the image, run one claude box against a typed output schema, watch it live, then resume from the journal. `run` needs a token; the four steps to wire it are in [`examples/quickstart/README.md`](examples/quickstart/README.md), and the sealed shape with an egress lock, a pinned git gateway and one role key per box is in [`docs/deploy.md`](docs/deploy.md). Every flag is in [`docs/commands.md`](docs/commands.md).
 
 ## How it compares
 
@@ -98,7 +100,7 @@ The difference in one line: the others orchestrate agents inside a process or a 
 
 - [`docs/architecture.md`](docs/architecture.md) — how a run works: the box, the security boundary, the DAG, the failure and resume model.
 - [`docs/configuration.md`](docs/configuration.md) — the `orchestrator.yaml` schema by example.
-- [`docs/commands.md`](docs/commands.md) — every subcommand and flag.
+- [`docs/commands.md`](docs/commands.md) — every subcommand and flag, and [the live view](docs/commands.md#the-live-view): its screens and keys.
 - [`docs/deploy.md`](docs/deploy.md) — host requirements, companion topology, credentials, operations.
 - [`docs/install.md`](docs/install.md) — install channels, the trust model, the public key, upgrading.
 - `spec/**` — the authoritative, requirement-level specification (spexmachina format).

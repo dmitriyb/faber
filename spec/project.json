@@ -183,7 +183,7 @@
       "id": "bfed76fcf2fd",
       "name": "tui",
       "path": "tui",
-      "description": "The live view: Home (project, images, runs) and Run (tree, graph, timeline, step, output) screens over the journal, rendered with our own 16-colour ASCII renderer; actions spawn detached faber children.",
+      "description": "The live view: Home (project, images, runs) and Run (tree, workflow, timeline, step, output) screens over the journal, rendered with our own 16-colour ASCII renderer; actions spawn detached faber children.",
       "requires_module": ["51be984560a5", "6c710a720719", "ac15b2db7263"]
     }
   ],
@@ -217,6 +217,12 @@
       "title": "Metering",
       "description": "Budget hooks wired into the executor: admission estimates, actual accounting, 429-defer.",
       "groups": ["03dc0699260f"]
+    },
+    {
+      "id": "2f9aa24f3a0f",
+      "title": "Live view",
+      "description": "faber watch opens Home and Run screens over the journal: the project's preflight, runs with live ones pinned, each run as a loop-aware tree, the workflow as written, or a timeline, with the step's record and box output; run, resume and pause spawn detached faber children.",
+      "groups": ["bfed76fcf2fd"]
     }
   ],
   "test_plan": {
@@ -245,6 +251,12 @@
         "name": "Mid-run kill and resume",
         "description": "A workflow killed mid-run resumes from the journal: completed steps are skipped by (step-id, input-hash), execution restarts at the first failed or absent step, and the failed step's on_failure cleanup ran before any retry.",
         "modules": ["6c710a720719", "ac15b2db7263"]
+      },
+      {
+        "id": "cb809645ac8c",
+        "name": "Live view over a running workflow",
+        "description": "faber watch opened on a live reference run shows the running step on the now strip with its usual duration, the run pinned above the history, the tree folding settled iterations and expanding the failed one, the timeline drilling into an iteration, and STEP with the failure reason and re-enter command; after the run ends the same screens read the journal unchanged.",
+        "modules": ["bfed76fcf2fd", "ac15b2db7263", "6c710a720719"]
       }
     ]
   }
