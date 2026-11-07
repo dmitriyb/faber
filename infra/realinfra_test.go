@@ -440,7 +440,7 @@ func TestRealinfra_HoldAndReceive(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	name := fmt.Sprintf("faber-realinfra-hold-%d", time.Now().UnixNano())
-	spec := ContainerSpec{Name: name, Image: tag,
+	spec := ContainerSpec{Name: name, Image: tag, Entry: []string{holdEntry, "hold"},
 		Mounts: []Mount{
 			{Kind: KindTmpfs, Container: "/faber/handoff"},
 			{Kind: KindTmpfs, Container: "/home/box"},
