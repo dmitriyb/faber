@@ -69,12 +69,13 @@ type BoxEnv struct {
 	GitName  string
 	GitEmail string
 
-	// HooksDir, SecretsDir and WorkspaceDir default to the fixed container
-	// paths; the env overrides exist for running the sequencer as a plain
-	// process (the lifecycle tests).
+	// HooksDir, SecretsDir, WorkspaceDir and HandoffDir default to the fixed
+	// container paths; the env overrides exist for running the sequencer as a
+	// plain process (the lifecycle tests).
 	HooksDir     string
 	SecretsDir   string
 	WorkspaceDir string
+	HandoffDir   string
 
 	// RunUID and RunGID are the host user's uid:gid the privileged preamble
 	// chowns the writable mounts to and drops privileges into. 0 means no drop
@@ -99,9 +100,10 @@ type BoxEnv struct {
 	// template declares no skills leg and the phase is a no-op.
 	SkillsLink string
 
-	// SessionsDir is the container path (under HOME) of the live sessions
-	// bind; the preamble chowns its daemon-created intermediate components so
-	// the dropped harness can write beside them. Empty means capture is off.
+	// SessionsDir is the container path (under HOME) of the harness's
+	// session transcripts: shipped as sessions/<rel> frames at the end of
+	// the attempt, and the root faber-box receive writes a re-entry's
+	// transcript under. Empty means capture is off.
 	SessionsDir string
 
 	// SecretsStdin reports FABER_SECRETS_STDIN=1: file-mode tokens arrive as a
@@ -163,6 +165,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		HooksDir:         withDefault(get(contract.EnvHooksDir), contract.ContainerHooksDir),
 		SecretsDir:       withDefault(get(contract.EnvSecretsDir), security.ContainerSecretsDir),
 		WorkspaceDir:     withDefault(get(contract.EnvWorkspaceDir), contract.ContainerWorkspace),
+		HandoffDir:       withDefault(get(contract.EnvHandoffDir), contract.ContainerHandoffDir),
 		GitCache:         get(contract.EnvGitCache),
 		SkillsLink:       get(contract.EnvSkillsLink),
 		SessionsDir:      get(contract.EnvSessionsDir),

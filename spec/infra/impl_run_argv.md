@@ -14,11 +14,21 @@ type ContainerSpec struct {
     Name      string            // deterministic: faber-<run-id>-<slug(step-id)>-a<attempt>
     Image     string            // the tag ImageBuilder produced
     Resources config.ResourceDef
-    Mounts    []Mount           // engine mounts: result bind, ro hooks + box entry, ro skills (when the template declares them), workspace volume, tmpfs writables
+    Mounts    []Mount           // engine mounts: workspace volume, tmpfs writables (result, bundle, tmp, home); never a host bind
     Env       map[string]string // engine env; contract values, never secrets
     Bindings  []string          // ordered argv fragment from security.BindingSet
-    StdinSecrets []byte          // framed JSON secrets payload (security.Assembled.SecretsStdin); empty = no stdin, no -i; non-empty MUST pair with Env[contract.EnvSecretsStdin]="1" — see the pairing invariant below
+    StdinSecrets []byte          // JSON secrets payload (security.Assembled.SecretsStdin); empty = no stdin, no -i; non-empty MUST pair with Env[contract.EnvSecretsStdin]="1" — see the pairing invariant below
     Entry     []string          // in-container entry argv
+    Stdout    io.Writer         // the container's stdout: the box's frame stream, passed through untouched; nil discards
+    Output    io.Writer         // the container's stderr plus docker's own messages, tee'd in full: the attempt's output.log
+}
+
+// Session is what Enter runs inside a held box once the input stream is in.
+type Session struct {
+    Entry   []string          // the operator's entry: a shell, or the harness's resume argv
+    Env     map[string]string // exec-level env (HOME for the harness)
+    User    string            // uid:gid the exec drops to (the box's run user)
+    Workdir string
 }
 
 // MountKind selects the docker flag. The container starts as root (image
@@ -42,12 +52,13 @@ type Mount struct {
 
 type ContainerResult struct {
     ExitCode int
-    Output   []byte        // bounded combined stdout+stderr tail
+    Output   []byte        // bounded tail of the human channel (container stderr + docker's messages)
     Started  time.Time
     Duration time.Duration
 }
 
 func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error)
+func (r *ContainerRunner) Enter(ctx context.Context, spec ContainerSpec, input io.Reader, s Session) error
 ```
 
 **`StdinSecrets` is half of an atomic pairing.** The assembler MUST set
@@ -105,9 +116,9 @@ directly. Sorted env keys keep the argv deterministic for a given spec; the
 binding fragment's internal order is BindingSet's contract, preserved
 byte-for-byte. The lone `-i` flag is emitted only when `StdinSecrets` is
 non-empty and sits right after `--rm`, so its presence is a pure function of the
-spec too. The engine mounts a spec carries are the result bind (rw), the
-disk-backed `/workspace` volume, and the tmpfs
-writables (`/faber/bundle`, `/tmp`, `HOME`); everything else — agent socket,
+spec too. The engine mounts a spec carries are the
+disk-backed `/workspace` volume and the tmpfs writables (`/faber/result`,
+`/faber/bundle`, `/tmp`, `HOME`) — no host bind at all; everything else — agent socket,
 the secrets tmpfs (`--tmpfs /run/secrets`), cache volume, `--network`,
 `--runtime` — arrives inside `Bindings`. The file-mode token is not a mount at
 all: it rides `StdinSecrets` on the container's stdin, and faber-box writes it
@@ -127,7 +138,8 @@ would sever the result channel or substitute the engine's mounts); the
 config Loader mirrors both refusals at validate time from the same shared
 vocabulary. `Run` itself enforces two floors: a relative bind host is
 refused (docker would read it as a NAMED VOLUME and silently detach the
-mount — absolutizing is the wiring's job), and any stale holder of the
+mount — absolutizing is the wiring's job; the engine itself emits no bind,
+the floor guards template volumes until they become named volumes), and any stale holder of the
 deterministic container name is force-removed before launch (a crashed
 process's abandoned container both blocks the name and keeps writing into
 its orphaned attempt dir).
@@ -136,16 +148,18 @@ its orphaned attempt dir).
 
 ```go
 func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
-    out := newTailBuffer(256 << 10) // bounded capture
+    out := newTailBuffer(256 << 10) // bounded capture of the human channel
     writers := []io.Writer{out, slogWriter(r.logger, "step", spec.Name)}
     if spec.Output != nil { writers = append(writers, spec.Output) } // the attempt's durable output.log
     sink := io.MultiWriter(writers...)
+    stdout := spec.Stdout            // the frame stream, untouched
+    if stdout == nil { stdout = io.Discard }
     var stdin io.Reader // nil unless a secrets payload rides stdin
     if len(spec.StdinSecrets) > 0 {
         stdin = bytes.NewReader(spec.StdinSecrets) // written then closed by the adapter
     }
     start := time.Now()
-    code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, sink)
+    code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, stdout, sink)
     res := ContainerResult{ExitCode: code, Output: out.Bytes(),
         Started: start, Duration: time.Since(start)}
     if ctx.Err() != nil {
@@ -174,10 +188,36 @@ Points of discipline:
   (`ExitCode != 0`, output attached) for the agent/failure modules to classify;
   `err` is reserved for actuation failures (daemon unreachable, image missing,
   cancellation).
-- **Output is capped.** `tailBuffer` keeps the last 256 KiB; the authoritative
-  step artifact is the mounted `result.json`, and captured output exists for
-  the failure record and debugging, not data threading.
+- **Output is capped.** `tailBuffer` keeps the last 256 KiB of the human
+  channel; the authoritative step artifact is the `result.json` the box ships
+  on its stdout, and captured output exists for the failure record and
+  debugging, not data threading. The stdout stream is never buffered here: it
+  flows to the caller's writer as it arrives.
+- **The streams never mix.** `cliRunner.runStreaming` gives the docker client
+  two writers; a merged writer would file frames as output and lose the
+  record.
 - **Always returns.** Success, failure, or kill, `Run` returns to its caller,
   which is what guarantees BindingSet teardown hooks (agent shutdown; file-mode
   secrets need none — they die with the container tmpfs) run after every
   attempt.
+
+## Enter
+
+```go
+func (r *ContainerRunner) Enter(ctx context.Context, spec ContainerSpec, input io.Reader, s Session) error {
+    _ = r.docker.Remove(ctx, spec.Name)                       // evict a stale holder, as Run does
+    spec.Entry = []string{contract.ContainerEntry, "hold"}
+    if _, err := r.docker.ContainerRun(ctx, detachArgs(spec), nil, io.Discard, stderr); err != nil { return err }
+    defer r.docker.Kill(killCtx, spec.Name)                   // --rm removes it; always runs
+    if code, err := r.docker.Exec(ctx, spec.Name, []string{contract.ContainerEntry, "receive"}, input, io.Discard, stderr); err != nil || code != 0 {
+        return fmt.Errorf("infra: enter %s: receive exited %d: %w", spec.Name, code, err)
+    }
+    return r.docker.ExecTerminal(ctx, spec.Name, s.Entry, s.Env, s.User, s.Workdir)
+}
+```
+
+`detachArgs` is `buildArgs` with `-d` inserted after `--rm` (and never `-i`:
+a held box takes no stdin). The container id `docker run -d` prints is
+discarded; the deterministic name is the handle for every later verb. The
+kill is deferred before the receive so a refused stream or a failed attach
+never leaves a held box behind.

@@ -91,15 +91,17 @@ streamed; an operator who needs a secret sets it by hand), and with the
 box's entry program replaced on the operator's terminal. The entry is the
 harness's own session, not a bare shell, whenever the failed attempt saved
 one: with session capture on (`--sessions`) and a profile `resume_argv`, the
-saved transcript is copied — never bound, so the archived record stays
-immutable while the ephemeral session diverges — into the throwaway
-interactive dir, mounted at the profile's `session_dir` under the box
-`$HOME`, and `resume_argv` launches the operator inside the conversation
-that produced the failure. `--shell` forces the bare shell; a missing
-session or a profile without `resume_argv` falls back to it. The failed attempt's handoff directory (preserved
-diagnostic state, per the result contract) is surfaced read-only inside the
-box, so the operator sees what the agent saw, with the agent's exact toolset
-on hand. Exiting the shell tears down the bindings as any run would. An
+saved transcript is sent into the box — never bound, so the archived record
+stays immutable while the ephemeral session diverges — at the profile's
+`session_dir` under the box `$HOME`, and `resume_argv` launches the operator
+inside the conversation that produced the failure. `--shell` forces the bare
+shell; a missing session or a profile without `resume_argv` falls back to
+it. The failed attempt's handoff directory (preserved diagnostic state, per
+the result contract) is sent in the same way and lands at `/faber/handoff`,
+so the operator sees what the agent saw, with the agent's exact toolset on
+hand. Nothing is mounted from the host: the box starts holding, receives the
+files over `docker exec`, and the operator's terminal is a second exec into
+it, dropped to the box's run user. Exiting the shell tears down the bindings as any run would. An
 interactive session writes nothing to the journal — it is observation, not
 execution — and the run's state is unchanged afterward; the operator then
 chooses resume or fresh.

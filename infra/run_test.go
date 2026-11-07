@@ -23,8 +23,8 @@ func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 var goldenStdinSecrets = []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
 
 // fullRunSpec is the golden-argv fixture: limits, every engine mount kind (a
-// result bind rw, a :ro hook bind, a :ro /faber/skills bind, a workspace
-// volume, a /tmp tmpfs), three env keys, a StdinSecrets payload, and a
+// template bind rw, a :ro bind, a workspace volume, a /faber/result and a
+// /tmp tmpfs), three env keys, a StdinSecrets payload, and a
 // representative binding fragment (--network, agent-socket -v, SSH_AUTH_SOCK,
 // proxy env, --tmpfs /run/secrets, --runtime).
 func fullRunSpec() ContainerSpec {
@@ -33,10 +33,10 @@ func fullRunSpec() ContainerSpec {
 		Image:     "faber/impl:0a1b2c3d4e5f",
 		Resources: config.ResourceDef{Memory: "8g", CPUs: 4},
 		Mounts: []Mount{
-			{Host: "/runs/r1/impl", Container: "/result"},
+			{Host: "/proj/cache", Container: "/cache"},
 			{Host: "/proj/hooks", Container: "/hooks", ReadOnly: true},
-			{Host: "/proj/skills", Container: "/faber/skills", ReadOnly: true},
 			{Kind: KindVolume, Container: "/workspace"},
+			{Kind: KindTmpfs, Container: "/faber/result"},
 			{Kind: KindTmpfs, Container: "/tmp"},
 		},
 		Env: map[string]string{
@@ -68,10 +68,10 @@ func TestGoldenArgv(t *testing.T) {
 	want := []string{
 		"run", "--rm", "-i", "--name", "faber-r1-impl-a1",
 		"--memory=8g", "--cpus=4",
-		"-v", "/runs/r1/impl:/result",
+		"-v", "/proj/cache:/cache",
 		"-v", "/proj/hooks:/hooks:ro",
-		"-v", "/proj/skills:/faber/skills:ro",
 		"-v", "/workspace",
+		"--tmpfs", "/faber/result",
 		"--tmpfs", "/tmp",
 		"-e", "ANSWER=42",
 		"-e", "FABER_RESULT=/result/result.json",
@@ -278,7 +278,7 @@ func TestArgvEmptyBindingsAndEntry(t *testing.T) {
 // belongs to the failure module.
 func TestNonZeroExitIsData(t *testing.T) {
 	docker := &fakeDocker{
-		runFn: func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
+		runFn: func(ctx context.Context, args []string, stdin io.Reader, stdout, output io.Writer) (int, error) {
 			fmt.Fprintln(output, "box says goodbye")
 			return 1, nil
 		},
@@ -346,7 +346,7 @@ func TestStdinSecretsDelivery(t *testing.T) {
 // and the ContainerResult still carries partial output and timing.
 func TestKillOnCancel(t *testing.T) {
 	docker := &fakeDocker{
-		runFn: func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
+		runFn: func(ctx context.Context, args []string, stdin io.Reader, stdout, output io.Writer) (int, error) {
 			fmt.Fprintln(output, "partial output before cancel")
 			<-ctx.Done()
 			return -1, fmt.Errorf("infra: docker: %w", ctx.Err())
@@ -451,19 +451,22 @@ func TestRunRejectsRelativeBindHost(t *testing.T) {
 	}
 }
 
-// Verifies 0c82c6478856: a ContainerSpec.Output writer receives the streamed
-// output in full, beside the bounded tail the result carries.
-func TestRunOutputWriterTee(t *testing.T) {
+// Verifies 0c82c6478856 (scenario 12): the container's two streams reach
+// two writers — stderr in full into Output and byte-identical to the bounded
+// tail, stdout in full into Stdout — and neither sees the other's bytes; a
+// nil Stdout discards the stream and leaves Output unchanged.
+func TestRunTwoWriters(t *testing.T) {
 	docker := &fakeDocker{
-		runFn: func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
-			fmt.Fprintln(output, "line one")
-			fmt.Fprintln(output, "line two")
+		runFn: func(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+			fmt.Fprintln(stderr, "line one")
+			fmt.Fprint(stdout, "\x00faber\x00end\x00\x000\x000\n")
+			fmt.Fprintln(stderr, "line two")
 			return 0, nil
 		},
 	}
-	var durable bytes.Buffer
+	var durable, frames bytes.Buffer
 	r := NewContainerRunner(docker, testLogger())
-	res, err := r.Run(context.Background(), ContainerSpec{Name: "faber-x", Image: "faber/t:abc", Output: &durable})
+	res, err := r.Run(context.Background(), ContainerSpec{Name: "faber-x", Image: "faber/t:abc", Output: &durable, Stdout: &frames})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -472,5 +475,92 @@ func TestRunOutputWriterTee(t *testing.T) {
 	}
 	if string(res.Output) != durable.String() {
 		t.Fatalf("tail %q diverged from the durable copy %q", res.Output, durable.String())
+	}
+	if frames.String() != "\x00faber\x00end\x00\x000\x000\n" {
+		t.Fatalf("stdout writer got %q", frames.String())
+	}
+	durable.Reset()
+	if _, err := r.Run(context.Background(), ContainerSpec{Name: "faber-y", Image: "faber/t:abc", Output: &durable}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if durable.String() != "line one\nline two\n" {
+		t.Fatalf("with Stdout nil, Output got %q", durable.String())
+	}
+}
+
+// Verifies b8db21752444 (scenario 13): the exec argv shapes — -i exactly
+// when a stdin is attached; the terminal variant with -it, user, workdir and
+// the env sorted.
+func TestExecArgs(t *testing.T) {
+	if got := execArgs("faber-x", []string{"/faber/bin/faber-box", "receive"}, true); !slices.Equal(got, []string{"exec", "-i", "faber-x", "/faber/bin/faber-box", "receive"}) {
+		t.Fatalf("exec with stdin = %q", got)
+	}
+	if got := execArgs("faber-x", []string{"stat", "/x"}, false); !slices.Equal(got, []string{"exec", "faber-x", "stat", "/x"}) {
+		t.Fatalf("exec without stdin = %q", got)
+	}
+	got := execTerminalArgs("faber-x", []string{"/bin/sh"}, map[string]string{"HOME": "/home/box", "A": "1"}, "1000:1000", "/workspace")
+	want := []string{"exec", "-it", "-u", "1000:1000", "-w", "/workspace", "-e", "A=1", "-e", "HOME=/home/box", "faber-x", "/bin/sh"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("terminal exec = %q, want %q", got, want)
+	}
+	if got := execTerminalArgs("faber-x", []string{"/bin/sh"}, nil, "", ""); !slices.Equal(got, []string{"exec", "-it", "faber-x", "/bin/sh"}) {
+		t.Fatalf("bare terminal exec = %q", got)
+	}
+}
+
+// Verifies 0c82c6478856 (scenario 14): Enter issues remove, a detached run
+// of the held box (no -i), the receive exec with the input drained, the
+// terminal exec as the session says, and the kill — and the kill still runs
+// when the receive fails (no attach) or the attach fails.
+func TestEnter(t *testing.T) {
+	spec := ContainerSpec{Name: "faber-i", Image: "faber/t:abc", StdinSecrets: []byte("never"),
+		Mounts: []Mount{{Kind: KindTmpfs, Container: "/faber/handoff"}}, Entry: []string{"ignored"}}
+	session := Session{Entry: []string{"harness", "resume"}, Env: map[string]string{"HOME": "/home/box"}, User: "1000:1000", Workdir: "/workspace"}
+	verbs := func(d *fakeDocker) []string {
+		var out []string
+		for _, c := range d.calls {
+			out = append(out, c[0])
+		}
+		return out
+	}
+
+	docker := &fakeDocker{}
+	r := NewContainerRunner(docker, testLogger())
+	if err := r.Enter(context.Background(), spec, strings.NewReader("the stream"), session); err != nil {
+		t.Fatalf("enter: %v", err)
+	}
+	if got := verbs(docker); !slices.Equal(got, []string{"remove", "run", "exec", "exec-terminal", "kill"}) {
+		t.Fatalf("verbs = %q", got)
+	}
+	run := docker.callsFor("run")[0]
+	if !slices.Equal(run[:4], []string{"run", "run", "--rm", "-d"}) || slices.Contains(run, "-i") {
+		t.Fatalf("held run argv = %q", run)
+	}
+	if !slices.Equal(run[len(run)-2:], []string{"/faber/bin/faber-box", "hold"}) || !slices.Contains(run, "--tmpfs") {
+		t.Fatalf("held run argv = %q, want the hold entry and the tmpfs", run)
+	}
+	if ex := docker.callsFor("exec")[0]; !slices.Equal(ex, []string{"exec", "faber-i", "/faber/bin/faber-box", "receive"}) || string(docker.execStdins[0]) != "the stream" {
+		t.Fatalf("receive exec = %q stdin %q", ex, docker.execStdins)
+	}
+	if term := docker.callsFor("exec-terminal")[0]; !slices.Equal(term, []string{"exec-terminal", "faber-i", "1000:1000", "/workspace", "harness", "resume"}) {
+		t.Fatalf("terminal exec = %q", term)
+	}
+
+	docker = &fakeDocker{execFn: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) (int, error) { return 3, nil }}
+	r = NewContainerRunner(docker, testLogger())
+	if err := r.Enter(context.Background(), spec, strings.NewReader(""), session); err == nil || !strings.Contains(err.Error(), "receive exited 3") {
+		t.Fatalf("failed receive: %v", err)
+	}
+	if got := verbs(docker); !slices.Equal(got, []string{"remove", "run", "exec", "kill"}) {
+		t.Fatalf("verbs after a failed receive = %q", got)
+	}
+
+	docker = &fakeDocker{termErr: errors.New("exit status 130")}
+	r = NewContainerRunner(docker, testLogger())
+	if err := r.Enter(context.Background(), spec, strings.NewReader(""), session); err == nil {
+		t.Fatal("attach error swallowed")
+	}
+	if got := verbs(docker); got[len(got)-1] != "kill" {
+		t.Fatalf("no kill after a failed attach: %q", got)
 	}
 }

@@ -20,8 +20,10 @@ import "github.com/dmitriyb/faber/config"
 // box tolerates (e.g. FABER_MODEL) does not bump it. faber-box ships from
 // the host as the same build, so a version mismatch at either end is a
 // box-binary-misconfiguration detector (a stale or foreign sequencer
-// binary), not a migration path.
-const ContractVersion = 1
+// binary), not a migration path. Version 2 is the frame channel: the box
+// ships its result directory over its stdout instead of writing into a
+// mounted one.
+const ContractVersion = 2
 
 // Environment variable names of the box env contract. The host side
 // (BuildContainerSpec in the agent package) emits them; the sequencer's env phase
@@ -41,9 +43,10 @@ const (
 	// defaults (faber-<identity>). Optional.
 	EnvIdentity = "FABER_IDENTITY"
 
-	// EnvResultDir is the host-mounted result directory: the box writes
-	// result.json (and on failure handoff.json) there, the agent skill writes
-	// output.json there. Required.
+	// EnvResultDir is the box's result directory (a tmpfs in the container):
+	// the box writes result.json (and on failure handoff.json) there, the
+	// agent skill writes output.json there, and the box ships the whole
+	// directory to the host over its stdout at the end. Required.
 	EnvResultDir = "FABER_RESULT_DIR"
 
 	// EnvBundleDir is the context-bundle directory the hooks fill. Required.
@@ -78,13 +81,12 @@ const (
 	// absence is exactly why this variable does not bump ContractVersion.
 	EnvInvokeProfile = "FABER_INVOKE_PROFILE"
 
-	// EnvSessionsDir is the container path (under ContainerHome) of the live
-	// per-attempt sessions bind capturing the harness's native session
-	// transcripts. The host sets it exactly when it also mounted the bind —
-	// the same pair-set discipline as EnvSecretsStdin — and the preamble then
-	// chowns the daemon-created intermediate path components under HOME so
-	// the dropped harness can write beside them. Absent means capture is off;
-	// per the additive rule, no ContractVersion bump.
+	// EnvSessionsDir is the container path (under ContainerHome) where the
+	// harness keeps its native session transcripts. The host sets it exactly
+	// when session capture is on and the profile names a session_dir; the
+	// box ships everything under it as sessions/<rel> frames when the step
+	// ends, and faber-box receive writes a re-entry's transcript there.
+	// Absent means capture is off and nothing is shipped.
 	EnvSessionsDir = "FABER_SESSIONS_DIR"
 
 	// EnvGitName and EnvGitEmail carry the role's committer identity into
@@ -93,13 +95,14 @@ const (
 	EnvGitName  = "FABER_GIT_NAME"
 	EnvGitEmail = "FABER_GIT_EMAIL"
 
-	// EnvHooksDir, EnvSecretsDir and EnvWorkspaceDir relocate the fixed
-	// container paths when the sequencer runs as a plain process (the box
-	// lifecycle tests). The host never sets them; inside a container the
-	// defaults below apply.
+	// EnvHooksDir, EnvSecretsDir, EnvWorkspaceDir and EnvHandoffDir relocate
+	// the fixed container paths when the sequencer runs as a plain process
+	// (the box lifecycle tests). The host never sets them; inside a container
+	// the defaults below apply.
 	EnvHooksDir     = "FABER_HOOKS_DIR"
 	EnvSecretsDir   = "FABER_SECRETS_DIR"
 	EnvWorkspaceDir = "FABER_WORKSPACE_DIR"
+	EnvHandoffDir   = "FABER_HANDOFF_DIR"
 
 	// EnvRunUID and EnvRunGID are the host user's uid:gid the box's privileged
 	// preamble chowns the writable mounts to and drops privileges into. Unset
@@ -158,8 +161,15 @@ const (
 
 // Fixed in-container paths of the box run contract.
 const (
-	// ContainerResultDir is where the host mounts the result directory.
+	// ContainerResultDir is the box's result directory: a tmpfs the preamble
+	// chowns to the run user, shipped to the host over the frame channel at
+	// the end of the attempt. Nothing host-owned is mounted there.
 	ContainerResultDir = "/faber/result"
+
+	// ContainerHandoffDir is where interactive re-entry lands the failed
+	// attempt's handoff state: a tmpfs of the reconstructed box that
+	// faber-box receive fills from the handoff/<rel> frames the host sends.
+	ContainerHandoffDir = "/faber/handoff"
 
 	// ContainerBundleDir is the context-bundle directory (container-local;
 	// on fail-stop its content is snapshotted into the result dir).

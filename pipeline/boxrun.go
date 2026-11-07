@@ -22,7 +22,9 @@ import (
 )
 
 // OutputLogName is the per-attempt file under the attempt directory that
-// receives the container's combined stdout+stderr as it streams.
+// receives the container's stderr — the human channel: the box's log, hook
+// and agent output, docker's own messages — as it streams. The container's
+// stdout is the frame channel the demuxer turns into result/ and sessions/.
 const OutputLogName = "output.log"
 
 // BoxAttempt is one attempt of one agent node at the executor's box-run seam.
@@ -78,10 +80,11 @@ type BindingPreparer interface {
 
 // AgentBoxes is the production BoxRunner: agent.BuildContainerSpec assembles the
 // engine half of the run contract, the security bindings are spliced into the
-// spec verbatim, the container runs, bindings tear down, and
-// agent.ExtractResult re-validates the record host-side. The container exit
-// code is never authoritative — a missing or garbled record synthesizes a
-// box-vanished failure. Construction happens at cmd wiring; unit tests fake
+// spec verbatim, the container runs with its stdout demultiplexed into the
+// attempt directory, bindings tear down, and agent.ExtractResult
+// re-validates the record host-side. The container exit code is never
+// authoritative — a missing or garbled record synthesizes a box-vanished
+// failure. Construction happens at cmd wiring; unit tests fake
 // BoxRunner instead.
 type AgentBoxes struct {
 	Containers ContainerRunner
@@ -108,6 +111,9 @@ type AgentBoxes struct {
 	Check bool
 
 	Log *slog.Logger
+
+	// streamLimit lowers MaxAttemptStreamBytes for tests; 0 is the bound.
+	streamLimit int64
 }
 
 // GitIdentity is one role's committer identity as the boxes will write it
@@ -153,33 +159,31 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	if err != nil {
 		return BoxResult{}, fmt.Errorf("pipeline: box %s: %w", box.NodeID, err)
 	}
-	// The live sessions bind: a fresh empty per-attempt dir (the scrub above
-	// cleared only THIS attempt's dir, so earlier attempts' transcripts
-	// persist), host-owned by the run user like the result dir, mounted by
-	// the run-spec assembler at $HOME/<profile session_dir>. Both gates —
-	// the per-run toggle and the profile's session_dir — must be on.
-	sessionsDir := ""
-	if box.Sessions && box.Template.Invoke != nil && box.Template.Invoke.SessionDir != "" {
-		sessionsDir = filepath.Join(attemptDir, "sessions")
-		if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	// Session capture: a fresh empty per-attempt dir (the scrub above cleared
+	// only THIS attempt's dir, so earlier attempts' transcripts persist) the
+	// demuxer fills from the sessions/<rel> frames the box ships at the end.
+	// Both gates — the per-run toggle and the profile's session_dir — must be
+	// on for the box to be told what to ship.
+	sessions := box.Sessions && box.Template.Invoke != nil && box.Template.Invoke.SessionDir != ""
+	if sessions {
+		if err := os.MkdirAll(filepath.Join(attemptDir, "sessions"), 0o755); err != nil {
 			return BoxResult{}, fmt.Errorf("pipeline: box %s: %w", box.NodeID, err)
 		}
 	}
 	spec, err := agent.BuildContainerSpec(agent.BoxSpec{
-		RunID:       box.RunID,
-		NodeID:      box.NodeID,
-		Attempt:     box.Attempt,
-		Template:    box.Template,
-		Image:       box.Image,
-		Inputs:      inputs,
-		ResultDir:   resultDir,
-		SkillsLink:  skillsLink(box.Template),
-		Model:       box.Template.Model,
-		Effort:      box.Template.Effort,
-		GitName:     b.GitIdentities[box.Template.Identity].Name,
-		GitEmail:    b.GitIdentities[box.Template.Identity].Email,
-		SessionsDir: sessionsDir,
-		Check:       b.Check,
+		RunID:      box.RunID,
+		NodeID:     box.NodeID,
+		Attempt:    box.Attempt,
+		Template:   box.Template,
+		Image:      box.Image,
+		Inputs:     inputs,
+		SkillsLink: skillsLink(box.Template),
+		Model:      box.Template.Model,
+		Effort:     box.Template.Effort,
+		GitName:    b.GitIdentities[box.Template.Identity].Name,
+		GitEmail:   b.GitIdentities[box.Template.Identity].Email,
+		Sessions:   sessions,
+		Check:      b.Check,
 	})
 	if err != nil {
 		return BoxResult{}, err
@@ -206,16 +210,22 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		return BoxResult{}, err
 	}
 	spec.Bindings = asm.Args
-	// The attempt's combined output streams into a durable file beside its
+	// The attempt's human channel streams into a durable file beside its
 	// result dir — the only record of hook and phase output that outlives the
 	// bounded in-memory tail. The attempt dir was scrubbed above, so the file
-	// is this attempt's alone.
+	// is this attempt's alone. The box's stdout is the frame channel: the
+	// demuxer writes it into result/ and sessions/ as it arrives.
 	outFile, err := os.OpenFile(filepath.Join(attemptDir, OutputLogName), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return BoxResult{}, fmt.Errorf("pipeline: box %s: open output log: %w", box.NodeID, err)
 	}
 	defer outFile.Close()
 	spec.Output = outFile
+	demux := newDemuxer(attemptDir, outFile, log)
+	if b.streamLimit > 0 {
+		demux.limit = b.streamLimit
+	}
+	spec.Stdout = demux
 	// The credentials pairing is atomic: a non-empty file-mode secrets payload
 	// is copied into ContainerSpec.StdinSecrets and the box's stdin signal is set in
 	// the same step, never one without the other (see spec/infra/impl_run_argv.md
@@ -227,25 +237,42 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	}
 
 	runRes, runErr := b.Containers.Run(ctx, spec)
+	streamErr := demux.Close()
 	if terr := asm.Teardown(ctx); terr != nil {
 		log.WarnContext(ctx, "binding teardown", "step", box.NodeID, "err", terr)
 	}
 	if runErr != nil && ctx.Err() != nil {
 		return BoxResult{}, runErr
 	}
-	// The exit code is data, never authoritative: the mounted record decides.
+	if streamErr == nil && !demux.Ended() {
+		log.WarnContext(ctx, "the box's frame stream ended without an end frame", "step", box.NodeID)
+	}
+	if streamErr != nil {
+		// Said here for every attempt; a violation before result.json also
+		// lands in the record below, one after it (the sessions) does not
+		// change the record and this line is its only trace.
+		log.WarnContext(ctx, "frame stream violation; later frames were discarded", "step", box.NodeID, "err", streamErr)
+	}
+	// The exit code is data, never authoritative: the shipped record decides.
 	rec, err := agent.ExtractResult(resultDir, box.Template.Output)
 	if err != nil {
 		return BoxResult{}, err
 	}
-	if runErr != nil && rec.Status == agent.StatusFailed && rec.Error != nil && rec.Error.Reason == contract.ReasonBoxVanished {
-		// The container never produced a record because the actuation itself
-		// failed (daemon unreachable, bad flag, missing image). The true cause
-		// must live in the failure record, not at debug level — otherwise the
-		// operator sees only a synthetic "box vanished" while each retry burns
-		// against the same dead daemon.
-		rec.Error.Detail = fmt.Sprintf("container actuation failed: %v (%s; output tail: %s)",
-			runErr, rec.Error.Detail, outputTail(runRes.Output, 2048))
+	if rec.Status == agent.StatusFailed && rec.Error != nil && rec.Error.Reason == contract.ReasonBoxVanished {
+		// The true cause of a missing record must live in the failure record,
+		// not at debug level — otherwise the operator sees only a synthetic
+		// "box vanished" while each retry burns against the same cause.
+		switch {
+		case runErr != nil:
+			// The actuation itself failed (daemon unreachable, bad flag,
+			// missing image).
+			rec.Error.Detail = fmt.Sprintf("container actuation failed: %v (%s; output tail: %s)",
+				runErr, rec.Error.Detail, outputTail(runRes.Output, 2048))
+		case streamErr != nil:
+			// The box's stream broke its contract before the record arrived.
+			rec.Error.Detail = fmt.Sprintf("frame stream: %v (%s; output tail: %s)",
+				streamErr, rec.Error.Detail, outputTail(runRes.Output, 2048))
+		}
 	}
 	res := adaptResult(rec, box, runRes, log)
 	return BoxResult{Result: res, Usage: readUsage(resultDir, log)}, nil
@@ -439,9 +466,9 @@ func AttemptDir(runDir, nodeID string, attempt int) string {
 	return filepath.Join(runDir, "boxes", pathToken(nodeID), "attempt-"+strconv.Itoa(attempt))
 }
 
-// ResultDir is the attempt's result directory: the box's mounted
-// $FABER_RESULT_DIR on the host, where the records and the hooks' events
-// file live.
+// ResultDir is the attempt's result directory on the host: where the
+// demuxer lands the box's result/<rel> frames — the records and the hooks'
+// events file — the host-side image of the box's $FABER_RESULT_DIR.
 func ResultDir(runDir, nodeID string, attempt int) string {
 	return filepath.Join(AttemptDir(runDir, nodeID, attempt), "result")
 }

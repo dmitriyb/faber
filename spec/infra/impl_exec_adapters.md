@@ -9,8 +9,11 @@ type DockerClient interface {
     ImageExists(ctx context.Context, tag string) (bool, error)
     Load(ctx context.Context, tarball string) (string, error) // returns loaded tag
     NetworkExists(ctx context.Context, name string) (bool, error)
-    ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error)
+    ContainerRun(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
+    Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
+    ExecTerminal(ctx context.Context, name string, argv []string, env map[string]string, user, workdir string) error
     Kill(ctx context.Context, name string) error
+    Remove(ctx context.Context, name string) error
 }
 
 type GitClient interface {
@@ -101,7 +104,18 @@ input (the caller has already put `-i` in `args`), copies it to EOF, and closes
 the pipe — a clean EOF the box reads as end-of-payload. `stdin == nil` leaves
 stdin unattached, unchanged from the no-secrets path. The stdin bytes are a
 potential credential, so they are never logged here, exactly like
-`CommandRunner` stdout.
+`CommandRunner` stdout. The client's stdout and stderr go to two writers and
+are never merged: the container's stdout is the box's frame stream, its
+stderr (and docker's own messages, which the client prints on stderr) the
+human log.
+
+`Exec` runs `docker exec [-i] <name> <argv…>` with the same stdin and
+two-writer discipline (`-i` exactly when `stdin != nil`), returning the exit
+code as data like `ContainerRun`. `ExecTerminal` runs `docker exec -it [-u
+user] [-w workdir] [-e K=V…] <name> <argv…>` with the process's own standard
+streams attached — the one adapter verb that touches the operator's terminal,
+so it lives here beside the other docker verbs rather than in the wiring; it
+returns the exec's error verbatim. Neither verb logs its stdin.
 
 ## Fakes
 

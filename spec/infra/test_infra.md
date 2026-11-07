@@ -17,7 +17,7 @@ acceptance environment only.
 ## Scenarios
 
 1. **Golden argv.** A fully populated ContainerSpec (limits, every engine mount kind —
-   a result bind rw, a `/workspace` volume, a `/tmp` tmpfs — three env keys, a `StdinSecrets`
+   a template bind rw, a `/workspace` volume, a `/faber/result` and a `/tmp` tmpfs — three env keys, a `StdinSecrets`
    payload, a representative binding fragment containing
    `--network`, an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a
    `--tmpfs /run/secrets`, and `--runtime`) assembles to the golden argv
@@ -34,7 +34,8 @@ acceptance environment only.
    absent resources emit none; `-i` appears exactly when `StdinSecrets` is
    non-empty and never otherwise, and the token bytes never appear anywhere in
    the argv. No ContainerSpec emits a `/faber/skills`, `/faber/hooks` or `/faber/bin` `-v`:
-   those paths are image content.
+   those paths are image content; and no spec the agent module assembles
+   emits a `/faber/result` `-v` — the result dir is a `--tmpfs`.
 3. **Tag determinism and pin resolution.** Same packages shuffled → identical
    tag; one package added, one overlay byte changed, or the default pin bumped →
    different tag. Two builds identical except for a per-build `pin` produce
@@ -80,14 +81,17 @@ acceptance environment only.
    scraping fallback.
 8. **Build-load-run round trip** (integration). The minimal toolset builds
    via real nix, loads with the computed tag, and `ContainerRunner.Run` with
-   entry `["ls", "/bin"]` returns exit 0 with output captured; store paths
+   entry `["ls", "/bin"]` returns exit 0 with the listing in the `Stdout`
+   writer and nothing in the captured stderr — the two streams reach two
+   writers; store paths
    inside the container are root-owned and not writable by the run user;
    rerunning `Build` performs no nix invocation (daemon-as-cache).
-9. **Kill on cancel** (integration). A container running `sleep 300` has its
+9. **Kill on cancel** (integration). A container printing without end on
+   its stdout (`yes`), captured through a bounded `Stdout` writer, has its
    context cancelled: `Run` returns `context.Canceled` within the grace
    window, `docker ps -a` no longer lists the deterministic name (`--rm`
-   completed after kill), and the ContainerResult still carries partial output and
-   timing.
+   completed after kill), the partial output reached the writer, and the
+   ContainerResult still carries timing.
 10. **Non-zero exit is data.** Entry `["false"]` (fake and integration):
     `Run` returns `err == nil`, `ExitCode == 1`, output attached — the
     classification boundary belongs to the failure module.
@@ -99,9 +103,25 @@ acceptance environment only.
     entry `["cat", "/dev/stdin"]` echoes the exact payload bytes back through
     captured output, proving the byte stream reached the container intact.)
 
-12. **Output writer tee.** With `ContainerSpec.Output` set, the writer receives the
-    streamed output in full and byte-identical to the bounded tail for a
-    small output.
+12. **Two writers.** With `ContainerSpec.Output` and `Stdout` set, the fake
+    docker's stderr bytes reach `Output` in full and byte-identical to the
+    bounded tail, its stdout bytes reach `Stdout` in full, and neither writer
+    sees the other's bytes; with `Stdout` nil the stdout bytes are discarded
+    and `Output` is unchanged.
+13. **Exec argv.** The fake-backed `Exec` records `exec -i <name> <argv…>`
+    with a non-nil stdin and `exec <name> <argv…>` without one; `ExecTerminal`
+    records `exec -it -u <user> -w <dir> -e K=V <name> <argv…>` with the env
+    sorted. A non-zero exit from `Exec` is data (`code, nil`).
+14. **Enter choreography.** With a fake docker, `Enter` issues, in order:
+    remove by name, `run --rm -d --name <name> … <image> /faber/bin/faber-box
+    hold` (no `-i`), `exec -i <name> /faber/bin/faber-box receive` with the
+    caller's input stream drained to EOF, `exec -it -u <user> … <name>
+    <entry>`, kill by name — and kill still runs when the receive exits
+    non-zero (the attach never happens, the error names the receive) or the
+    attach fails. (Integration: a held box of a built image receives a
+    stream over `docker exec` into its handoff tmpfs and its session dir
+    under HOME, and a second exec finds every file, HOME, the path down to
+    the session dir, /workspace and /tmp owned by the run user.)
 
 ## Edge cases
 
@@ -110,7 +130,8 @@ acceptance environment only.
 - Empty entry argv: image default entrypoint runs; assembly appends nothing
   after the tag.
 - Output beyond the 256 KiB cap: ContainerResult holds the tail, head discarded,
-  no allocation blow-up on a log-spamming box.
+  no allocation blow-up on a log-spamming box. The stdout stream is never
+  held in the runner at all.
 - Package name failing the `[A-Za-z0-9._-]+` charset check: rejected before
   any expression is rendered, error names the template and the offending name.
 - Loaded tag disagreeing with the computed tag: `Build` fails loudly rather

@@ -49,8 +49,8 @@ Scheduler (normal execution) ── step becomes ready ──► compute input-h
         ▼
 faber resume <run> --fresh   → new run dir + journal, empty prior map, no lookups
 faber resume --interactive <run> <step>
-                       → rebuild failed step's box (image, bindings, inputs,
-                         handoff ro-mounted) → operator shell → no journal write
+                       → rebuild failed step's box (image, bindings, inputs;
+                         handoff sent in over exec) → operator shell → no journal write
 ```
 
 ## Shapes at each boundary
@@ -63,7 +63,7 @@ faber resume --interactive <run> <step>
 | Metering → Journal | `CostRecord` | keyed like the result record; skipped steps on resume emit none |
 | Journal → RecoveryModes | header + `map[Key]ResultRecord` | last-wins replay; torn tail line dropped with a warning |
 | RecoveryModes → Scheduler | `Lookup(stepID, inputs, tmpl, image)` | readiness-time; hit(ok) ⇒ skip with reused payload, else run |
-| RecoveryModes → security/infra | BindingSet + shell entry | interactive only; teardown guaranteed, journal untouched |
+| RecoveryModes → security/infra | BindingSet + a held box, the handoff stream, the shell entry | interactive only; teardown guaranteed, journal untouched |
 
 ## Invariants the flow preserves
 

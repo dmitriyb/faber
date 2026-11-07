@@ -27,10 +27,12 @@ package infra
 //     NetworkExists answer negatively for absent objects without error.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -42,6 +44,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dmitriyb/faber/agent/contract"
 	"github.com/dmitriyb/faber/config"
 )
 
@@ -126,37 +129,31 @@ func TestRealinfra_BuildLoadRunRoundTrip(t *testing.T) {
 
 	runner := NewContainerRunner(docker, logger)
 	name := fmt.Sprintf("faber-realinfra-%d", time.Now().UnixNano())
-	res, err := runner.Run(ctx, ContainerSpec{Name: name, Image: tag, Entry: []string{"ls", "/bin"}})
+	// The two streams reach two writers: ls writes its listing to stdout,
+	// nothing to stderr.
+	var stdout bytes.Buffer
+	res, err := runner.Run(ctx, ContainerSpec{Name: name, Image: tag, Entry: []string{"ls", "/bin"}, Stdout: &stdout})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if res.ExitCode != 0 || len(res.Output) == 0 {
-		t.Fatalf("ls /bin: exit %d, %d output bytes", res.ExitCode, len(res.Output))
+	if res.ExitCode != 0 || stdout.Len() == 0 || len(res.Output) != 0 {
+		t.Fatalf("ls /bin: exit %d, %d stdout bytes, stderr %q", res.ExitCode, stdout.Len(), res.Output)
 	}
 
 	// Store paths are root-owned...
-	res, err = runner.Run(ctx, ContainerSpec{Name: name + "-stat", Image: tag,
-		Entry: []string{"stat", "-L", "-c", "%u", "/bin/ls"}})
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if res.ExitCode != 0 || strings.TrimSpace(string(res.Output)) != "0" {
-		t.Fatalf("store path not root-owned: exit %d output %q", res.ExitCode, res.Output)
+	if out := runStdout(t, ctx, runner, ContainerSpec{Name: name + "-stat", Image: tag,
+		Entry: []string{"stat", "-L", "-c", "%u", "/bin/ls"}}); out != "0" {
+		t.Fatalf("store path not root-owned: %q", out)
 	}
 	// The baked faber-box is image content: present, root-owned, executable,
 	// and it answers for itself.
-	res, err = runner.Run(ctx, ContainerSpec{Name: name + "-box", Image: tag,
-		Entry: []string{"stat", "-L", "-c", "%u %A", "/faber/bin/faber-box"}})
-	if err != nil {
-		t.Fatalf("stat faber-box: %v", err)
-	}
 	// Store paths are canonicalised to 0555, so the mode is r-x, never rwx.
-	if res.ExitCode != 0 || !regexp.MustCompile(`^0 -r.xr.xr.x`).MatchString(strings.TrimSpace(string(res.Output))) {
-		t.Fatalf("baked faber-box not root-owned and executable: exit %d output %q", res.ExitCode, res.Output)
+	if out := runStdout(t, ctx, runner, ContainerSpec{Name: name + "-box", Image: tag,
+		Entry: []string{"stat", "-L", "-c", "%u %A", "/faber/bin/faber-box"}}); !regexp.MustCompile(`^0 -r.xr.xr.x`).MatchString(out) {
+		t.Fatalf("baked faber-box not root-owned and executable: %q", out)
 	}
-	res, err = runner.Run(ctx, ContainerSpec{Name: name + "-boxv", Image: tag, Entry: []string{"/faber/bin/faber-box", "version"}})
-	if err != nil || res.ExitCode != 0 {
-		t.Fatalf("baked faber-box does not run: exit %d err %v output %q", res.ExitCode, err, res.Output)
+	if out := runStdout(t, ctx, runner, ContainerSpec{Name: name + "-boxv", Image: tag, Entry: []string{"/faber/bin/faber-box", "version"}}); !strings.HasPrefix(out, "faber-box ") {
+		t.Fatalf("baked faber-box does not run: %q", out)
 	}
 	// ...and not writable by a non-root run user (bindings carry --user, the
 	// verbatim-splice seam the security module will use).
@@ -209,15 +206,18 @@ func TestRealinfra_KillOnCancel(t *testing.T) {
 		cancel()
 	}()
 	start := time.Now()
-	// yes provides continuous output so the partial-output capture is provable.
-	res, err := runner.Run(ctx, ContainerSpec{Name: name, Image: tag, Entry: []string{"yes", "partial-line"}})
+	// yes provides continuous output so the partial-output capture is
+	// provable; it writes to stdout, so the Stdout writer (a bounded tail,
+	// as the runner keeps for stderr) is where the partial output shows.
+	partial := newTailBuffer(outputCap)
+	res, err := runner.Run(ctx, ContainerSpec{Name: name, Image: tag, Entry: []string{"yes", "partial-line"}, Stdout: partial})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error %v, want context.Canceled", err)
 	}
 	if elapsed := time.Since(start); elapsed > 60*time.Second {
 		t.Fatalf("cancelled run returned after %v, outside any grace window", elapsed)
 	}
-	if !strings.Contains(string(res.Output), "partial-line") {
+	if !strings.Contains(string(partial.Bytes()), "partial-line") {
 		t.Fatal("partial output lost on cancel")
 	}
 	if res.Duration <= 0 {
@@ -289,11 +289,13 @@ func TestRealinfra_StdinSecretsDelivery(t *testing.T) {
 	}
 	runner := NewContainerRunner(docker, logger)
 	payload := []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
+	var stdout bytes.Buffer
 	res, err := runner.Run(ctx, ContainerSpec{
 		Name:         fmt.Sprintf("faber-realinfra-stdin-%d", time.Now().UnixNano()),
 		Image:        tag,
 		StdinSecrets: payload,
 		Entry:        []string{"cat"},
+		Stdout:       &stdout,
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -301,8 +303,8 @@ func TestRealinfra_StdinSecretsDelivery(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("cat exited %d (a hang would time out instead)", res.ExitCode)
 	}
-	if !strings.Contains(string(res.Output), string(payload)) {
-		t.Fatalf("stdin payload not echoed back: output %q, want %q", res.Output, payload)
+	if !strings.Contains(stdout.String(), string(payload)) {
+		t.Fatalf("stdin payload not echoed back: stdout %q, want %q", stdout.String(), payload)
 	}
 }
 
@@ -387,11 +389,7 @@ func TestRealinfra_BakedInputs(t *testing.T) {
 	run := func(suffix string, spec ContainerSpec) string {
 		t.Helper()
 		spec.Name, spec.Image = name+suffix, tag
-		res, err := runner.Run(ctx, spec)
-		if err != nil || res.ExitCode != 0 {
-			t.Fatalf("%s: exit %d err %v output %q", suffix, res.ExitCode, err, res.Output)
-		}
-		return strings.TrimSpace(string(res.Output))
+		return runStdout(t, ctx, runner, spec)
 	}
 	if out := run("-hook", ContainerSpec{Entry: []string{"stat", "-L", "-c", "%u %A", "/faber/hooks/prelude"}}); !regexp.MustCompile(`^0 -r.xr.xr.x`).MatchString(out) {
 		t.Fatalf("baked prelude: %q", out)
@@ -408,5 +406,75 @@ func TestRealinfra_BakedInputs(t *testing.T) {
 		Entry:  []string{"bash", "-c", "test -d /faber/bundle && test -d /faber/result && test -x /faber/bin/faber-box && echo ok"},
 	}); out != "ok" {
 		t.Fatalf("/faber mount points: %q", out)
+	}
+}
+
+// runStdout runs the spec and returns its trimmed stdout, failing the test
+// on an actuation error or a non-zero exit (with the stderr tail).
+func runStdout(t *testing.T, ctx context.Context, runner *ContainerRunner, spec ContainerSpec) string {
+	t.Helper()
+	var stdout bytes.Buffer
+	spec.Stdout = &stdout
+	res, err := runner.Run(ctx, spec)
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("%s: exit %d err %v stderr %q stdout %q", spec.Name, res.ExitCode, err, res.Output, stdout.String())
+	}
+	return strings.TrimSpace(stdout.String())
+}
+
+// Verifies 0c82c6478856 and 87f006277d2c on a real machine: a held box
+// receives a frame stream over docker exec into its handoff tmpfs and its
+// session dir under HOME, owned by the run user along with the writable
+// mounts a preamble would have chowned (HOME, /workspace, the path down to
+// the session dir), and a second exec sees the files — the mount-free
+// re-entry path up to the terminal attach, which needs an operator.
+func TestRealinfra_HoldAndReceive(t *testing.T) {
+	requireTools(t)
+	logger := realLogger(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	docker := NewDockerCLI(logger)
+	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
+	tag, err := b.Build(ctx, "realinfra-min", minimalToolset(), ImageInputs{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	name := fmt.Sprintf("faber-realinfra-hold-%d", time.Now().UnixNano())
+	spec := ContainerSpec{Name: name, Image: tag,
+		Mounts: []Mount{
+			{Kind: KindTmpfs, Container: "/faber/handoff"},
+			{Kind: KindTmpfs, Container: "/home/box"},
+			{Kind: KindVolume, Container: "/workspace"},
+		},
+		Env: map[string]string{"FABER_RUN_UID": "1000", "FABER_RUN_GID": "1000", "FABER_SESSIONS_DIR": "/home/box/.h/sessions"}}
+	if code, err := docker.ContainerRun(ctx, detachArgs(spec), nil, io.Discard, io.Discard); err != nil || code != 0 {
+		t.Fatalf("start held box: exit %d err %v", code, err)
+	}
+	defer docker.Kill(context.WithoutCancel(ctx), name)
+
+	var stream bytes.Buffer
+	w := contract.NewFrameWriter(&stream)
+	w.Frame(contract.FrameFile, "handoff/handoff.json", time.Time{}, strings.NewReader(`{"phase":"agent"}`), 17)
+	w.Frame(contract.FrameFile, "handoff/bundle/CONTEXT.md", time.Time{}, strings.NewReader("ctx\n"), 4)
+	w.Frame(contract.FrameFile, "sessions/a.jsonl", time.Time{}, strings.NewReader("{}\n"), 3)
+	w.End()
+	var stderr bytes.Buffer
+	if code, err := docker.Exec(ctx, name, []string{"/faber/bin/faber-box", "receive"}, &stream, io.Discard, &stderr); err != nil || code != 0 {
+		t.Fatalf("receive: exit %d err %v stderr %q", code, err, stderr.String())
+	}
+	var stdout bytes.Buffer
+	owned := []string{"/faber/handoff", "/faber/handoff/handoff.json", "/faber/handoff/bundle/CONTEXT.md",
+		"/home/box", "/home/box/.h", "/home/box/.h/sessions", "/home/box/.h/sessions/a.jsonl", "/workspace", "/tmp"}
+	if code, err := docker.Exec(ctx, name, append([]string{"stat", "-c", "%u:%g %n"}, owned...), nil, &stdout, &stderr); err != nil || code != 0 {
+		t.Fatalf("stat: exit %d err %v stderr %q", code, err, stderr.String())
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+		if !strings.HasPrefix(line, "1000:1000 ") {
+			t.Fatalf("not owned by the run user: %q (all: %q)", line, stdout.String())
+		}
+	}
+	stdout.Reset()
+	if code, err := docker.Exec(ctx, name, []string{"cat", "/faber/handoff/bundle/CONTEXT.md"}, nil, &stdout, &stderr); err != nil || code != 0 || stdout.String() != "ctx\n" {
+		t.Fatalf("cat: exit %d err %v stdout %q", code, err, stdout.String())
 	}
 }

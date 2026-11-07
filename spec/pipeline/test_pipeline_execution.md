@@ -72,8 +72,9 @@ docker anywhere in this section.
 12. **No run-time staging of image content.** A named-form template, an
     inline-form template and a template with hooks all yield ContainerSpecs with no
     `/faber/skills`, `/faber/hooks` or `/faber/bin` mount and no entry-binary
-    field: those are image content. The attempt's mounts are the result bind,
-    the workspace volume and the tmpfs writables only.
+    field: those are image content. The attempt's mounts are the workspace
+    volume and the tmpfs writables (`/faber/result` among them) only — no
+    host bind.
 
 13. **Pause drains and resumes.** A three-step chain with the pause probe
     scripted to turn true after the first settlement: step one's record is
@@ -94,28 +95,31 @@ docker anywhere in this section.
     exit 0 — the run-end status is paused only when the drain ended the run.
 16. **Session capture gates on both toggles.** With sessions on and a
     template profile naming a `session_dir`: the attempt's run spec carries
-    the `<attempt>/sessions` read-write bind at `$HOME/<session_dir>` plus
-    `FABER_SESSIONS_DIR`, the host dir exists (empty) before the container
-    runs, and a second attempt gets a fresh empty dir while the first
+    `FABER_SESSIONS_DIR` = `$HOME/<session_dir>` and no bind for it, the
+    host dir `<attempt>/sessions` exists (empty) before the container runs,
+    the fake container's `sessions/a.jsonl` frame lands there with its mtime,
+    and a second attempt gets a fresh empty dir while the first
     attempt's survives. A re-run at the SAME attempt number (the resume-reuse
     case — resumed runs restart attempt numbering) preserves the prior
     execution's non-empty transcript at the `<attemptDir>.sessions.<k>`
     sibling before the scrub and starts fresh. Sessions off, OR a profile
     without `session_dir`, OR
-    no profile at all: no bind, no variable — run specs byte-identical to
-    before the feature. The run-spec assembler refuses a `SessionsDir`
+    no profile at all: no variable — run specs byte-identical to
+    before the feature, and a `sessions/` frame from the fake is still
+    written (the demuxer does not gate on the toggle; the box does). The run-spec assembler refuses `Sessions`
     against a template whose profile names no `session_dir` (the pair-set
     guard, exercised directly).
 17. **Session-resuming re-entry.** With a saved non-empty
     `attempt-<final>/sessions` and a profile `resume_argv`: the interactive
-    spec's entry is the profile argv, `HOME` is pinned to the box home, and
-    the mount at `$HOME/<session_dir>` is a COPY under the salted interactive
-    dir — mutating it leaves the archived attempt bytes untouched, and the
-    copy is gone when the session exits. The copy preserves file mtimes and
-    recreates symlinks verbatim (harnesses find "the most recent session"
-    through them). Fallbacks each yield the bare
-    shell: `--shell` despite a saved session, a missing/empty saved dir, a
-    profile without `resume_argv`.
+    session's entry is the profile argv, its env pins `HOME` to the box home,
+    its user is the spec's run uid:gid, the spec's entry is `faber-box hold`,
+    its mounts carry a `/faber/handoff` tmpfs and no host bind, and the
+    input stream parses (with the contract reader) to the handoff files as
+    `handoff/<rel>` followed by the saved session as `sessions/<rel>` with
+    the archived mtimes and the `latest` symlink as a `link` — the archived
+    attempt bytes are untouched afterwards. Fallbacks each yield the bare
+    shell with the handoff stream only: `--shell` despite a saved session, a
+    missing/empty saved dir, a profile without `resume_argv`.
 
 18. **Progress stream order.** The diamond under `--max-parallel 1` with a
     recording sink yields exactly `run-started (run id, workflow), started a,
@@ -142,7 +146,27 @@ docker anywhere in this section.
     run-started caps and the run-ended counts.
 22. **Output log per attempt.** The run-prep seam sets `ContainerSpec.Output`;
     after `RunAttempt`, `<attempt>/output.log` holds exactly the bytes the
-    container streamed.
+    fake container wrote to it, plus the foreign bytes it wrote to stdout
+    outside any frame.
+22b. **The demuxer.** The fake container writes frames to `ContainerSpec.Stdout`:
+    two `event` lines, `result/output.json`, `result/hooks/events.jsonl`,
+    `result/result.json`, `end`. After `RunAttempt` the host's
+    `result/hooks/events.jsonl` holds the two lines (appended as they
+    arrived, then replaced by the whole file), `result.json` is the record
+    the adapter returned, and the file mtimes are the frames'. A frame named
+    `../x`, `/etc/x` or `other/x` is refused: nothing is written for it, the
+    attempt's record is `box-vanished` naming the violation when it came
+    before `result.json`. A `result/result.json` frame whose declared length
+    exceeds the bytes the fake wrote (a truncated stream) leaves no
+    `result.json` and the record is `box-vanished`. A stream over
+    `MaxAttemptStreamBytes` (the bound lowered for the test) is `box-vanished`
+    naming the bound; a well-formed stream after a violation is discarded.
+    A `link` frame under `result/` is refused as such (no link is written,
+    the attempt is `box-vanished` naming it); a `link` named
+    `sessions/evil` with an outside target followed by
+    `sessions/evil/pwned`: nothing lands outside the attempt directory and
+    the attempt is `box-vanished` naming the frame. With `result.json` shipped and no `end`,
+    the record stands and a warning is logged.
 
 23. **Loop-aware goldens.** The task-loop, exhaustion, and fan-out-cascade
     reports render in dependency order with loops folded (`review-cycle  2

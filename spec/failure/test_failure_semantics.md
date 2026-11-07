@@ -61,8 +61,9 @@ StepRunner and a recording HookRunner unless a real container is stated;
 11. **Interactive reconstruction.** After scenario 1, interactive re-entry on
     the failed step launches a container from the same image tag with the same
     network env, a single-key agent for the same identity, inputs in the env,
-    and the handoff dir mounted read-only; exiting the shell tears down the
-    agent and appends nothing to the journal.
+    and the handoff dir sent in as a frame stream rather than mounted;
+    exiting the shell tears down the agent and appends nothing to the
+    journal.
 12. **Failed generate item is ordinary.** One of three items fails: its record
     and its dependents' skips are normal journal entries; siblings complete.
     Resume re-invokes the data source, skips the completed instances by hash,

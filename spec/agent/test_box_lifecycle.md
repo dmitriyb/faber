@@ -4,7 +4,10 @@ Integration scenarios spanning PhaseSequencer, PreludeHooks, AgentInvoker, and
 ResultExtractor — one box from env contract to attempt record. (Unit tests
 with a fake CmdRunner live beside the code; these run the real `faber-box`
 binary as a plain process, no docker: scratch directories stand in for the
-mounts, and the env contract is set directly.)
+mounts, the env contract is set directly, and the binary's stdout is captured
+and demultiplexed by the harness with the contract reader into a scratch
+attempt directory — the records every scenario reads are the shipped ones,
+never the binary's own result directory.)
 
 ## Fixtures
 
@@ -150,15 +153,44 @@ mounts, and the env contract is set directly.)
     (or a profile violating the template rules) the env phase fails the step
     before any phase below runs.
 
-19. **Sessions bind ownership.** With `FABER_SESSIONS_DIR` set to a path
-    under the box `HOME`, the preamble chowns each intermediate component
-    from `HOME` down to the bind to the run user (the harness must be able to
-    write its own files beside the daemon-created, root-owned scaffolding);
-    unset, no such chown happens and the chown set is byte-identical to
-    before the variable existed. A `FABER_SESSIONS_DIR` outside `HOME`
-    contributes nothing — including a traversal (`/home/box/../../etc`) or a
-    trailing-slash spelling of `HOME` itself: the value is cleaned before the
-    containment walk, since the walk runs as root.
+19. **The stdout is frames and nothing else.** On the happy path the
+    captured stdout parses as frames end to end with no foreign bytes: the
+    hooks' and the stub agent's stdout (both print a marker line) appear in
+    the captured stderr, not in stdout; the frames are `result/output.json`,
+    `result/result.json` (last among `result/`), then `end`; the demuxed
+    `result.json` equals the one the binary wrote into its result directory.
+    The same holds for a failing prelude (scenario 2: `result/handoff.json`,
+    `result/handoff/bundle/CONTEXT.md`, `result/result.json`, `end`) and for
+    a halt (scenario 15). A frame name is never absolute and never carries
+    `..` — asserted over every captured name.
+20. **Events are streamed while the phases run.** A prelude writes two
+    lines into `$FABER_RESULT_DIR/hooks/events.jsonl` and then waits for a
+    release file; the harness reads the box's stdout as it streams and
+    writes the release only once both lines have arrived as `event` frames
+    — so the frames provably left the box while the hook was still running
+    (a tail that flushed only at the end would deadlock and fail). The final
+    `result/hooks/events.jsonl` file frame carries the lines. A line the
+    hook writes without a trailing newline is not sent as an event.
+21. **Sessions ship at the end.** With `FABER_SESSIONS_DIR` naming a
+    scratch directory holding `a.jsonl` with an old mtime and a `latest`
+    symlink to it: the frames carry `sessions/a.jsonl`
+    with that mtime and `sessions/latest` as a `link` whose body is the
+    target; the demuxed copy has the same mtime and link. Unset, no
+    `sessions/` frame is sent.
+22. **Receive writes under two roots and chowns.** `faber-box receive`
+    fed `handoff/handoff.json`, `handoff/bundle/CONTEXT.md` and
+    `sessions/a.jsonl` (with `FABER_SESSIONS_DIR` set) writes them under the
+    scratch stand-ins for `/faber/handoff` and the sessions dir with the
+    frames' mtimes; fed a name under any other root, or `sessions/` without
+    the variable, it exits nonzero naming the frame and writes nothing for
+    it; so does a `link` under `handoff/` (links are received under
+    `sessions/` only); a stream error (foreign bytes) exits nonzero. Every
+    write goes through an `os.Root` of its tree, as the host's demuxer does,
+    so a link planted by an earlier frame cannot redirect a later one. (The
+    chown — of both trees, of HOME, /workspace and /tmp, and of the path
+    from HOME down to the sessions directory, since a held box ran no
+    preamble — is asserted in the realinfra hold-and-receive test, where the
+    receive runs as root.)
 
 ## Edge cases
 

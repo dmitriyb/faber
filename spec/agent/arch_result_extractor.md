@@ -3,11 +3,21 @@
 ## What it is
 
 The final phase of the box plus a thin host-side boundary read. Its guarantee:
-when the container exits, the mounted result directory contains exactly one
-attempt record, `result.json`, in the failure module's ResultContract shape —
-already schema-validated against the template's declared output and checked
-against the bundle's declared side-effects. Failure is a record, not an
-absence: every exit path of the box, including every fail-stop, lands here.
+when the container exits, the attempt's result directory on the host holds
+exactly one attempt record, `result.json`, in the failure module's
+ResultContract shape — already schema-validated against the template's
+declared output and checked against the bundle's declared side-effects.
+Failure is a record, not an absence: every exit path of the box, including
+every fail-stop, lands here.
+
+The record does not cross the container boundary through a shared directory.
+The box writes it into its own `/faber/result` tmpfs and, as the last thing
+it does, ships that directory out over its standard output as frames (the
+frame channel, `impl_hook_result_contracts.md`), `result.json` last; the host
+demultiplexes the stream into the attempt directory. Nothing host-owned is
+mounted into the box, which is what makes the box work on a docker host
+whose user namespace is remapped. The container's stderr stays the human
+channel, live in `output.log`.
 
 ## Extraction and validation
 
@@ -74,12 +84,22 @@ gateway's state is the evidence.
 
 ## The host boundary
 
-After the container exits, the host re-parses `result.json` from the mounted
-directory and re-validates the payload schema before the record reaches
-threading, the journal, or the meter. The box is untrusted: a compromised
+After the container exits, the host re-parses `result.json` from the attempt
+directory the demuxer filled and re-validates the payload schema before the
+record reaches threading, the journal, or the meter. The box is untrusted: a compromised
 agent can forge its own record, and the boundary bounds the damage field by
 field:
 
+- **The stream is bounded and contained.** A frame's body is at most the
+  record bound, an attempt's whole stream at most `MaxAttemptStreamBytes`
+  (1 GiB), a frame's name must stay under `result/` or `sessions/`; a
+  violation closes the demuxer and later frames are discarded; one before
+  `result.json` (which the box sends after the other result files) leaves no
+  record and the attempt extracts as `box-vanished` naming the violation, one
+  after it (the sessions) leaves the record standing and is logged. A
+  truncated frame is an absent file (temporary name, rename on completion),
+  and every write resolves inside an `os.Root` of `result/` or `sessions/`,
+  so a link the box planted cannot redirect a later frame outside them.
 - **Reads are size-bounded.** Every container-written file the host reads
   (`result.json`, `handoff.json`, `usage.json`) has a hard byte bound;
   oversize is never a silent truncation. For the load-bearing records
@@ -103,7 +123,7 @@ field:
   must resolve strictly under the attempt's result directory (the same
   discipline the skill stager applies to names); an escaping pointer is
   dropped with a note in the record's detail — its parent is what the
-  interactive mode later bind-mounts into the operator's container, and the
+  interactive mode later sends into the operator's container, and the
   recovery-mode resolver re-checks containment under the run dir when it
   consumes the journaled pointer.
 - **Box-authored text is terminal-sanitized at render.** Reasons, details,

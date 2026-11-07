@@ -20,10 +20,12 @@ completes or the box fail-stops — no phase ever runs after a failed one.
 
 0. **Privileged preamble (drop to the run user).** The container starts as root
    because the writable mounts arrive root-owned: a fresh `/workspace` volume
-   and the tmpfs writables (`/faber/bundle`, `/tmp`, `HOME`) are created by the
-   daemon owned by root. Before any other phase, `faber-box` `chown`s exactly
-   those writable mounts to `FABER_RUN_UID:FABER_RUN_GID` (the host user's
-   uid:gid, so result-bind files stay host-owned), then drops privileges —
+   and the tmpfs writables (`/faber/result`, `/faber/bundle`, `/tmp`, `HOME`)
+   are created by the daemon owned by root. Before any other phase, `faber-box`
+   `chown`s exactly those writable mounts to `FABER_RUN_UID:FABER_RUN_GID`
+   (the uid:gid the box runs as inside the container; nothing host-owned is
+   shared with it, so the value is a container-namespace id and nothing
+   more), then drops privileges —
    `setgroups` to the run group **plus the forwarded-agent socket group when one
    was granted**, `setgid`, `setuid` — so every phase below, and the untrusted
    agent in particular, runs non-root. Keeping the socket group is load-bearing:
@@ -38,22 +40,15 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    binding's `--tmpfs` flag) is a **gated add to the chown set**: chowned only
    when it exists, so the dropped run user can write its `0600` secret files in
    phase 3. Absent file mode there is no such mount and the chown set is
-   unchanged. The sessions bind (present only when the host enabled session
-   capture, named by `FABER_SESSIONS_DIR` as a container path under `HOME`) is
-   another gated add: the bind itself arrives host-owned by the run user (the
-   host pre-created it, like the result dir), but the daemon creates its
-   *intermediate* path components inside the `HOME` tmpfs root-owned — so the
-   preamble chowns each component between the bind and `HOME` (exclusive,
-   walked bottom-up over the CLEANED value: this walk runs as root, and a raw
-   prefix check would let a hand-authored traversal chown outside `HOME`), or
-   the dropped harness could not write siblings (its own config files) next
-   to them; unset, or a value that cleans to anywhere outside `HOME`,
-   contributes nothing and the chown set is unchanged.
+   unchanged.
    File-mode secrets therefore presume the root-entry-then-drop path
    (or the box-lifecycle harness's writable `/run/secrets` override): the gated
    chown is what makes the root-owned tmpfs writable by the run user, so a
    genuinely non-root / no-drop box — where the preamble is a no-op and chowns
    nothing — must already own `/run/secrets` itself for phase 3 to write there.
+   There is no sessions bind to account for: with session capture on the
+   harness writes its transcripts under the `HOME` tmpfs as it always did, and
+   the box ships them at the end (see the frame channel below).
    The store paths
    of the toolset remain root-owned and read-only throughout. If the box is
    already non-root (a gateless local invocation with no root to drop), the
@@ -80,7 +75,7 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    `skills` leg on the template) the phase is a no-op — current behavior. See the
    Skills leg subsection below.
 2. **Env contract.** The box's inputs arrive as environment: `FABER_SKILL`,
-   `FABER_IDENTITY`, `FABER_RESULT_DIR` (a host-mounted directory),
+   `FABER_IDENTITY`, `FABER_RESULT_DIR` (the `/faber/result` tmpfs),
    `FABER_BUNDLE_DIR`, `FABER_OUTPUT_SCHEMA`, the optional `FABER_SKILLS_LINK`,
    the optional `FABER_SECRETS_STDIN` (set to `1` when file-mode tokens ride
    stdin), and one `FABER_INPUT_<SLOT>` per bound input slot. Every required
@@ -188,6 +183,30 @@ gap with two engine-owned pieces and nothing agent-specific baked into faber:
 Absent a `skills` leg, no mount and no `FABER_SKILLS_LINK` are emitted and the
 symlink phase is a no-op, so hook-only and skill-less templates are unchanged.
 
+## The frame channel
+
+The box's standard output belongs to the engine. `faber-box` opens a frame
+writer on it at start (the format and the reader are the contract package's,
+`impl_hook_result_contracts.md`, "The frame channel") and nothing else in the
+container writes there: the box's own log is on stderr, and the runner's
+`Stream` sends a child's stdout (hooks, the agent) to the box's stderr beside
+the child's own stderr. The container's stderr is therefore the whole human
+channel, live in the host's `output.log` as before; the container's stdout is
+frames and nothing else.
+
+Two things travel on it. While the user phases run, a tail over
+`$FABER_RESULT_DIR/hooks/events.jsonl` sends every complete new line as an
+`event` frame, so the hooks' account of the attempt reaches the operator's
+view as it is written. When `Main` returns — after the result phase, after a
+fail-stop, after a halt — the binary ships the result directory: every file
+under `/faber/result` as `result/<rel>`, `result.json` last; with
+`FABER_SESSIONS_DIR` set, every entry under that directory as
+`sessions/<rel>` with its mtime; then `end`. The host demultiplexes the
+stream into the attempt directory, so the records land exactly where they
+did when the directory was a bind, without the box ever touching a host
+path. A container killed mid-step has sent its events and nothing else; the
+host then has no record and synthesizes `box-vanished`, as it always did.
+
 ## The halt request
 
 A user phase may ask the run to stop for an operator without failing: a hook
@@ -218,9 +237,27 @@ A failed phase converges on one path: the sequencer writes a structured
 handoff record (`handoff.json`: phase, reason, hook exit code, stderr tail,
 secret-free inputs, workdir) plus a snapshot of the bundle directory into
 `FABER_RESULT_DIR`, writes the failed attempt record (`result.json`, error
-carrying the handoff pointer), and exits nonzero. The handoff lands in the
-*mounted* result directory precisely so that container removal cannot lose it;
-the interactive recovery mode reconstructs the box from it.
+carrying the handoff pointer), ships the directory over the frame channel
+and exits nonzero. The handoff is shipped with everything else precisely so
+that container removal cannot lose it; the interactive recovery mode
+reconstructs the box from it.
+
+## The two other entries
+
+The same binary has two small entries the interactive recovery mode uses,
+neither of which runs a phase. `faber-box hold` waits for a termination
+signal and exits: it is the entry of a reconstructed box that the operator
+enters through `docker exec`, so the container exists without a shell of its
+own. `faber-box receive` reads frames from its standard input and writes
+them into the container: `handoff/<rel>` under `/faber/handoff` (a tmpfs of
+the reconstructed box) and `sessions/<rel>` under `FABER_SESSIONS_DIR`,
+refusing any other first segment and any link outside `sessions/`, and
+resolving every write inside the tree it belongs to, then chowns both trees
+to `FABER_RUN_UID:FABER_RUN_GID`
+together with the writable mounts a held box's missing preamble left
+root-owned (the workspace, `/tmp`, `HOME`, the path down to the sessions
+directory). It runs as root through `docker exec` before the operator's own
+exec drops to the run user.
 
 ## What it never does
 

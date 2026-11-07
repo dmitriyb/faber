@@ -8,6 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"os"
+	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -69,18 +73,70 @@ func (d *dockerCLI) Load(ctx context.Context, tarball string) (string, error) {
 	return tag, nil
 }
 
-func (d *dockerCLI) ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
-	code, err := d.cli.runStreaming(ctx, output, stdin, args...)
+func (d *dockerCLI) ContainerRun(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	code, err := d.cli.runStreaming(ctx, stdout, stderr, stdin, args...)
 	if err != nil {
 		return code, err
 	}
 	if code == dockerDaemonExit {
 		// The docker client itself failed before the box command ran; that is
-		// an actuation failure, not step data. Its diagnostics went to output.
+		// an actuation failure, not step data. Its diagnostics went to stderr.
 		return code, &ExecError{Cmd: "docker", Args: args, ExitCode: code,
 			Err: errors.New("docker run failed before the container command ran")}
 	}
 	return code, nil
+}
+
+func (d *dockerCLI) Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	args := execArgs(name, argv, stdin != nil)
+	code, err := d.cli.runStreaming(ctx, stdout, stderr, stdin, args...)
+	if err != nil {
+		return code, err
+	}
+	if code == dockerDaemonExit {
+		return code, &ExecError{Cmd: "docker", Args: args, ExitCode: code,
+			Err: errors.New("docker exec failed before the command ran")}
+	}
+	return code, nil
+}
+
+// ExecTerminal attaches the operator's own terminal: the one adapter verb
+// that touches the process's standard streams, so it lives here beside the
+// other docker verbs rather than in the wiring. The exec's error is returned
+// verbatim; the operator saw whatever it printed.
+func (d *dockerCLI) ExecTerminal(ctx context.Context, name string, argv []string, env map[string]string, user, workdir string) error {
+	args := execTerminalArgs(name, argv, env, user, workdir)
+	cmd := exec.CommandContext(ctx, d.cli.name, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	d.cli.logger.DebugContext(ctx, "exec", "cmd", d.cli.name, "args", args)
+	return cmd.Run()
+}
+
+// execArgs is the docker exec argv: -i exactly when a stdin is attached.
+func execArgs(name string, argv []string, interactive bool) []string {
+	args := []string{"exec"}
+	if interactive {
+		args = append(args, "-i")
+	}
+	args = append(args, name)
+	return append(args, argv...)
+}
+
+// execTerminalArgs is the terminal-attached exec argv: -it, the user and
+// workdir when given, the env sorted, then the container and its argv.
+func execTerminalArgs(name string, argv []string, env map[string]string, user, workdir string) []string {
+	args := []string{"exec", "-it"}
+	if user != "" {
+		args = append(args, "-u", user)
+	}
+	if workdir != "" {
+		args = append(args, "-w", workdir)
+	}
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		args = append(args, "-e", k+"="+env[k])
+	}
+	args = append(args, name)
+	return append(args, argv...)
 }
 
 func (d *dockerCLI) Kill(ctx context.Context, name string) error {

@@ -9,14 +9,16 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/dmitriyb/faber/config"
 )
 
-// outputCap bounds captured container output. The box's machine-readable
-// artifact is the mounted result.json; captured output exists for the failure
+// outputCap bounds the captured human channel (the container's stderr). The
+// box's machine-readable artifact is the frame stream on its stdout, passed
+// through to the caller untouched; captured output exists for the failure
 // record and debugging, so only the tail is kept.
 const outputCap = 256 << 10
 
@@ -25,8 +27,9 @@ const outputCap = 256 << 10
 const killGracePeriod = 15 * time.Second
 
 // ContainerSpec is one fully resolved step-container invocation. Engine mounts are
-// exactly the declared ones (the result dir; faber-box, the hooks and the
-// skills tree are image content);
+// exactly the declared ones (the workspace volume and the tmpfs writables;
+// faber-box, the hooks and the skills tree are image content, the result
+// dir a tmpfs the box ships out over its stdout — no host path at all);
 // everything else — agent socket, the /run/secrets tmpfs, cache volume,
 // --network, --runtime — arrives inside Bindings, the security module's
 // ordered argv fragment, spliced verbatim. No ContainerSpec field maps to a
@@ -36,7 +39,7 @@ type ContainerSpec struct {
 	Name      string             // deterministic: faber-<run-id>-<slug(step-id)>-a<attempt>
 	Image     string             // the tag ImageBuilder produced
 	Resources config.ResourceDef // template limits; absent fields emit no flags
-	Mounts    []Mount            // engine mounts: result bind, ro hooks+entry, workspace volume, tmpfs writables
+	Mounts    []Mount            // engine mounts: workspace volume, tmpfs writables (result, bundle, tmp, home); template volumes
 	Env       map[string]string  // engine env; step-contract values, never secrets
 	Bindings  []string           // ordered argv fragment from the security module, verbatim
 	// StdinSecrets is the framed JSON file-mode secrets payload
@@ -46,10 +49,25 @@ type ContainerSpec struct {
 	// assembler — ContainerRunner never sets that flag (see impl_run_argv.md).
 	StdinSecrets []byte
 	Entry        []string // in-container entry argv; empty runs the image default
-	// Output, when non-nil, receives the container's combined stdout+stderr
-	// as it streams — the run-prep seam points it at the attempt's durable
-	// output.log. The bounded tail and the debug forwarding happen regardless.
+	// Output, when non-nil, receives the container's stderr (plus docker's
+	// own messages) as it streams — the human channel; the run-prep seam
+	// points it at the attempt's durable output.log. The bounded tail and the
+	// debug forwarding happen regardless.
 	Output io.Writer
+	// Stdout, when non-nil, receives the container's stdout untouched — the
+	// box's frame channel, which the run-prep seam demultiplexes. The runner
+	// never parses or buffers it; nil discards it.
+	Stdout io.Writer
+}
+
+// Session is what Enter runs inside a held box once the input stream is in:
+// the operator's entry (a shell, or the harness's resume argv), exec-level
+// env, the uid:gid the exec drops to, and the working directory.
+type Session struct {
+	Entry   []string
+	Env     map[string]string
+	User    string
+	Workdir string
 }
 
 // MountKind selects the docker flag a Mount emits. The container starts as root
@@ -76,7 +94,7 @@ type Mount struct {
 // exit code means belongs to the agent and failure modules.
 type ContainerResult struct {
 	ExitCode int
-	Output   []byte // bounded combined stdout+stderr tail
+	Output   []byte // bounded tail of the human channel (container stderr + docker's messages)
 	Started  time.Time
 	Duration time.Duration
 }
@@ -94,9 +112,10 @@ func NewContainerRunner(docker DockerClient, logger *slog.Logger) *ContainerRunn
 	return &ContainerRunner{docker: docker, logger: ensureLogger(logger).With("component", "container-runner")}
 }
 
-// Run starts the step container, streams combined output into a bounded
-// buffer (and the debug logger), waits, and returns the exit code as data —
-// err is reserved for actuation failures (daemon unreachable, cancellation).
+// Run starts the step container, streams its stderr into a bounded buffer
+// (and the debug logger, and the Output writer) and its stdout into the
+// Stdout writer, waits, and returns the exit code as data — err is reserved
+// for actuation failures (daemon unreachable, cancellation).
 // On context cancellation the container is killed by its deterministic name
 // on a fresh short-deadline context, and --rm removes it. Run always returns,
 // success or kill, so binding teardown hooks always get their turn.
@@ -118,6 +137,10 @@ func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (Containe
 		writers = append(writers, spec.Output)
 	}
 	sink := io.MultiWriter(writers...)
+	stdout := spec.Stdout
+	if stdout == nil {
+		stdout = io.Discard
+	}
 	var stdin io.Reader // nil unless a secrets payload rides stdin
 	if len(spec.StdinSecrets) > 0 {
 		// A *bytes.Reader, deliberately not an *os.File: os/exec then pipes it
@@ -135,7 +158,7 @@ func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (Containe
 		r.logger.WarnContext(ctx, "evict stale container before launch", "container", spec.Name, "err", err)
 	}
 	start := time.Now()
-	code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, sink)
+	code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, stdout, sink)
 	res := ContainerResult{ExitCode: code, Output: out.Bytes(), Started: start, Duration: time.Since(start)}
 	if ctx.Err() != nil {
 		// Killing the docker client process only detaches; stop the container
@@ -153,12 +176,54 @@ func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (Containe
 	return res, nil
 }
 
-// ContainerArgs exposes the assembled docker run argv for the one caller that
-// cannot go through Run: the integration wiring's interactive TTY variant,
-// which must attach the operator's terminal. Argv construction still lives
-// only here.
-func ContainerArgs(spec ContainerSpec) []string {
-	return buildArgs(spec)
+// Enter puts the operator inside a reconstructed box without mounting
+// anything from the host: the box starts detached on the entry `faber-box
+// hold`, the caller's frame stream goes in through `docker exec -i <name>
+// faber-box receive`, the operator's terminal attaches through a second
+// exec as the session says, and the container is killed by name when the
+// terminal exits (--rm removes it). The kill is deferred before the receive,
+// so a refused stream or a failed attach never leaves a held box behind. A
+// single `docker run -it` cannot take a stream first and a terminal after,
+// which is why this is a choreography of four verbs.
+func (r *ContainerRunner) Enter(ctx context.Context, spec ContainerSpec, input io.Reader, s Session) error {
+	if spec.Name == "" || spec.Image == "" {
+		return fmt.Errorf("infra: enter: spec requires a container name and an image tag")
+	}
+	if err := r.docker.Remove(ctx, spec.Name); err != nil {
+		r.logger.WarnContext(ctx, "evict stale container before launch", "container", spec.Name, "err", err)
+	}
+	spec.Entry = []string{holdEntry, "hold"}
+	spec.StdinSecrets = nil
+	stderr := slogWriter(r.logger, "container", spec.Name)
+	if code, err := r.docker.ContainerRun(ctx, detachArgs(spec), nil, io.Discard, stderr); err != nil || code != 0 {
+		return fmt.Errorf("infra: enter %s: start held box: exit %d: %w", spec.Name, code, err)
+	}
+	defer func() {
+		killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killGracePeriod)
+		defer cancel()
+		if kerr := r.docker.Kill(killCtx, spec.Name); kerr != nil && !isNoSuchContainer(kerr) {
+			r.logger.WarnContext(killCtx, "kill held box", "container", spec.Name, "err", kerr)
+		}
+	}()
+	// The receive's stderr is kept: a refused stream names the frame there,
+	// and the operator must see why the box was not entered.
+	tail := newTailBuffer(4 << 10)
+	if code, err := r.docker.Exec(ctx, spec.Name, []string{holdEntry, "receive"}, input, io.Discard, io.MultiWriter(stderr, tail)); err != nil || code != 0 {
+		return fmt.Errorf("infra: enter %s: receive exited %d: %w (%s)", spec.Name, code, err, strings.TrimSpace(string(tail.Bytes())))
+	}
+	return r.docker.ExecTerminal(ctx, spec.Name, s.Entry, s.Env, s.User, s.Workdir)
+}
+
+// holdEntry is the baked box binary, the entry of a held box and of the
+// receive exec. The agent module owns the path; it is restated here so infra
+// imports nothing above it.
+const holdEntry = "/faber/bin/faber-box"
+
+// detachArgs is buildArgs with -d after --rm: a held box runs detached and
+// takes no stdin.
+func detachArgs(spec ContainerSpec) []string {
+	args := buildArgs(spec)
+	return slices.Insert(args, 2, "-d")
 }
 
 // buildArgs assembles the docker run argv in the fixed, golden-testable

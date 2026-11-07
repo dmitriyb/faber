@@ -7,7 +7,8 @@ import (
 )
 
 // ExtractResult is the host boundary: after the container exits, re-parse
-// the attempt record from the mounted result directory and re-validate the
+// the attempt record from the attempt's result directory on the host (the
+// box shipped it there over its stdout) and re-validate the
 // payload against the template's declared output schema before the record
 // reaches threading, the journal, or the meter.
 //

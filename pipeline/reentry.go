@@ -5,8 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io/fs"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,29 +22,37 @@ import (
 	"github.com/dmitriyb/faber/security"
 )
 
-// InteractiveRunner launches one reconstructed box attached to the operator's
-// terminal. The wiring supplies the real implementation (a docker run with a
-// TTY over the assembled argv); tests fake it. It is the one pipeline seam
-// that inherently needs a terminal and a real container runtime.
-type InteractiveRunner interface {
-	RunInteractive(ctx context.Context, spec infra.ContainerSpec) error
+// InteractiveSession is one reconstructed box for the operator: the spec of
+// the held box, the frame stream it receives before the operator enters
+// (the failed attempt's handoff as handoff/<rel>, a saved transcript as
+// sessions/<rel>), and the exec that is the operator's entry.
+type InteractiveSession struct {
+	Spec    infra.ContainerSpec
+	Input   io.Reader
+	Session infra.Session
 }
 
-// containerHandoffDir is where the failed attempt's preserved state is
-// surfaced read-only inside the reconstructed box.
-const containerHandoffDir = "/faber/handoff"
+// InteractiveRunner enters one reconstructed box on the operator's terminal.
+// The wiring supplies the real implementation (infra's hold, receive, attach,
+// kill choreography); tests fake it. It is the one pipeline seam that
+// inherently needs a terminal and a real container runtime.
+type InteractiveRunner interface {
+	RunInteractive(ctx context.Context, s InteractiveSession) error
+}
 
 // Reentry implements the failure module's BoxReentry seam: it reconstructs a
 // failed step's box — same image tag, same security bindings, same resolved
-// inputs exported as the step env — with the entry program replaced by an
-// interactive shell and the failed attempt's handoff state mounted read-only.
-// Nothing is journaled; the session is observation, not execution.
+// inputs exported as the step env — held on faber-box hold, with the failed
+// attempt's handoff state (and a saved transcript) sent in over the frame
+// channel rather than mounted, and the operator's shell or the harness's
+// resumed session as a second exec. Nothing is journaled; the session is
+// observation, not execution.
 type Reentry struct {
 	IR          *config.IR // the run's IR, for the failed node's template
 	Images      ImageTagger
 	Bindings    BindingPreparer
 	Interactive InteractiveRunner
-	Shell       []string // in-container entry; default ["/bin/sh"]
+	Shell       []string // the operator's entry; default ["/bin/sh"]
 
 	// Security configuration, resolved by the wiring like AgentBoxes'. Note the
 	// absence of Services: re-entry is wired with a credential-free binding set
@@ -97,22 +106,17 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	if attempt < 1 {
 		attempt = 1
 	}
-	// The session dir and container name carry a per-session salt: two
-	// concurrent sessions on the same step must never share mounts (the
-	// second's setup would clear the first's live session dir) or collide on
-	// the container name.
+	// The scratch dir and container name carry a per-session salt: two
+	// concurrent sessions on the same step must never share binding scratch
+	// or collide on the container name.
 	salt := sessionSalt()
 	sessionDir := filepath.Join(t.RunDir, "interactive", pathToken(t.StepID)+"-"+salt)
-	resultDir := filepath.Join(sessionDir, "result")
 	scratchDir := filepath.Join(sessionDir, "scratch")
-	if err := os.MkdirAll(resultDir, 0o755); err != nil {
-		return fmt.Errorf("pipeline: interactive re-entry: %w", err)
-	}
 	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
 		return fmt.Errorf("pipeline: interactive re-entry: %w", err)
 	}
 	// A session is observation, not execution: nothing durable may accumulate
-	// under the salted dir, so it goes when the shell exits.
+	// under the salted dir, so it goes when the session exits.
 	defer os.RemoveAll(sessionDir)
 
 	spec, err := agent.BuildContainerSpec(agent.BoxSpec{
@@ -122,7 +126,6 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		Template:   node.Template,
 		Image:      tag,
 		Inputs:     inputs,
-		ResultDir:  resultDir,
 		SkillsLink: skillsLink(node.Template),
 		Model:      node.Template.Model,
 		Effort:     node.Template.Effort,
@@ -159,17 +162,16 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	defer func() { _ = asm.Teardown(ctx) }()
 	spec.Bindings = asm.Args
 
-	// The operator's entry replaces the phase sequencer; the failed attempt's
-	// preserved state rides along read-only. The entry is the harness's own
-	// resumed session — the profile's resume_argv over a COPY of the saved
-	// transcript — whenever the failed attempt saved one and the operator did
-	// not force --shell; the copy (never a bind of the archive) keeps the
-	// host record immutable while the ephemeral session diverges, and it is
-	// removed with the salted dir when the session exits. Fallback: the shell.
+	// The operator's entry is the harness's own resumed session — the
+	// profile's resume_argv over the saved transcript — whenever the failed
+	// attempt saved one and the operator did not force --shell; the
+	// transcript is sent into the box (never bound), so the host record stays
+	// immutable while the ephemeral session diverges. Fallback: the shell.
 	entry := r.Shell
 	if len(entry) == 0 {
 		entry = []string{"/bin/sh"}
 	}
+	savedSessions := ""
 	if inv := node.Template.Invoke; !t.Shell && inv != nil && len(inv.ResumeArgv) > 0 && inv.SessionDir != "" {
 		target := path.Join(contract.ContainerHome, inv.SessionDir)
 		if !strings.HasPrefix(target, contract.ContainerHome+"/") {
@@ -177,26 +179,77 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		}
 		saved := filepath.Join(t.RunDir, "boxes", pathToken(t.StepID), "attempt-"+strconv.Itoa(attempt), "sessions")
 		if hasEntries(saved) {
-			stateDir := filepath.Join(sessionDir, "harness-session")
-			if err := copySessionTree(stateDir, saved); err != nil {
-				return fmt.Errorf("pipeline: interactive re-entry: copy saved session: %w", err)
-			}
-			spec.Mounts = append(spec.Mounts, infra.Mount{Host: stateDir, Container: target})
-			// The raw entry replaces the sequencer, so no preamble exports
-			// HOME; pin it to the box home or the harness would look for its
-			// session under the image default.
-			spec.Env["HOME"] = contract.ContainerHome
+			savedSessions = saved
+			spec.Env[contract.EnvSessionsDir] = target
 			entry = inv.ResumeArgv
 		}
 	}
-	spec.Entry = entry
 	spec.Name = spec.Name + "-i" + strconv.Itoa(attempt) + "-" + salt
-	spec.Mounts = append(spec.Mounts, infra.Mount{
-		Host:      filepath.Dir(handoffPath),
-		Container: containerHandoffDir,
-		ReadOnly:  true,
+	// The box is held, not sequenced: the operator's entry is a second exec.
+	spec.Entry = []string{contract.ContainerEntry, "hold"}
+	// The handoff lands on a tmpfs of the held box; faber-box receive fills
+	// it from the stream and chowns it to the run user.
+	spec.Mounts = append(spec.Mounts, infra.Mount{Kind: infra.KindTmpfs, Container: contract.ContainerHandoffDir})
+
+	input, produced := handoffStream(filepath.Dir(handoffPath), savedSessions)
+	runErr := r.Interactive.RunInteractive(ctx, InteractiveSession{
+		Spec:  spec,
+		Input: input,
+		Session: infra.Session{
+			Entry: entry,
+			// The exec, not the sequencer, is the operator's entry, so no
+			// preamble exports HOME; pin it to the box home or the harness
+			// would look for its session under the image default.
+			Env:     map[string]string{"HOME": contract.ContainerHome},
+			User:    spec.Env[contract.EnvRunUID] + ":" + spec.Env[contract.EnvRunGID],
+			Workdir: contract.ContainerWorkspace,
+		},
 	})
-	return r.Interactive.RunInteractive(ctx, spec)
+	input.Close()
+	if perr := produced(); perr != nil {
+		// The operator's view was incomplete whatever the session did; the
+		// cause is host-side and must not be lost behind the exec's exit.
+		return errors.Join(runErr, fmt.Errorf("pipeline: interactive re-entry: handoff stream: %w", perr))
+	}
+	return runErr
+}
+
+// handoffStream is the frame stream a re-entry receives: the handoff
+// directory as handoff/<rel>, then the saved session (when one rides along)
+// as sessions/<rel> with its mtimes and links, then end. It is produced on
+// demand through a pipe, so a reader that never drains it costs nothing; a
+// file that cannot be sent fails the stream rather than silently thinning
+// the operator's view. produced waits for the producer and returns its
+// error; the caller closes the reader first, so a producer the runner never
+// drained ends too.
+func handoffStream(handoffDir, savedSessions string) (input *io.PipeReader, produced func() error) {
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		w := contract.NewFrameWriter(pw)
+		var skipped error
+		skip := func(p string, err error) {
+			if skipped == nil {
+				skipped = fmt.Errorf("%s: %w", p, err)
+			}
+		}
+		err := w.Tree(handoffDir, "handoff", "", false, skip)
+		if err == nil && savedSessions != "" {
+			err = w.Tree(savedSessions, "sessions", "", true, skip)
+		}
+		if err == nil {
+			err = skipped
+		}
+		if err == nil {
+			err = w.End()
+		}
+		pw.CloseWithError(err)
+		if errors.Is(err, io.ErrClosedPipe) {
+			err = nil // the runner stopped reading; not the stream's fault
+		}
+		done <- err
+	}()
+	return pr, func() error { return <-done }
 }
 
 // handoffInputs maps a handoff record's Inputs onto the slot-named run
@@ -224,53 +277,6 @@ func handoffInputs(h contract.Handoff, tpl *config.ResolvedTemplate) (map[string
 		}
 	}
 	return inputs, nil
-}
-
-// copySessionTree mirrors a saved harness-session tree for re-entry. Unlike
-// copyTree (world-readable real files, fresh mtimes, symlinks dropped), a session
-// copy must stay faithful to what the harness wrote: harnesses locate "the
-// most recent session" via file mtimes or a latest-pointer symlink, so a copy
-// that flattens either resumes the wrong conversation. File modes and mtimes
-// are preserved, symlinks are recreated verbatim (they resolve inside the
-// operator's own debug container), and other non-regular entries are skipped.
-func copySessionTree(dst, src string) error {
-	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, p)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			link, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, target)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if err := copyFile(target, p); err != nil {
-			return err
-		}
-		if err := os.Chmod(target, info.Mode().Perm()); err != nil {
-			return err
-		}
-		return os.Chtimes(target, info.ModTime(), info.ModTime())
-	})
 }
 
 // hasEntries reports whether dir exists and holds at least one entry — the
