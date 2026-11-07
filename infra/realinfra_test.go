@@ -444,6 +444,7 @@ func TestRealinfra_HoldAndReceive(t *testing.T) {
 		Mounts: []Mount{
 			{Kind: KindTmpfs, Container: "/faber/handoff"},
 			{Kind: KindTmpfs, Container: "/home/box"},
+			{Kind: KindTmpfs, Container: "/tmp"},
 			{Kind: KindVolume, Container: "/workspace"},
 		},
 		Env: map[string]string{"FABER_RUN_UID": "1000", "FABER_RUN_GID": "1000", "FABER_SESSIONS_DIR": "/home/box/.h/sessions"}}
