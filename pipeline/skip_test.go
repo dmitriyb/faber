@@ -16,7 +16,7 @@ import (
 func TestAdaptResultCarriesAgentSkipped(t *testing.T) {
 	box := BoxAttempt{NodeID: "w/x", Attempt: 1, Template: testTemplate("tpl")}
 	okRec := agent.Result{Status: agent.StatusOK, Payload: map[string]any{}, AgentSkipped: true}
-	if got := adaptResult(okRec, box, infra.RunResult{}, nil); !got.AgentSkipped {
+	if got := adaptResult(okRec, box, infra.ContainerResult{}, nil); !got.AgentSkipped {
 		t.Fatalf("ok adapt lost the marker: %+v", got)
 	}
 	failedRec := agent.Result{
@@ -24,7 +24,7 @@ func TestAdaptResultCarriesAgentSkipped(t *testing.T) {
 		Error:        &agent.ResultError{Reason: "missing-output", Detail: "x"},
 		AgentSkipped: true,
 	}
-	if got := adaptResult(failedRec, box, infra.RunResult{}, nil); !got.AgentSkipped {
+	if got := adaptResult(failedRec, box, infra.ContainerResult{}, nil); !got.AgentSkipped {
 		t.Fatalf("failed adapt lost the marker: %+v", got)
 	}
 }

@@ -7,7 +7,7 @@ Covers PreludeHooks and ResultExtractor.
 ```go
 type Hook struct {
     Phase string // "context" | "prelude"
-    Path  string // /faber/hooks/<phase>, bind-mounted read-only
+    Path  string // /faber/hooks/<phase>, image content baked by the image builder
 }
 
 func (b *Box) runHook(ctx context.Context, h Hook) error
@@ -90,8 +90,8 @@ refuses a mismatching value (absence is tolerated for direct sequencer
 invocations), and `WriteResultFile` stamps the writer's version into
 `result.json` (`contract` field), which the host asserts on extract. Since
 faber-box ships from the host as the same build, any mismatch is a
-box-binary-misconfiguration detector (a stale or foreign sequencer via the host config's `box_bin`) —
-not a migration path.
+stale-image detector (the baked faber-box predates or postdates this host:
+run `faber build`) — not a migration path.
 
 `FABER_INVOKE_PROFILE` (the concrete invocation-profile JSON) is the worked
 example of the additive rule: an env variable whose absence the box tolerates

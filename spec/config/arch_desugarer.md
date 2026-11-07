@@ -38,17 +38,15 @@ resolve; desugar performs the resolution, not the checking.
      (unchanged string field).
    - **skills** (named form): the named list `skills: [n1, n2, …]` → the ordered,
      name-deduped source set `[(n → skills[n].dir)]`, with the primary `skill` and
-     `skills_link`. Each source dir is *one skill's* `SKILL.md` tree; the run-prep
-     stager (see `spec/pipeline/impl_scheduling.md`, "Skills staging") composes
-     them into the single `/faber/skills` tree by **copying** each source into
-     `<stage>/<name>` as real, world-readable files — not a symlink farm, whose
-     targets would be host paths that dangle across the read-only bind into the
-     container. In the named form the Loader guarantees the primary `skill` is a
+     `skills_link`. Each source dir is *one skill's* `SKILL.md` tree; the image
+     builder (see `spec/infra/impl_nix_build.md`, "Engine inputs") composes
+     them into the single `/faber/skills` tree at build time by **copying** each
+     source into `<stage>/<name>` and baking the tree into the image. In the named form the Loader guarantees the primary `skill` is a
      member of the set.
    - **skills** (inline form): `skills: {dir, link}` → a *direct* skills-root
      `{root: dir, link}` (NOT a wrapped one-entry set). Here `dir` already is a
-     root of `<name>/SKILL.md` subtrees, so the stager mounts it directly at
-     `/faber/skills` with no `<name>` wrapper — byte-identical to today. The
+     root of `<name>/SKILL.md` subtrees, so the builder bakes it directly as
+     `/faber/skills` with no `<name>` wrapper. The
      primary `skill` in the inline form is a free-form prompt token, not a
      library reference, so no set-membership check applies.
    - **skills** (absent): no skills leg (current default).
@@ -120,33 +118,26 @@ The image, hooks, and identity aspects require **zero** IR change.
 The **one** shape delta is the source side of the skills leg: today's single
 `ResolvedTemplate.Skills{dir, link}` widens to the resolved
 `{sources: [(name, dir)…], root, primary, link}` (named form populates `sources`,
-inline form populates `root` — exactly one). This lets the run-prep stager compose
+inline form populates `root` — exactly one). This lets the image builder compose
 N named skill dirs into the one `/faber/skills` tree.
 
 What is byte-stable and what changes, stated plainly:
 
-- **infra's argv builder is byte-stable** — it still emits a single read-only
-  `/faber/skills` bind mount from one host path; it never learns there are N
-  sources.
+- **infra's argv builder emits no skills mount** — the tree is image content;
+  the image builder is what learns there are N sources.
 - **the agent box's symlink phase is byte-stable** — it still sees one
   `/faber/skills` tree of `<name>/SKILL.md` entries and symlinks
   `$HOME/<SkillsLink> → /faber/skills` from `FABER_SKILLS_LINK`.
-- **the pipeline run-prep seam changes** — the scheduler `steps` closure (the
-  `infra.RunSpec` assembly seam) now reads `ResolvedSkills.Sources`, builds a
-  per-attempt staging tree by **copying** each source into `<stage>/<name>` (real,
-  world-readable files — a symlink farm would dangle across the read-only bind into
-  the container), and sets that single stage dir as the one `Mount{Host}` for
-  `/faber/skills`. For the
-  inline `root` form it mounts the root directly (no staging, byte-identical to
-  today). This stager is specified in `spec/pipeline/impl_scheduling.md`
-  ("Skills staging").
+- **the image builder stages the tree** — at `faber build` it reads
+  `ResolvedSkills.Sources`, copies each source into `<stage>/<name>` beside the
+  rendered expression (real files) and bakes that tree as `/faber/skills`; for the
+  inline `root` form it bakes the root directly. The bytes fold into the image
+  tag. Specified in `spec/infra/impl_nix_build.md` ("Engine inputs").
 
-The image, hooks, and identity aspects require **zero** change anywhere. The
-decision is settled: option **(a)** — a single staged mount that preserves the
-`/faber/skills` mount contract and leaves infra untouched. (The rejected
-alternative of mounting each source at `/faber/skills/<name>`, which would have
-changed infra's argv builder to emit N mounts, is not adopted.) No other part of
-the IR changes.
+The hooks and identity aspects of the IR require **zero** change. The settled
+shape is one `/faber/skills` tree (the rejected alternative of one
+`/faber/skills/<name>` entry per source is not adopted). No other part of the IR
+changes.
 
 ## Determinism rules
 

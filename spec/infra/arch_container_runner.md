@@ -18,9 +18,7 @@ The assembly order is fixed and golden-testable:
 docker run --rm [-i] --name <deterministic-step-name>
   [--memory=<m>] [--cpus=<n>]                    # from run.resources, omitted if unset
   -v <result-host-dir>:<result-path>             # engine bind, rw (survives the container)
-  -v <hook-scripts-dir>:<hooks-path>:ro          # engine bind, read-only
-  -v <box-entry-binary>:<entry-path>:ro          # engine bind, read-only
-  -v <skills-dir>:/faber/skills:ro               # engine bind, read-only, only if the template declares skills
+                                                 # (faber-box, the hooks and /faber/skills are image content, never mounted)
   -v <workspace-path>                            # engine anonymous volume, disk-backed
   --tmpfs <bundle-path> --tmpfs /tmp --tmpfs <home>   # engine tmpfs, RAM
   -e KEY=VALUE ...                               # engine env, sorted keys, no secrets
@@ -52,11 +50,9 @@ infra splices.
 Mirroring the proven harness's run shape, the assembled argv never contains:
 
 - a docker socket mount (the box cannot reach the daemon);
-- any mount beyond the declared ones — the result-dir bind, the read-only hook
-  scripts, the read-only box entry binary (the agent module's sequencer,
-  mounted and set as the entry argv), the read-only skills directory at
-  `/faber/skills` (a sibling of `/faber/hooks`, present only when the template
-  declares a `skills` leg), the disk-backed `/workspace` volume, the tmpfs
+- any mount beyond the declared ones — the result-dir bind (the entry binary,
+  the hook scripts and the skills tree are image content under `/faber`, baked by
+  the image builder, never mounts), the disk-backed `/workspace` volume, the tmpfs
   writables (bundle, tmp, home), and whatever the binding fragment declares
   (agent socket, the `/run/secrets` tmpfs, cache volume);
 - `--privileged`, `--user`, host networking, or host PID/IPC namespaces (the

@@ -114,9 +114,9 @@ func encodeSecretsPayload(secrets map[string]Secret) ([]byte, error) {
 ```
 
 The caller that bridges security to infra does so as one atomic step: it copies
-`Assembled.SecretsStdin` into `RunSpec.StdinSecrets` and, in the same move, sets
+`Assembled.SecretsStdin` into `ContainerSpec.StdinSecrets` and, in the same move, sets
 the non-secret signal `FABER_SECRETS_STDIN=1` (`contract.EnvSecretsStdin`) in
-`RunSpec.Env` so the box knows a payload is coming. These two MUST be written
+`ContainerSpec.Env` so the box knows a payload is coming. These two MUST be written
 together — a non-empty `StdinSecrets` with the flag unset makes the box skip its
 stdin read (phase 3 gates on the flag) and silently lose the credential, so the
 payload and its signal are never set one without the other. Infra attaches stdin (`docker run -i`),

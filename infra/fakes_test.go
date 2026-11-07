@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -120,7 +121,8 @@ type fakeNix struct {
 	evalResults   []json.RawMessage
 	evalErr       error
 	buildExprs    []string
-	buildOverlays [][]byte // staged overlay.nix bytes per Build (nil when absent)
+	buildOverlays [][]byte            // staged overlay.nix bytes per Build (nil when absent)
+	buildTrees    []map[string][]byte // every other staged file per Build: faber-box, hooks/<slot>, skills/<rel>
 	buildOut      []string
 	buildErr      error
 	buildDelay    time.Duration // widens the single-flight race window
@@ -152,7 +154,21 @@ func (f *fakeNix) Eval(ctx context.Context, exprFile string, args []string) (jso
 func (f *fakeNix) Build(ctx context.Context, exprFile string) ([]string, error) {
 	expr, _ := readStaged(exprFile)
 	overlay, _ := os.ReadFile(filepath.Join(filepath.Dir(exprFile), stagedOverlayName))
+	tree := map[string][]byte{}
+	dir := filepath.Dir(exprFile)
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, path)
+		if rel == "expr.nix" || rel == stagedOverlayName {
+			return nil
+		}
+		tree[filepath.ToSlash(rel)], _ = os.ReadFile(path)
+		return nil
+	})
 	f.mu.Lock()
+	f.buildTrees = append(f.buildTrees, tree)
 	f.buildExprs = append(f.buildExprs, expr)
 	f.buildOverlays = append(f.buildOverlays, overlay)
 	delay, out, err := f.buildDelay, f.buildOut, f.buildErr

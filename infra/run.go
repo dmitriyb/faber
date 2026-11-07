@@ -24,14 +24,15 @@ const outputCap = 256 << 10
 // cancellation.
 const killGracePeriod = 15 * time.Second
 
-// RunSpec is one fully resolved step-container invocation. Engine mounts are
-// exactly the declared ones (result dir, hook scripts, box entry binary);
+// ContainerSpec is one fully resolved step-container invocation. Engine mounts are
+// exactly the declared ones (the result dir; faber-box, the hooks and the
+// skills tree are image content);
 // everything else — agent socket, the /run/secrets tmpfs, cache volume,
 // --network, --runtime — arrives inside Bindings, the security module's
-// ordered argv fragment, spliced verbatim. No RunSpec field maps to a
+// ordered argv fragment, spliced verbatim. No ContainerSpec field maps to a
 // docker-socket mount, --privileged, or host namespaces: the discipline is
 // structural.
-type RunSpec struct {
+type ContainerSpec struct {
 	Name      string             // deterministic: faber-<run-id>-<slug(step-id)>-a<attempt>
 	Image     string             // the tag ImageBuilder produced
 	Resources config.ResourceDef // template limits; absent fields emit no flags
@@ -71,9 +72,9 @@ type Mount struct {
 	ReadOnly        bool
 }
 
-// RunResult is the mechanical outcome of one container run. Deciding what an
+// ContainerResult is the mechanical outcome of one container run. Deciding what an
 // exit code means belongs to the agent and failure modules.
-type RunResult struct {
+type ContainerResult struct {
 	ExitCode int
 	Output   []byte // bounded combined stdout+stderr tail
 	Started  time.Time
@@ -99,16 +100,16 @@ func NewContainerRunner(docker DockerClient, logger *slog.Logger) *ContainerRunn
 // On context cancellation the container is killed by its deterministic name
 // on a fresh short-deadline context, and --rm removes it. Run always returns,
 // success or kill, so binding teardown hooks always get their turn.
-func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
+func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
 	if spec.Name == "" || spec.Image == "" {
-		return RunResult{}, fmt.Errorf("infra: run: spec requires a container name and an image tag")
+		return ContainerResult{}, fmt.Errorf("infra: run: spec requires a container name and an image tag")
 	}
 	// A relative bind host would be read by docker as a NAMED VOLUME — the
 	// mount silently detaches from the intended host dir (the result channel
 	// above all). Absolutizing is the wiring's job; this is the floor.
 	for _, m := range spec.Mounts {
 		if m.Kind == KindBind && m.Host != "" && !filepath.IsAbs(m.Host) {
-			return RunResult{}, fmt.Errorf("infra: run %s: bind mount host path %q is relative (docker would read it as a named volume); absolutize it at the wiring", spec.Name, m.Host)
+			return ContainerResult{}, fmt.Errorf("infra: run %s: bind mount host path %q is relative (docker would read it as a named volume); absolutize it at the wiring", spec.Name, m.Host)
 		}
 	}
 	out := newTailBuffer(outputCap)
@@ -135,7 +136,7 @@ func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, err
 	}
 	start := time.Now()
 	code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, sink)
-	res := RunResult{ExitCode: code, Output: out.Bytes(), Started: start, Duration: time.Since(start)}
+	res := ContainerResult{ExitCode: code, Output: out.Bytes(), Started: start, Duration: time.Since(start)}
 	if ctx.Err() != nil {
 		// Killing the docker client process only detaches; stop the container
 		// itself, addressable by its deterministic name.
@@ -152,11 +153,11 @@ func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, err
 	return res, nil
 }
 
-// RunArgs exposes the assembled docker run argv for the one caller that
+// ContainerArgs exposes the assembled docker run argv for the one caller that
 // cannot go through Run: the integration wiring's interactive TTY variant,
 // which must attach the operator's terminal. Argv construction still lives
 // only here.
-func RunArgs(spec RunSpec) []string {
+func ContainerArgs(spec ContainerSpec) []string {
 	return buildArgs(spec)
 }
 
@@ -168,7 +169,7 @@ func RunArgs(spec RunSpec) []string {
 // /run/secrets), then the image and the entry argv. The file-mode token is not
 // a mount: it rides StdinSecrets on the container's stdin. Pure function, no
 // I/O — -i's presence is a pure function of the spec too.
-func buildArgs(spec RunSpec) []string {
+func buildArgs(spec ContainerSpec) []string {
 	args := []string{"run", "--rm"}
 	if len(spec.StdinSecrets) > 0 {
 		args = append(args, "-i") // attach stdin for the secrets payload

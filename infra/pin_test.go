@@ -13,22 +13,22 @@ import (
 // defaultPin and produces the SAME tag as a build whose pin equals that default
 // — the byte-stability guarantee for pin-less toolsets.
 func TestPerBuildPinAffectsTag(t *testing.T) {
-	b := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testLogger())
+	b := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testBox(t), testLogger())
 	pkgs := []string{"git", "go"}
 
 	noPin := config.BuildDef{Packages: pkgs}
 	explicitDefault := config.BuildDef{Packages: pkgs, Pin: &config.PinDef{Rev: testPin().Rev, SHA256: testPin().SHA256}}
 	newerPin := config.BuildDef{Packages: pkgs, Pin: &config.PinDef{Rev: "25.11", SHA256: "sha256:deadbeef"}}
 
-	noPinTag, err := b.ImageTag("box", noPin)
+	noPinTag, err := b.ImageTag("box", noPin, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaultTag, err := b.ImageTag("box", explicitDefault)
+	defaultTag, err := b.ImageTag("box", explicitDefault, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pinnedTag, err := b.ImageTag("box", newerPin)
+	pinnedTag, err := b.ImageTag("box", newerPin, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestPerBuildPinAffectsTag(t *testing.T) {
 // Verifies resolvePin: a build's pin overrides the default; a nil pin falls back
 // to the compiled-in default.
 func TestResolvePinFallback(t *testing.T) {
-	b := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testLogger())
+	b := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testBox(t), testLogger())
 
 	if got := b.resolvePin(config.BuildDef{}); got != testPin() {
 		t.Fatalf("nil pin must resolve to the default, got %+v", got)

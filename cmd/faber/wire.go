@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/failure"
@@ -41,11 +42,11 @@ func stateDir(hc config.HostConfig) string {
 	return abs
 }
 
-// boxBinary locates the faber-box sequencer to bind-mount into containers:
-// next to the faber executable unless the host config's box_bin overrides.
-// Absolutized for the same docker -v reason as stateDir. The override comes
-// ONLY from the explicit host file — a binary that runs as root inside every
-// box must never be swappable through ambient process environment.
+// boxBinary locates the faber-box sequencer the image builder bakes into
+// every image: next to the faber executable unless the host config's box_bin
+// overrides. The override comes ONLY from the explicit host file — a binary
+// that runs as root inside every box must never be swappable through ambient
+// process environment.
 func boxBinary(hc config.HostConfig) string {
 	b := hc.BoxBin
 	if b == "" {
@@ -77,11 +78,11 @@ func wireDeps(stdout, stderr io.Writer) (config.Deps, error) {
 	}
 	docker := infra.NewDockerCLI(wlog)
 	builder := infra.NewImageBuilder(docker, infra.NewNixCLI(wlog), infra.DefaultNixpkgsPin(),
-		filepath.Join(stateDir(hc), "infra"), wlog)
+		filepath.Join(stateDir(hc), "infra"), boxBinary(hc), wlog)
 	store := failure.NewStore(filepath.Join(stateDir(hc), "runs"), wlog)
 	view := tui.New(tui.Options{
 		Store:  store,
-		Images: imageProbe{tags: imageTagger{b: builder}, docker: docker},
+		Images: imageProbe{b: builder, docker: docker},
 		Keys:   keyProbe{locator: security.NewKeyLocator(wlog)},
 		LogDir: filepath.Join(stateDir(hc), "logs"),
 	})
@@ -244,14 +245,14 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 		}
 	}
 
-	entry := boxBinary(w.host)
-	images := imageTagger{b: w.builder}
+	// One tag memo per run: faber-box and the hooks are read once, and an
+	// edit mid-run cannot move a node's input hash.
+	images := newImageTagger(w.builder)
 	ex := &pipeline.Executor{
 		Store: store,
 		Boxes: &pipeline.AgentBoxes{
 			Containers:    infra.NewContainerRunner(w.docker, logger),
 			Bindings:      bindings,
-			EntryBinary:   entry,
 			Network:       network,
 			Remote:        remote,
 			Identities:    cfg.Identities,
@@ -279,7 +280,6 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			Images:      images,
 			Bindings:    reentryBindings,
 			Interactive: terminalRunner{},
-			EntryBinary: entry,
 			Network:     network,
 			Remote:      remote,
 			Identities:  cfg.Identities,
@@ -325,11 +325,16 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 // imageProbe is the TUI's images pane seam: the tag a template resolves to
 // and whether the daemon holds it — the run preflight, shown before a run.
 type imageProbe struct {
-	tags   imageTagger
+	b      *infra.ImageBuilder
 	docker infra.DockerClient
 }
 
-func (p imageProbe) Tag(t *config.ResolvedTemplate) (string, error) { return p.tags.Tag(t) }
+// Tag recomputes on every probe — the view re-probes to pick up edits, so it
+// gets a fresh tagger each time; only a run memoizes (newImageTagger per
+// Execute). The builder's own faber-box cache keeps the big read cheap.
+func (p imageProbe) Tag(t *config.ResolvedTemplate) (string, error) {
+	return newImageTagger(p.b).Tag(t)
+}
 func (p imageProbe) Exists(ctx context.Context, tag string) (bool, error) {
 	return p.docker.ImageExists(ctx, tag)
 }
@@ -350,24 +355,46 @@ func (p keyProbe) Resolve(ctx context.Context, role string, def config.IdentityD
 }
 
 // imageTagger adapts infra's deterministic tag derivation to the pipeline's
-// journal-hash seam. Tags are computable without docker or nix.
+// journal-hash seam. Tags are computable without docker or nix. Each tagger
+// memoizes by template name: a run reads faber-box, the hooks and the skills
+// once, and an edit mid-run cannot move a node's input hash.
 type imageTagger struct {
-	b *infra.ImageBuilder
+	b    *infra.ImageBuilder
+	mu   *sync.Mutex
+	tags map[string]string
+}
+
+func newImageTagger(b *infra.ImageBuilder) imageTagger {
+	return imageTagger{b: b, mu: &sync.Mutex{}, tags: map[string]string{}}
 }
 
 func (t imageTagger) Tag(template *config.ResolvedTemplate) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if tag, ok := t.tags[template.Name]; ok {
+		return tag, nil
+	}
 	// Carry template.Pin into the reconstructed BuildDef so the run/resume tag
 	// resolves the SAME pin as `faber build`. Drop it and a pinned toolset's tag
 	// falls back to the default pin and diverges from the built image's tag.
-	return t.b.ImageTag(template.Name, config.BuildDef{Packages: template.Packages, Overlay: template.Overlay, Pin: template.Pin})
+	// The hooks and skills ride beside it for the same reason: the resolved
+	// template carries exactly what `faber build` baked.
+	tag, err := t.b.ImageTag(template.Name,
+		config.BuildDef{Packages: template.Packages, Overlay: template.Overlay, Pin: template.Pin},
+		infra.ImageInputs{Hooks: template.Hooks, Skills: template.Skills})
+	if err != nil {
+		return "", err
+	}
+	t.tags[template.Name] = tag
+	return tag, nil
 }
 
 // terminalRunner is the interactive TTY variant of the container run: the
 // same argv infra assembles, plus -it, attached to the operator's terminal.
 type terminalRunner struct{}
 
-func (terminalRunner) RunInteractive(ctx context.Context, spec infra.RunSpec) error {
-	args := infra.RunArgs(spec)
+func (terminalRunner) RunInteractive(ctx context.Context, spec infra.ContainerSpec) error {
+	args := infra.ContainerArgs(spec)
 	argv := append([]string{args[0], "-it"}, args[1:]...)
 	cmd := exec.CommandContext(ctx, "docker", argv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

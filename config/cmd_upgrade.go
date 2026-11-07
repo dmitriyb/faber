@@ -325,7 +325,7 @@ func resolveSelfPath() (string, error) {
 
 // resolveBoxPath is the exact on-disk path of the installed faber-box. The
 // integration layer resolves it with the same host-config-box_bin-or-next-to-faber
-// convention it uses to bind-mount it (cmd/faber/wire.go) and injects it as
+// convention the image builder bakes it with (cmd/faber/wire.go) and injects it as
 // deps.BoxBinary; here it is only symlink-resolved. An unwired box path is a
 // binary that cannot upgrade its coupled half — a hard error, not a partial
 // upgrade.

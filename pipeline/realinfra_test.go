@@ -10,7 +10,7 @@ package pipeline
 //
 // What it verifies on a real machine (test_pipeline_execution.md's "whatever
 // needs real containers" remainder):
-//   - AgentBoxes launches a real container from BuildRunSpec with the
+//   - AgentBoxes launches a real container from BuildContainerSpec with the
 //     security fragment spliced, and the mounted result channel round-trips:
 //     the box's phase sequencer writes a structured record on its exit path
 //     (here an early phase failure — no hooks, no agent CLI on PATH), and
@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func buildFaberBox(t *testing.T) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "faber-box")
 	cmd := exec.Command("go", "build", "-o", out, "github.com/dmitriyb/faber/cmd/faber-box")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
 	if raw, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build faber-box: %v\n%s", err, raw)
 	}
@@ -65,20 +66,33 @@ func realBoxes(t *testing.T) *AgentBoxes {
 		logger,
 	)
 	return &AgentBoxes{
-		Containers:  infra.NewContainerRunner(docker, logger),
-		Bindings:    bindings,
-		EntryBinary: buildFaberBox(t),
-		Log:         logger,
+		Containers: infra.NewContainerRunner(docker, logger),
+		Bindings:   bindings,
+		Log:        logger,
 	}
 }
 
+// realImage builds the minimal toolset image with the real faber-box baked
+// in — what every box runs from now that nothing is mounted for it.
+func realImage(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	logger := discardLogger()
+	b := infra.NewImageBuilder(infra.NewDockerCLI(logger), infra.NewNixCLI(logger), infra.DefaultNixpkgsPin(), t.TempDir(), buildFaberBox(t), logger)
+	tag, err := b.Build(ctx, "realinfra-smoke", config.BuildDef{Packages: []string{"coreutils"}}, infra.ImageInputs{})
+	if err != nil {
+		t.Fatalf("build the smoke image: %v", err)
+	}
+	return tag
+}
+
 // Verifies ae796d2a1503 on a real machine: the composed box run produces a
-// structured record through the mounted result directory even when its
+// structured record through the result directory even when its
 // phases fail — failure is a record, not an absence.
 func TestRealInfra_BoxRoundTrip(t *testing.T) {
-	requireBinaries(t, "docker", "go")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	requireBinaries(t, "docker", "go", "nix")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
+	image := realImage(t, ctx)
 
 	tpl := &config.ResolvedTemplate{
 		Name:   "smoke",
@@ -94,7 +108,7 @@ func TestRealInfra_BoxRoundTrip(t *testing.T) {
 		NodeID:   "w/smoke",
 		Attempt:  1,
 		Template: tpl,
-		Image:    "busybox:latest",
+		Image:    image,
 		Inputs:   map[string]any{},
 	})
 	if err != nil {

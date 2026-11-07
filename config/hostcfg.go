@@ -18,9 +18,9 @@ import (
 // wrong channel for values like the box binary path, where silent
 // substitution is exactly the attack to refuse.
 type HostConfig struct {
-	// BoxBin is the faber-box sequencer binary bind-mounted into every box.
-	// Empty means the default: next to the faber executable. Must be absolute
-	// when set (docker reads a relative -v host path as a named volume).
+	// BoxBin is the faber-box sequencer binary `faber build` bakes into every
+	// image. Empty means the default: next to the faber executable. Must be
+	// absolute when set: a per-machine fact, never resolved against a cwd.
 	BoxBin string `json:"box_bin,omitempty"`
 
 	// AgentSocketGroup, when non-empty, is passed as --group-add on every box

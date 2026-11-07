@@ -2,7 +2,7 @@
 // contributions that make every real control external to the container. It
 // produces the ordered, pre-tokenized docker-run argv fragment that infra's
 // ContainerRunner splices verbatim between its engine flags and the image tag
-// (RunSpec.Bindings), plus the setup/teardown lifecycle hooks that must
+// (ContainerSpec.Bindings), plus the setup/teardown lifecycle hooks that must
 // bracket the container's life.
 //
 // Four bindings and one knob compose, in a fixed order, into a BindingSet:

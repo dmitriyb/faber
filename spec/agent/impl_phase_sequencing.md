@@ -5,7 +5,8 @@ Covers PhaseSequencer and AgentInvoker.
 ## The binary (cmd/faber-box, internal/agent)
 
 `faber-box` is built `CGO_ENABLED=0 GOOS=linux` from the same module as the
-host engine and bind-mounted read-only by the runner; it shares the config
+host engine and baked into every template image by the image builder at
+`/faber/bin/faber-box`; it shares the config
 module's schema types (the output schema) but imports nothing host-only.
 
 ```go

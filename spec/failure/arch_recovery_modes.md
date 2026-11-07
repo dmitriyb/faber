@@ -40,8 +40,9 @@ with `--fresh` as the escape:
    Journals written before the key keep the strict rule.
 4. **Image inputs** — every reachable template's image tag is re-derived and
    compared against the header's recorded tags; a difference (a bumped
-   default pin, image-schema change, or overlay edit — inputs the IR hash
-   cannot see) refuses rather than silently invalidating every journal key.
+   default pin, an image-schema change, an overlay, hook or skill edit, or a
+   faber upgrade that changed the baked faber-box — inputs the IR hash cannot
+   see) refuses rather than silently invalidating every journal key.
 
 Before any dispatch, resume clears a stale pause marker from the run
 directory (under the run lock it already holds): a `faber runs pause` issued

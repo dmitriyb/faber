@@ -8,15 +8,20 @@ user-supplied Nix file adding derivations) — is compiled into an immutable
 docker image with no Dockerfile: ImageBuilder renders a
 `dockerTools.buildLayeredImage` expression over a pinned nixpkgs revision,
 builds the tarball via `NixClient`, and loads it into the docker daemon via
-`DockerClient`. The image is a pure function of the toolset: no repository
-content, no secrets, no config — those all arrive at run time as params and
-bindings. One image serves any repo.
+`DockerClient`. The image is a pure function of the toolset and of the engine's
+own static inputs — the `faber-box` entry binary, the template's in-box hook
+scripts and its skills tree, baked as one layer so the box shares no host path
+for them: no repository content, no secrets, no config — those all arrive at run
+time as params and bindings. One image serves any repo.
 
 ## Deterministic tagging
 
 Every image is tagged `faber/<template>:<toolset-hash>`, where the toolset hash
 is derived from exactly the inputs that determine image content: the *resolved*
-nixpkgs pin revision, the sorted package list, and the overlay file's content hash.
+nixpkgs pin revision, the sorted package list, the overlay file's content hash,
+the faber-box binary's bytes, each declared in-box hook's bytes (context, prelude,
+postlude — `on_failure` runs on the host and is not image content), every regular
+file of the skills tree (path, executable bit, bytes), and the image schema version.
 The tag is computed without building, so:
 
 - `faber build` skips a template whose tag already exists in the daemon
@@ -61,6 +66,35 @@ no image under the recomputed tag and the journal input-hash never matches. A
 pin-*less* template stays byte-stable either way (nil → default at both build and
 run); the break is only for pinned toolsets. See `impl_nix_build.md`, "Run-time tag
 reconstruction".
+
+## Engine inputs as image content
+
+Three inputs the box needs are static — they change when the operator edits
+them, not per run — and were once shared with the box as read-only host binds:
+`faber-box`, the hook scripts and the skills tree. A read-only host bind is only
+readable by the box user when the host file happens to be world-readable, and on
+a docker host with userns-remap the box user is a different host uid altogether.
+So the image builder bakes them: one `runCommand` derivation in `contents`
+placing `/faber/bin/faber-box`, `/faber/hooks/<slot>` for each declared in-box
+slot and `/faber/skills/…` (named sources farmed as `<name>/…`, an inline root as
+is) into the image root, root-owned, executable bits kept — Nix store content
+like every package, immutable at runtime. `/faber` stays a plain directory so the
+daemon's `/faber/result` and `/faber/bundle` mount points keep working.
+
+The files are staged beside the rendered expression exactly as the overlay is and
+imported by relative path, their bytes read once per tag or build so what the tag
+hashed is what the build imports. `faber build` refuses, before staging, a
+faber-box that is not a linux ELF for the image's architecture (a darwin build on
+a darwin host), a hook that fails the config module's hook-file check (absent,
+not regular, not executable, no `#!`), and a skills entry that is not a
+directory — each naming the template and the path. The faber-box binary comes
+from host.json `box_bin` (default: next to the faber executable), which now means
+"the binary to bake", not "the binary to mount".
+
+Consequences, by design: a faber upgrade moves every tag (the run preflight says
+`faber build` first); a hook or skill edit moves its template's tag, so a run
+that failed before the edit refuses to resume and `--fresh` starts over, the way
+an overlay edit already behaves.
 
 ## The overlay seam
 

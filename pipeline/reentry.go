@@ -26,7 +26,7 @@ import (
 // TTY over the assembled argv); tests fake it. It is the one pipeline seam
 // that inherently needs a terminal and a real container runtime.
 type InteractiveRunner interface {
-	RunInteractive(ctx context.Context, spec infra.RunSpec) error
+	RunInteractive(ctx context.Context, spec infra.ContainerSpec) error
 }
 
 // containerHandoffDir is where the failed attempt's preserved state is
@@ -43,7 +43,6 @@ type Reentry struct {
 	Images      ImageTagger
 	Bindings    BindingPreparer
 	Interactive InteractiveRunner
-	EntryBinary string
 	Shell       []string // in-container entry; default ["/bin/sh"]
 
 	// Security configuration, resolved by the wiring like AgentBoxes'. Note the
@@ -116,27 +115,17 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	// under the salted dir, so it goes when the shell exits.
 	defer os.RemoveAll(sessionDir)
 
-	skillsHost, skillsCleanup, err := stageSkills(node.Template.Skills, sessionDir)
-	if err != nil {
-		return fmt.Errorf("pipeline: interactive re-entry: stage skills: %w", err)
-	}
-	defer skillsCleanup()
-	spec, err := agent.BuildRunSpec(agent.BoxSpec{
-		RunID:        t.Header.RunID + "-interactive",
-		NodeID:       t.StepID,
-		Attempt:      attempt,
-		Template:     node.Template,
-		Image:        tag,
-		Inputs:       inputs,
-		ResultDir:    resultDir,
-		EntryBinary:  r.EntryBinary,
-		ContextHook:  node.Template.Hooks.Context,
-		PreludeHook:  node.Template.Hooks.Prelude,
-		PostludeHook: node.Template.Hooks.Postlude,
-		SkillsDir:    skillsHost,
-		SkillsLink:   skillsLink(node.Template),
-		Model:        node.Template.Model,
-		Effort:       node.Template.Effort,
+	spec, err := agent.BuildContainerSpec(agent.BoxSpec{
+		RunID:      t.Header.RunID + "-interactive",
+		NodeID:     t.StepID,
+		Attempt:    attempt,
+		Template:   node.Template,
+		Image:      tag,
+		Inputs:     inputs,
+		ResultDir:  resultDir,
+		SkillsLink: skillsLink(node.Template),
+		Model:      node.Template.Model,
+		Effort:     node.Template.Effort,
 	})
 	if err != nil {
 		return err
@@ -238,8 +227,7 @@ func handoffInputs(h contract.Handoff, tpl *config.ResolvedTemplate) (map[string
 }
 
 // copySessionTree mirrors a saved harness-session tree for re-entry. Unlike
-// the skills stager's copyTree (world-readable real files, fresh mtimes,
-// symlinks dropped — the right shape for a read-only engine mount), a session
+// copyTree (world-readable real files, fresh mtimes, symlinks dropped), a session
 // copy must stay faithful to what the harness wrote: harnesses locate "the
 // most recent session" via file mtimes or a latest-pointer symlink, so a copy
 // that flattens either resumes the wrong conversation. File modes and mtimes

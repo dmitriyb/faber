@@ -7,8 +7,8 @@ inside the sealed container.
 ```
 host: step spec (resolved template + bound inputs)
         │  box contract: FABER_* env (incl. FABER_SKILLS_LINK,
-        │  FABER_SECRETS_STDIN), result-dir mount, hook mounts, ro
-        │  /faber/skills mount, faber-box mount; binding fragments
+        │  FABER_SECRETS_STDIN), result-dir mount; faber-box, the hooks
+        │  and /faber/skills are image content; binding fragments
         │  (network/remote/identity/credentials) composed by security,
         │  argv assembled by infra; file-mode tokens streamed on stdin
         ▼

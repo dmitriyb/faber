@@ -14,8 +14,8 @@ import (
 	"github.com/dmitriyb/faber/infra"
 )
 
-func testRunResult() infra.RunResult {
-	return infra.RunResult{ExitCode: 0, Started: testBase, Duration: 2e9}
+func testRunResult() infra.ContainerResult {
+	return infra.ContainerResult{ExitCode: 0, Started: testBase, Duration: 2e9}
 }
 
 // FuzzExtractAdapt (review §5.2): arbitrary bytes written as result.json,

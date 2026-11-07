@@ -3,7 +3,7 @@
 | Command | Purpose |
 |---|---|
 | `faber validate` | Load, desugar, wiring-check every workflow; prove package resolution; `--emit-ir` prints the canonical IR; `--workflow name` narrows |
-| `faber build` | Build template images via Nix `dockerTools.buildLayeredImage`; `--template` narrows |
+| `faber build` | Build template images via Nix `dockerTools.buildLayeredImage`; every image carries `faber-box`, the template's hook scripts and its skills tree, so rebuild after a faber upgrade or a hook or skill edit; `--template` narrows |
 | `faber run <workflow>` | Execute with `--name n` (a human name for the run, stored in the journal header), `--param k=v`, `--budget unit=n`, `--max-parallel n`, `--metering path`, `--sessions` (capture each attempt's harness session transcripts under the run dir), `--report-json path\|-`, `--progress auto\|text\|json\|none`, `--color auto\|always\|never` |
 | `faber resume <run-id\|name>` | Re-enter a journaled run; `--fresh` ignores the journal, `--sessions` turns capture on for the remainder, `--interactive <step>` reopens the failed box inside its saved session (when one exists and the profile defines `resume_argv`) or a shell, `--shell` forces the shell. A raised loop `max` is accepted without `--fresh` (see Configuration, loop `expect`) |
 | `faber check <workflow>` | Run the workflow's hooks for real — in their images, in the box's phase order — against a sandbox: a throwaway remote cloned from the working directory's repository, no network, a key generated for the check, no credentials, no agent (outputs no hook wrote are placeholders so downstream hooks run too). The journal lives under a temporary directory, removed afterwards; `--keep` keeps it and prints the path. `--param k=v`, `--max-parallel n`, `--report-json`, the progress flags, and the exit codes as `run`; the report ends with a `check:` block, one line per step: its hook slots, how many events its hooks wrote, and for a failure the phase and reason. A hook that calls the gate, the forge or an API fails at that call — the check's answer to "what does this hook need" |
@@ -61,7 +61,7 @@ start (debug level).
 
 | Field | Purpose |
 |---|---|
-| `box_bin` | Absolute path of the `faber-box` sequencer to bind-mount (default: next to the `faber` executable) |
+| `box_bin` | Absolute path of the `faber-box` binary that `faber build` bakes into every image (default: next to the `faber` executable) |
 | `agent_socket_group` | Extra group (`--group-add`) so the box's non-root user can reach the forwarded agent socket; needed on macOS docker VMs (typically `"0"`), leave unset on Linux. Use a numeric gid — a group name must exist inside the box image |
 | `state_dir` | Journals + image manifest directory (default `.faber`) |
 

@@ -229,9 +229,9 @@ type SkillsRef struct {
 
 // SkillsDef is the inline skill-delivery form (unchanged). When present both
 // fields are required. NOTE the level difference vs SkillDef.Dir: this Dir is a
-// skills-ROOT holding <name>/SKILL.md subtrees (mounted DIRECTLY at
-// /faber/skills), whereas SkillDef.Dir is a SINGLE skill's tree the named-mode
-// stager wraps under <name>/. Conflating them double-nests the inline case.
+// skills-ROOT holding <name>/SKILL.md subtrees (baked DIRECTLY as
+// /faber/skills), whereas SkillDef.Dir is a SINGLE skill's tree the image
+// builder wraps under <name>/. Conflating them double-nests the inline case.
 type SkillsDef struct {
 	Dir  string `yaml:"dir,omitempty"`  // skills-root: children are <name>/SKILL.md subtrees; declarer-relative
 	Link string `yaml:"link,omitempty"` // in-box path relative to $HOME where THIS agent discovers skills; opaque to faber

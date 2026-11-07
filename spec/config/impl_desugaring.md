@@ -131,11 +131,11 @@ type SkillSource struct { Name, Dir string }
 ```
 
 The delivered contract is unchanged (one `/faber/skills` tree + one
-`FABER_SKILLS_LINK`); only the source representation widens so run-prep can stage
-N dirs into that one tree. The **named** form yields `Sources` (the pipeline
-run-prep stager farms them under `<name>/`); the **inline `{dir, link}`** form
-yields `Root` — the dir is already a `<name>/SKILL.md` root, so run-prep mounts it
-directly with no `<name>` wrapper, byte-identical to today. Emitting a wrapped
+`FABER_SKILLS_LINK`); only the source representation widens so the image builder can stage
+N dirs into that one tree. The **named** form yields `Sources` (the builder farms
+them under `<name>/`); the **inline `{dir, link}`** form yields `Root` — the dir
+is already a `<name>/SKILL.md` root, so the builder bakes it directly with no
+`<name>` wrapper. Emitting a wrapped
 one-entry `Sources` for the inline case would double-nest it
 (`/faber/skills/<name>/<name>/SKILL.md`); that is why the two forms resolve to
 different fields. `GenSpec` carries the source

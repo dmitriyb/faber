@@ -576,8 +576,8 @@ func (d *desugarer) resolveTemplate(name, sp string) *ResolvedTemplate {
 		Effort:        t.Effort,
 		AgentOptional: t.AgentOptional,
 		Invoke:        resolveInvoke(d.cfg, t),
-		Hooks:         resolveHooks(d.cfg, t.Hooks),
-		Skills:        resolveSkills(d.cfg, t),
+		Hooks:         ResolveHooks(d.cfg, t.Hooks),
+		Skills:        ResolveSkills(d.cfg, t),
 		Inputs:        d.normalizeDefs(t.Inputs, sp),
 		Output:        d.normalizeDefs(t.Output, sp),
 	}
@@ -670,10 +670,12 @@ func resolveIdentity(t TemplateDef) string {
 	return t.Run.Identity
 }
 
-// resolveHooks resolves each hooks.<field>: a path form passes through verbatim
+// ResolveHooks resolves each hooks.<field>: a path form passes through verbatim
 // (already absolute from assembly), a bare name resolves to its Hooks-library
-// path. Both yield the resolved hook path the IR has always carried.
-func resolveHooks(cfg *Config, h HookSet) HookSet {
+// path. Both yield the resolved hook path the IR has always carried. Exported
+// because the image builder bakes the same paths the desugarer resolves, so
+// the build-time image tag equals the run-time one by construction.
+func ResolveHooks(cfg *Config, h HookSet) HookSet {
 	return HookSet{
 		Context:   resolveHook(cfg, h.Context),
 		Prelude:   resolveHook(cfg, h.Prelude),
@@ -692,12 +694,12 @@ func resolveHook(cfg *Config, v string) string {
 	return v // dangling bare name — the Loader already reported it
 }
 
-// resolveSkills projects the unmarshal-time SkillsRef into the resolved delivery
-// set. Named skills become an ordered, name-deduped Sources set (the run-prep
-// stager farms them under <name>/); an inline {dir, link} becomes Root (a
-// skills-root the stager mounts directly, no <name> wrapper); absent yields no
-// skills leg.
-func resolveSkills(cfg *Config, t TemplateDef) *ResolvedSkills {
+// ResolveSkills projects the unmarshal-time SkillsRef into the resolved delivery
+// set. Named skills become an ordered, name-deduped Sources set (the image
+// builder farms them under <name>/); an inline {dir, link} becomes Root (a
+// skills-root the builder bakes directly, no <name> wrapper); absent yields no
+// skills leg. Exported for the image builder, as ResolveHooks is.
+func ResolveSkills(cfg *Config, t TemplateDef) *ResolvedSkills {
 	switch {
 	case len(t.Skills.Names) > 0:
 		seen := map[string]bool{}

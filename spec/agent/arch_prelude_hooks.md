@@ -7,9 +7,10 @@ named explicitly.)
 ## What it is
 
 `context`, `prelude`, and `postlude` are opaque user executables declared per
-template (`hooks.context`, `hooks.prelude`, `hooks.postlude`), bind-mounted
-read-only at `/faber/hooks/context`, `/faber/hooks/prelude`, and
-`/faber/hooks/postlude` as part of the box run contract. The pre-agent pair
+template (`hooks.context`, `hooks.prelude`, `hooks.postlude`), baked read-only
+into the template's image at `/faber/hooks/context`, `/faber/hooks/prelude`, and
+`/faber/hooks/postlude` as part of the box run contract (their bytes fold into
+the image tag; an edit means `faber build`). The pre-agent pair
 runs *before* the agent, the postlude *after* it (and before result
 extraction); none contains an agent, and none holds credentials beyond the
 handles already delegated to the box. Faber never reads their contents — it

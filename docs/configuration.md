@@ -91,6 +91,8 @@ A step's `with:` values and a `when`/`until` condition bind from a closed set: a
 A template picks exactly one form per aspect — the loader rejects setting both.
 Named references exist so one toolset/hook/skill tree can be shared across templates and `include:` files without repeating it.
 
+The in-box hook scripts (`context`, `prelude`, `postlude`) and the skills tree are baked into the template's image by `faber build`, and their bytes are part of the image tag: edit one and run `faber build` again; a run that failed before the edit needs `--fresh` to resume. `on_failure` runs on the host and is not baked. Every regular file under a skills directory is baked, dotfiles included, so keep a skills tree to what the agent should see; a symlinked skills directory is followed.
+
 ## Hook events
 
 A hook talks to the operator through one file: `$FABER_RESULT_DIR/hooks/events.jsonl`, one JSON object per line — `ts` (RFC 3339), `hook` (your script's name), `event` (a word), and any further fields as strings. The live view shows them under STEP exactly as written (`post-review   decision   mss=clean  pr=17  result=landable`); `faber` itself never acts on one. Two words are reserved: an event named `halt` carries `next`, the one sentence the operator should act on (shown on the run's now strip); a field named `result` is coloured when it says `ok` or `failed`. The on_failure hook, which runs on the host, gets the same `FABER_RESULT_DIR`, so all four slots write one file per attempt. A line that is not a JSON object, or lacks one of the three names, is shown as malformed with its line number rather than dropped. A copy-paste helper for POSIX `sh` with `jq`:

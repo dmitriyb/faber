@@ -56,7 +56,8 @@ const tagHexLen = 12
 // rendered image expression's shape (added dirs, env, etc.) invalidates the
 // content tag and forces a rebuild, instead of the daemon serving a stale
 // cached image under an unchanged tag. Bump on any renderImageExpr shape change.
-const imageSchemaVersion = "1"
+// "2": the engine inputs (faber-box, hooks, skills) became image content.
+const imageSchemaVersion = "2"
 
 // stagedOverlayName is the file name a declared overlay is copied to beside
 // the rendered expression, so the expression imports it by relative path and
@@ -73,21 +74,28 @@ type ImageBuilder struct {
 	nix        NixClient
 	defaultPin NixpkgsPin // compiled-in FALLBACK: used when a build declares no pin
 	stateDir   string     // manifest home; empty disables the GC-seam manifest
+	boxBin     string     // the faber-box binary baked into every image (host.json box_bin, default next to faber)
 	logger     *slog.Logger
 
 	mu       sync.Mutex
 	tagLocks map[string]*sync.Mutex
+
+	boxMu    sync.Mutex
+	boxCache boxBytes
 }
 
 // NewImageBuilder constructs the build pipeline. pin is the compiled-in default
 // nixpkgs snapshot, now the fallback a toolset's own pin overrides. stateDir
 // hosts the append-only image manifest (the deferred-GC seam); empty disables it.
-func NewImageBuilder(docker DockerClient, nix NixClient, pin NixpkgsPin, stateDir string, logger *slog.Logger) *ImageBuilder {
+// boxBin is the faber-box binary every image bakes at /faber/bin/faber-box;
+// its bytes fold into every tag.
+func NewImageBuilder(docker DockerClient, nix NixClient, pin NixpkgsPin, stateDir, boxBin string, logger *slog.Logger) *ImageBuilder {
 	return &ImageBuilder{
 		docker:     docker,
 		nix:        nix,
 		defaultPin: pin,
 		stateDir:   stateDir,
+		boxBin:     boxBin,
 		logger:     ensureLogger(logger).With("component", "image-builder"),
 		tagLocks:   map[string]*sync.Mutex{},
 	}
@@ -106,14 +114,15 @@ func (b *ImageBuilder) resolvePin(build config.BuildDef) NixpkgsPin {
 
 // ImageTag computes the deterministic image tag faber/<name>:<toolset-hash>
 // without building and with zero adapter calls. The hash covers exactly the
-// inputs that determine image content: the resolved pin revision, the sorted package
-// list, and the overlay file's content hash (bytes, not path).
-func (b *ImageBuilder) ImageTag(name string, build config.BuildDef) (string, error) {
-	overlay, err := readOverlay(build)
+// inputs that determine image content: the resolved pin revision, the sorted
+// package list, the overlay's bytes, and the engine inputs' bytes — faber-box,
+// each declared in-box hook, every file of the skills tree (bytes, not paths).
+func (b *ImageBuilder) ImageTag(name string, build config.BuildDef, inputs ImageInputs) (string, error) {
+	in, err := b.readInputs(name, build, inputs)
 	if err != nil {
 		return "", err
 	}
-	return b.imageTag(name, build, overlay), nil
+	return b.imageTag(name, build, in), nil
 }
 
 // readOverlay reads the declared overlay's bytes, once — every consumer of
@@ -130,8 +139,12 @@ func readOverlay(build config.BuildDef) ([]byte, error) {
 	return data, nil
 }
 
-// imageTag is ImageTag over already-read overlay bytes.
-func (b *ImageBuilder) imageTag(name string, build config.BuildDef, overlay []byte) string {
+// imageTag is ImageTag over already-read inputs: the fold order is the schema
+// version, the resolved pin, the sorted packages, the overlay, then the engine
+// inputs — faber-box, the declared hooks in slot order, the skills files in
+// path order — each as bytes, so the same content from another path yields
+// the same tag.
+func (b *ImageBuilder) imageTag(name string, build config.BuildDef, in stagedInputs) string {
 	pin := b.resolvePin(build) // build's pin, else the compiled-in default
 	h := sha256.New()
 	fmt.Fprintln(h, imageSchemaVersion)
@@ -139,8 +152,19 @@ func (b *ImageBuilder) imageTag(name string, build config.BuildDef, overlay []by
 	for _, p := range slices.Sorted(slices.Values(build.Packages)) {
 		fmt.Fprintln(h, p)
 	}
-	if build.Overlay != "" {
-		fmt.Fprintf(h, "%x\n", sha256.Sum256(overlay))
+	if in.hasOverlay {
+		fmt.Fprintf(h, "%x\n", sha256.Sum256(in.overlay))
+	}
+	fmt.Fprintf(h, "box %x\n", sha256.Sum256(in.box))
+	for _, hk := range in.hooks {
+		fmt.Fprintf(h, "hook %s %x\n", hk.slot, sha256.Sum256(hk.data))
+	}
+	for _, f := range in.skills {
+		exec := 0
+		if f.exec {
+			exec = 1
+		}
+		fmt.Fprintf(h, "skill %s %d %x\n", f.rel, exec, sha256.Sum256(f.data))
 	}
 	hash := fmt.Sprintf("%x", h.Sum(nil))[:tagHexLen]
 	return fmt.Sprintf("faber/%s:%s", name, hash)
@@ -163,7 +187,7 @@ func (b *ImageBuilder) ProvePackages(ctx context.Context, tpl string, build conf
 		return err
 	}
 	pin := b.resolvePin(build) // build's pin, else the compiled-in default
-	exprFile, cleanup, err := b.stageExpr(renderProofExpr(pin, build.Overlay != "", build.Packages), overlay, build.Overlay != "")
+	exprFile, cleanup, err := b.stageExpr(renderProofExpr(pin, build.Overlay != "", build.Packages), stagedInputs{overlay: overlay, hasOverlay: build.Overlay != ""})
 	if err != nil {
 		return err
 	}
@@ -197,29 +221,29 @@ func (b *ImageBuilder) ProvePackages(ctx context.Context, tpl string, build conf
 // returning the deterministic tag. The daemon is the cache: when the tag
 // already exists nothing is built. Builds of one tag are serialized behind a
 // per-tag lock so concurrent steps of one template build once.
-func (b *ImageBuilder) Build(ctx context.Context, tpl string, build config.BuildDef) (string, error) {
-	return b.BuildWith(ctx, tpl, build, b.logger)
+func (b *ImageBuilder) Build(ctx context.Context, tpl string, build config.BuildDef, inputs ImageInputs) (string, error) {
+	return b.BuildWith(ctx, tpl, build, inputs, b.logger)
 }
 
 // BuildWith is Build with the caller's logger: a multi-minute nix build must
 // report progress at the invoking command's log level, not the construction-
 // time wiring logger's (pinned quiet by design).
-func (b *ImageBuilder) BuildWith(ctx context.Context, tpl string, build config.BuildDef, logger *slog.Logger) (string, error) {
+func (b *ImageBuilder) BuildWith(ctx context.Context, tpl string, build config.BuildDef, inputs ImageInputs, logger *slog.Logger) (string, error) {
 	if logger == nil {
 		logger = b.logger
 	}
 	if err := checkSpliceNames(tpl, build); err != nil {
 		return "", err
 	}
-	// The overlay is read exactly once per build: the tag hashes these bytes
-	// and the staged expression imports these same bytes, so an overlay edit
-	// racing the build can never load content under another content's tag
-	// (the daemon caches by tag — a mismatch would poison it permanently).
-	overlay, err := readOverlay(build)
+	// Every input is read exactly once per build: the tag hashes these bytes
+	// and the staged expression imports these same bytes, so an edit racing
+	// the build can never load content under another content's tag (the
+	// daemon caches by tag — a mismatch would poison it permanently).
+	in, err := b.readInputs(tpl, build, inputs)
 	if err != nil {
 		return "", err
 	}
-	tag := b.imageTag(tpl, build, overlay)
+	tag := b.imageTag(tpl, build, in)
 	lock := b.tagLock(tag)
 	lock.Lock()
 	defer lock.Unlock()
@@ -235,7 +259,7 @@ func (b *ImageBuilder) BuildWith(ctx context.Context, tpl string, build config.B
 
 	pin := b.resolvePin(build) // build's pin, else the compiled-in default
 	hash := tag[strings.LastIndexByte(tag, ':')+1:]
-	exprFile, cleanup, err := b.stageExpr(renderImageExpr(pin, tpl, hash, build.Packages, build.Overlay != ""), overlay, build.Overlay != "")
+	exprFile, cleanup, err := b.stageExpr(renderImageExpr(pin, tpl, hash, build.Packages, in), in)
 	if err != nil {
 		return "", err
 	}
@@ -271,22 +295,27 @@ func (b *ImageBuilder) tagLock(tag string) *sync.Mutex {
 	return l
 }
 
-// stageExpr writes the rendered expression (and the already-read overlay
-// bytes, so the expression only ever imports ./overlay.nix and no
-// user-controlled path is spliced into Nix source) into a fresh temp dir.
-// The overlay bytes come from the caller's single read — staging never
-// re-reads the file, so what the tag hashed is exactly what the build imports.
-func (b *ImageBuilder) stageExpr(expr string, overlay []byte, withOverlay bool) (exprFile string, cleanup func(), err error) {
+// stageExpr writes the rendered expression (and the already-read overlay and
+// engine-input bytes, so the expression only ever imports ./overlay.nix,
+// ./faber-box, ./hooks/<slot> and ./skills, and no user-controlled path is
+// spliced into Nix source) into a fresh temp dir. The bytes come from the
+// caller's single read — staging never re-reads a file, so what the tag
+// hashed is exactly what the build imports.
+func (b *ImageBuilder) stageExpr(expr string, in stagedInputs) (exprFile string, cleanup func(), err error) {
 	dir, err := os.MkdirTemp("", "faber-image-")
 	if err != nil {
 		return "", nil, fmt.Errorf("infra: stage nix expression: %w", err)
 	}
 	cleanup = func() { os.RemoveAll(dir) }
-	if withOverlay {
-		if werr := os.WriteFile(filepath.Join(dir, stagedOverlayName), overlay, 0o644); werr != nil {
+	if in.hasOverlay {
+		if werr := os.WriteFile(filepath.Join(dir, stagedOverlayName), in.overlay, 0o644); werr != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("infra: stage overlay: %w", werr)
 		}
+	}
+	if werr := stageInputs(dir, in); werr != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("infra: stage engine inputs: %w", werr)
 	}
 	exprFile = filepath.Join(dir, "expr.nix")
 	if werr := os.WriteFile(exprFile, []byte(expr), 0o644); werr != nil {
@@ -379,10 +408,12 @@ func renderPkgAttr(name string) string {
 
 // renderImageExpr renders the dockerTools.buildLayeredImage expression for
 // one template: no Dockerfile, no repository content, one contents attr per
-// declared package. Package names were charset-checked before this point.
-func renderImageExpr(pin NixpkgsPin, tpl, tag string, packages []string, withOverlay bool) string {
+// declared package, plus the faber-inputs layer (faber-box, the declared
+// hooks, the skills tree) staged beside the expression. Package names were
+// charset-checked before this point; slot names are fixed identifiers.
+func renderImageExpr(pin NixpkgsPin, tpl, tag string, packages []string, in stagedInputs) string {
 	var sb strings.Builder
-	sb.WriteString(renderPinnedPkgs(pin, withOverlay))
+	sb.WriteString(renderPinnedPkgs(pin, in.hasOverlay))
 	fmt.Fprintf(&sb, `in pkgs.dockerTools.buildLayeredImage {
   name = "faber/%s";
   tag = "%s";
@@ -391,11 +422,12 @@ func renderImageExpr(pin NixpkgsPin, tpl, tag string, packages []string, withOve
 	for _, p := range slices.Sorted(slices.Values(packages)) {
 		fmt.Fprintf(&sb, "    %s\n", renderPkgAttr(p))
 	}
-	// The image is a pure function of the toolset: root-owned store paths and a
-	// PATH, no baked user and nothing writable. One image stays generic across
-	// hosts. Every writable path (the workspace volume, the tmpfs bundle/tmp/
-	// home) is a run-time mount the box chowns and drops into — see the runner
-	// and the phase sequencer's privileged preamble.
+	sb.WriteString(renderInputsDerivation(in))
+	// The image is a pure function of the toolset and the engine inputs:
+	// root-owned store paths and a PATH, no baked user and nothing writable.
+	// One image stays generic across hosts. Every writable path (the workspace
+	// volume, the tmpfs bundle/tmp/home) is a run-time mount the box chowns and
+	// drops into — see the runner and the phase sequencer's privileged preamble.
 	sb.WriteString(`  ];
   config.Env = [ "PATH=/bin:/usr/bin" ];
 }

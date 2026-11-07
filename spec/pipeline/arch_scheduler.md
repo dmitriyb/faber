@@ -115,8 +115,10 @@ report text.
 
 Before any run state exists (no journal, no run dir, no lock), every agent
 template reachable from the run — entry IR plus generate targets — must
-resolve its image tag and the docker daemon must already hold the image. One
-early, aggregated refusal (pointing at `faber build`) replaces a per-step
+resolve its image tag — which covers the baked faber-box, hook scripts and
+skills tree, so an edited hook is an unbuilt image too — and the docker daemon
+must already hold the image. One early, aggregated refusal (pointing at
+`faber build`) replaces a per-step
 launch-failure cascade that would burn each step's retry budget against a
 dead daemon or an unbuilt image. The preflight applies to every execute mode,
 resume included: uniform fail-fast, at the cost of requiring images present
@@ -186,7 +188,7 @@ Two durable companions make the stream reconstructible from disk alone: the
 journal's `start` record (appended by the box worker right before each
 attempt's `RunAttempt`, the failure module's shape) and the per-attempt
 `output.log` the run-prep seam opens under the attempt directory and hands
-to the container runner as `RunSpec.Output`. A reader of the run directory
+to the container runner as `ContainerSpec.Output`. A reader of the run directory
 sees the same timeline the sink saw.
 
 ## Bounds: the semaphore, generate pools, lanes

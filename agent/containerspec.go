@@ -24,7 +24,7 @@ import (
 // input bindings, and the host paths of the mounted pieces. The security
 // bindings (network, remote, identity, credentials) are composed separately
 // by the pipeline via security.BindingSet and spliced into the returned
-// RunSpec's Bindings field.
+// ContainerSpec's Bindings field.
 type BoxSpec struct {
 	// RunID and NodeID form the deterministic container name together with
 	// Attempt (1-based).
@@ -48,25 +48,11 @@ type BoxSpec struct {
 	// directory — the container boundary's only writable engine mount.
 	ResultDir string
 
-	// EntryBinary is the host path of the statically built faber-box binary,
-	// bind-mounted read-only and set as the container command.
-	EntryBinary string
-
-	// ContextHook, PreludeHook, and PostludeHook are host paths of the
-	// template's opaque hook executables (resolved from Template.Hooks by
-	// the caller); empty means the phase is a no-op inside the box.
-	// PostludeHook runs after the agent, before result extraction.
-	ContextHook  string
-	PreludeHook  string
-	PostludeHook string
-
-	// SkillsDir and SkillsLink are the template's optional skills leg (from
-	// Template.Skills). SkillsDir is the host directory bind-mounted read-only
-	// at ContainerSkillsDir; SkillsLink is the agent-specific $HOME-relative
-	// path the box symlinks to it (emitted as FABER_SKILLS_LINK). Both empty
-	// means no skills leg — no mount, no env, and the box's skills phase is a
-	// no-op.
-	SkillsDir  string
+	// SkillsLink is the agent-specific $HOME-relative path the box symlinks to
+	// the baked /faber/skills tree (emitted as FABER_SKILLS_LINK). Empty means
+	// no skills leg — no env, and the box's skills phase is a no-op. The tree
+	// itself, like the entry binary and the hook scripts, is image content:
+	// the image builder bakes them, the run spec mounts nothing for them.
 	SkillsLink string
 
 	// AgentCLI is the agent CLI binary name inside the box (from the
@@ -107,13 +93,14 @@ type BoxSpec struct {
 	Check bool
 }
 
-// BuildRunSpec assembles the engine half of the box run contract: container
-// name, engine mounts (result dir, hooks, entry binary, template volumes),
+// BuildContainerSpec assembles the engine half of the box run contract: container
+// name, engine mounts (result dir, template volumes; faber-box, hooks and
+// skills are image content),
 // the FABER_* environment, and the entry argv. No secret ever enters the
 // environment — credentials arrive only through the security bindings the
 // caller splices in afterwards. All violations are collected, never
 // first-error.
-func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
+func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 	var errs []error
 	check := func(cond bool, msg string) {
 		if !cond {
@@ -126,20 +113,13 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 	check(spec.NodeID != "", "node id: required")
 	check(spec.Attempt >= 1, "attempt: must be >= 1")
 	check(spec.ResultDir != "", "result dir: required")
-	check(spec.EntryBinary != "", "entry binary: required")
 	if spec.Template == nil {
-		return infra.RunSpec{}, fmt.Errorf("agent: build run spec: %w", errors.Join(errs...))
+		return infra.ContainerSpec{}, fmt.Errorf("agent: build run spec: %w", errors.Join(errs...))
 	}
 	tpl := spec.Template
 	check(tpl.Skill != "", "template skill: required")
 	check(spec.AgentCLI != "" || tpl.Env[contract.EnvAgentCLI] != "",
 		"agent cli: required (no vendor default); set BoxSpec.AgentCLI or the template env "+contract.EnvAgentCLI)
-	// The skills leg is an all-or-nothing pair: the /faber/skills mount rides on
-	// SkillsDir and FABER_SKILLS_LINK on SkillsLink, and one without the other is
-	// a broken run — a mount with no link, or a link to a missing mount. Config
-	// validation already pairs them upstream; this guards direct BoxSpec callers.
-	check((spec.SkillsDir == "") == (spec.SkillsLink == ""),
-		"skills: dir and link must be set together")
 	// The sessions bind needs its container target from the profile; a
 	// SessionsDir against a template whose profile names no session_dir has
 	// nowhere to land. The container path must stay strictly inside HOME —
@@ -212,7 +192,7 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 		}
 	}
 	if len(errs) > 0 {
-		return infra.RunSpec{}, fmt.Errorf("agent: build run spec for %s: %w", spec.NodeID, errors.Join(errs...))
+		return infra.ContainerSpec{}, fmt.Errorf("agent: build run spec for %s: %w", spec.NodeID, errors.Join(errs...))
 	}
 
 	env := map[string]string{}
@@ -260,32 +240,11 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 		env[contract.InputEnv(slot)] = val
 	}
 
+	// The entry binary, the hook scripts and the skills tree are image content
+	// (the image builder bakes them under /faber), so the engine mounts only
+	// what the box writes.
 	mounts := []infra.Mount{
 		{Host: spec.ResultDir, Container: contract.ContainerResultDir},
-		{Host: spec.EntryBinary, Container: contract.ContainerEntry, ReadOnly: true},
-	}
-	if spec.ContextHook != "" {
-		mounts = append(mounts, infra.Mount{
-			Host: spec.ContextHook, Container: contract.ContainerHooksDir + "/" + contract.HookContext, ReadOnly: true,
-		})
-	}
-	if spec.PreludeHook != "" {
-		mounts = append(mounts, infra.Mount{
-			Host: spec.PreludeHook, Container: contract.ContainerHooksDir + "/" + contract.HookPrelude, ReadOnly: true,
-		})
-	}
-	if spec.PostludeHook != "" {
-		mounts = append(mounts, infra.Mount{
-			Host: spec.PostludeHook, Container: contract.ContainerHooksDir + "/" + contract.HookPostlude, ReadOnly: true,
-		})
-	}
-	// The skills leg: a per-template read-only capability at the fixed neutral
-	// path, a sibling of the hooks mounts — deliberately not under the writable
-	// per-run bundle tmpfs. Present only when the template declares a skills leg.
-	if spec.SkillsDir != "" {
-		mounts = append(mounts, infra.Mount{
-			Host: spec.SkillsDir, Container: contract.ContainerSkillsDir, ReadOnly: true,
-		})
 	}
 	// Writable engine mounts: the disk-backed clone volume and the tmpfs scratch
 	// (bundle, tmp, home). All arrive root-owned; the box's preamble chowns them
@@ -306,7 +265,7 @@ func BuildRunSpec(spec BoxSpec) (infra.RunSpec, error) {
 		mounts = append(mounts, infra.Mount{Host: host, Container: tpl.Volumes[host]})
 	}
 
-	return infra.RunSpec{
+	return infra.ContainerSpec{
 		Name:      ContainerName(spec.RunID, spec.NodeID, spec.Attempt),
 		Image:     spec.Image,
 		Resources: tpl.Resources,

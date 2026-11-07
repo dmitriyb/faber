@@ -912,8 +912,8 @@ func TestContractVersionHandshake(t *testing.T) {
 	}
 	rec := readRecord(t, d)
 	if rec.Error == nil || rec.Error.Reason != contract.ReasonEnvContract ||
-		!strings.Contains(rec.Error.Detail, "box_bin") {
-		t.Fatalf("want env-contract failure naming FABER_BOX_BIN, got %+v", rec.Error)
+		!strings.Contains(rec.Error.Detail, "faber build") {
+		t.Fatalf("want env-contract failure pointing at faber build, got %+v", rec.Error)
 	}
 
 	env := ParseEnv(baseEnv(d, map[string]string{contract.EnvContractVersion: "1"}))

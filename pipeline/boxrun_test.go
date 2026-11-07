@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -17,18 +19,18 @@ import (
 	"github.com/dmitriyb/faber/security"
 )
 
-// fakeContainers is a scripted ContainerRunner: it captures the RunSpec and
+// fakeContainers is a scripted ContainerRunner: it captures the ContainerSpec and
 // writes a canned record into the mounted result directory — no docker.
 type fakeContainers struct {
 	mu     sync.Mutex
-	specs  []infra.RunSpec
+	specs  []infra.ContainerSpec
 	record *contract.Result // nil writes nothing (box vanished)
 	usage  map[string]int64
 	runErr error  // actuation failure returned by Run
 	output []byte // captured container output tail
 }
 
-func (f *fakeContainers) Run(ctx context.Context, spec infra.RunSpec) (infra.RunResult, error) {
+func (f *fakeContainers) Run(ctx context.Context, spec infra.ContainerSpec) (infra.ContainerResult, error) {
 	f.mu.Lock()
 	f.specs = append(f.specs, spec)
 	f.mu.Unlock()
@@ -40,7 +42,7 @@ func (f *fakeContainers) Run(ctx context.Context, spec infra.RunSpec) (infra.Run
 	}
 	if f.record != nil && resultDir != "" {
 		if err := contract.WriteResultFile(resultDir, *f.record); err != nil {
-			return infra.RunResult{}, err
+			return infra.ContainerResult{}, err
 		}
 	}
 	if f.usage != nil && resultDir != "" {
@@ -50,12 +52,12 @@ func (f *fakeContainers) Run(ctx context.Context, spec infra.RunSpec) (infra.Run
 	if spec.Output != nil && len(f.output) > 0 {
 		spec.Output.Write(f.output)
 	}
-	return infra.RunResult{ExitCode: 0, Output: f.output, Started: testBase, Duration: 2e9}, f.runErr
+	return infra.ContainerResult{ExitCode: 0, Output: f.output, Started: testBase, Duration: 2e9}, f.runErr
 }
 
 // fakeBindings records Prepare calls and returns a fixed argv fragment. When
 // secretsStdin is set it also returns a file-mode secrets payload, exercising
-// the RunSpec assembler's StdinSecrets/FABER_SECRETS_STDIN pairing.
+// the ContainerSpec assembler's StdinSecrets/FABER_SECRETS_STDIN pairing.
 type fakeBindings struct {
 	mu           sync.Mutex
 	steps        []security.StepSpec
@@ -95,7 +97,7 @@ func boxAttempt(t *testing.T) BoxAttempt {
 	}
 }
 
-// Verifies ae796d2a1503: the production box composition — BuildRunSpec, the
+// Verifies ae796d2a1503: the production box composition — BuildContainerSpec, the
 // security fragment spliced verbatim, container run, teardown, host-side
 // result extraction — adapts an ok record to the failure module's shape and
 // reads the usage sidecar.
@@ -105,7 +107,7 @@ func TestBoxRun_ComposesAndAdaptsOK(t *testing.T) {
 		usage:  map[string]int64{"tokens": 42},
 	}
 	bindings := &fakeBindings{}
-	boxes := &AgentBoxes{Containers: containers, Bindings: bindings, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: bindings}
 
 	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
 	if err != nil {
@@ -136,13 +138,13 @@ func TestBoxRun_ComposesAndAdaptsOK(t *testing.T) {
 }
 
 // Verifies ae796d2a1503 and the credentials pairing invariant: a non-empty
-// Assembled.SecretsStdin is copied into RunSpec.StdinSecrets and
+// Assembled.SecretsStdin is copied into ContainerSpec.StdinSecrets and
 // Env[FABER_SECRETS_STDIN]="1" is set in the same step, never one without the
 // other; an empty payload sets neither.
 func TestBoxRun_SecretsStdinPairing(t *testing.T) {
 	payload := []byte(`{"agent-api":"dG9r"}`)
 	containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1}}
-	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{secretsStdin: payload}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{secretsStdin: payload}}
 	if _, err := boxes.RunAttempt(context.Background(), boxAttempt(t)); err != nil {
 		t.Fatalf("run attempt: %v", err)
 	}
@@ -156,7 +158,7 @@ func TestBoxRun_SecretsStdinPairing(t *testing.T) {
 
 	// No payload: neither half is set.
 	containers2 := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1}}
-	boxes2 := &AgentBoxes{Containers: containers2, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes2 := &AgentBoxes{Containers: containers2, Bindings: &fakeBindings{}}
 	if _, err := boxes2.RunAttempt(context.Background(), boxAttempt(t)); err != nil {
 		t.Fatalf("run attempt: %v", err)
 	}
@@ -175,7 +177,7 @@ func TestBoxRun_SecretsStdinPairing(t *testing.T) {
 func TestBoxRun_VanishedAndHandoff(t *testing.T) {
 	// No record written: box vanished.
 	containers := &fakeContainers{}
-	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
 	if err != nil {
 		t.Fatalf("run attempt: %v", err)
@@ -191,7 +193,7 @@ func TestBoxRun_VanishedAndHandoff(t *testing.T) {
 		Error:   &contract.ResultError{Reason: "agent-failed", Detail: "died", Handoff: contract.HandoffFile},
 		Attempt: 1,
 	}}
-	boxes2 := &AgentBoxes{Containers: containers2, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes2 := &AgentBoxes{Containers: containers2, Bindings: &fakeBindings{}}
 	got2, err := boxes2.RunAttempt(context.Background(), attempt)
 	if err != nil {
 		t.Fatalf("run attempt: %v", err)
@@ -212,11 +214,11 @@ func TestBoxRun_VanishedAndHandoff(t *testing.T) {
 // DURING the session — the window in which per-session state (the salted
 // dir, the session copy) still exists.
 type fakeInteractive struct {
-	spec  *infra.RunSpec
+	spec  *infra.ContainerSpec
 	onRun func()
 }
 
-func (f *fakeInteractive) RunInteractive(ctx context.Context, spec infra.RunSpec) (err error) {
+func (f *fakeInteractive) RunInteractive(ctx context.Context, spec infra.ContainerSpec) (err error) {
 	f.spec = &spec
 	if f.onRun != nil {
 		f.onRun()
@@ -267,7 +269,7 @@ func TestBoxRun_InteractiveReentry(t *testing.T) {
 	}
 	seed.Journal.Close()
 
-	// The IR node needs the agent CLI env and the input slot for BuildRunSpec.
+	// The IR node needs the agent CLI env and the input slot for BuildContainerSpec.
 	ir.Nodes[0].Template.Env = map[string]string{contract.EnvAgentCLI: "agent-cli"}
 	ir.Nodes[0].Template.Inputs = map[string]config.ParamDef{"out": {Type: "string", Required: true}}
 	interactive := &fakeInteractive{}
@@ -276,7 +278,6 @@ func TestBoxRun_InteractiveReentry(t *testing.T) {
 		Images:      fakeTags{},
 		Bindings:    &fakeBindings{},
 		Interactive: interactive,
-		EntryBinary: "/usr/local/bin/faber-box",
 	}
 
 	if err := store.Interactive(context.Background(), "run-i", "w/x", false, re); err != nil {
@@ -354,7 +355,7 @@ func TestBoxRun_ReservedReasonsSanitized(t *testing.T) {
 			Error:   &contract.ResultError{Reason: reserved, Detail: "hostile"},
 			Attempt: 1,
 		}}
-		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 		got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
 		if err != nil {
 			t.Fatalf("run attempt: %v", err)
@@ -370,7 +371,7 @@ func TestBoxRun_ReservedReasonsSanitized(t *testing.T) {
 		Error:   &contract.ResultError{Reason: "rate-limit", Detail: `{"reset":0}`},
 		Attempt: 1,
 	}}
-	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
 	if err != nil {
 		t.Fatalf("run attempt: %v", err)
@@ -397,7 +398,7 @@ func TestBoxRun_StaleAttemptDirCleared(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	boxes := &AgentBoxes{Containers: &fakeContainers{}, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: &fakeContainers{}, Bindings: &fakeBindings{}}
 	got, err := boxes.RunAttempt(context.Background(), attempt)
 	if err != nil {
 		t.Fatalf("run attempt: %v", err)
@@ -444,7 +445,7 @@ func TestBoxRun_InteractiveSessionsIsolated(t *testing.T) {
 	ir.Nodes[0].Template.Inputs = map[string]config.ParamDef{"out": {Type: "string", Required: true}}
 	interactive := &fakeInteractive{}
 	re := &Reentry{IR: ir, Images: fakeTags{}, Bindings: &fakeBindings{},
-		Interactive: interactive, EntryBinary: "/usr/local/bin/faber-box"}
+		Interactive: interactive}
 
 	if err := store.Interactive(context.Background(), "run-s", "w/x", false, re); err != nil {
 		t.Fatal(err)
@@ -544,7 +545,7 @@ func TestBoxRun_InteractivePrefersJournaledTag(t *testing.T) {
 	ir.Nodes[0].Template.Inputs = map[string]config.ParamDef{"out": {Type: "string", Required: true}}
 	interactive := &fakeInteractive{}
 	re := &Reentry{IR: ir, Images: fakeTags{}, Bindings: &fakeBindings{},
-		Interactive: interactive, EntryBinary: "/usr/local/bin/faber-box"}
+		Interactive: interactive}
 	if err := store.Interactive(context.Background(), "run-t", "w/x", false, re); err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +566,7 @@ func TestBoxRun_HandoffEscapeDropped(t *testing.T) {
 			Error:   &contract.ResultError{Reason: "agent-failed", Detail: "died", Handoff: handoff},
 			Attempt: 1,
 		}}
-		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 		got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
 		if err != nil {
 			t.Fatalf("run attempt: %v", err)
@@ -583,7 +584,7 @@ func TestBoxRun_HandoffEscapeDropped(t *testing.T) {
 		Error:   &contract.ResultError{Reason: "agent-failed", Detail: "died", Handoff: "handoff.json"},
 		Attempt: 1,
 	}}
-	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
 	if err != nil {
 		t.Fatal(err)
@@ -601,7 +602,7 @@ func TestBoxRun_UsageClampedAndBounded(t *testing.T) {
 		record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1},
 		usage:  map[string]int64{"tokens": -50, "cents": 7},
 	}
-	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
 	if err != nil {
 		t.Fatal(err)
@@ -617,7 +618,7 @@ func TestBoxRun_UsageClampedAndBounded(t *testing.T) {
 func TestBoxRun_ActuationErrorSurfaced(t *testing.T) {
 	containers := &fakeContainers{runErr: errors.New("docker daemon unreachable"),
 		output: []byte("Cannot connect to the Docker daemon\n")}
-	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 	got, err := boxes.RunAttempt(context.Background(), boxAttempt(t))
 	if err != nil {
 		t.Fatal(err)
@@ -638,7 +639,7 @@ func TestBoxRun_ActuationErrorSurfaced(t *testing.T) {
 // map itself absent) contributes nothing, leaving the box's signing phase to
 // fail fast on a gated step.
 func TestBoxRun_PerRoleGitIdentity(t *testing.T) {
-	run := func(t *testing.T, identities map[string]GitIdentity, role string) infra.RunSpec {
+	run := func(t *testing.T, identities map[string]GitIdentity, role string) infra.ContainerSpec {
 		t.Helper()
 		containers := &fakeContainers{
 			record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "done"}, Attempt: 1},
@@ -646,7 +647,6 @@ func TestBoxRun_PerRoleGitIdentity(t *testing.T) {
 		boxes := &AgentBoxes{
 			Containers:    containers,
 			Bindings:      &fakeBindings{},
-			EntryBinary:   "/usr/local/bin/faber-box",
 			GitIdentities: identities,
 		}
 		attempt := boxAttempt(t)
@@ -679,13 +679,13 @@ func TestBoxRun_WritesOutputLog(t *testing.T) {
 		record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1},
 		output: []byte("prelude: fetch-pr ok\nagent: exit 0\n"),
 	}
-	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 	box := boxAttempt(t)
 	if _, err := boxes.RunAttempt(context.Background(), box); err != nil {
 		t.Fatalf("RunAttempt: %v", err)
 	}
 	if containers.specs[0].Output == nil {
-		t.Fatal("RunSpec.Output not set: the container runner had nowhere durable to stream")
+		t.Fatal("ContainerSpec.Output not set: the container runner had nowhere durable to stream")
 	}
 	path := filepath.Join(box.RunDir, "boxes", pathToken(box.NodeID), "attempt-1", OutputLogName)
 	got, err := os.ReadFile(path)
@@ -694,5 +694,48 @@ func TestBoxRun_WritesOutputLog(t *testing.T) {
 	}
 	if string(got) != string(containers.output) {
 		t.Errorf("output log %q, want %q", got, containers.output)
+	}
+}
+
+// Verifies 93ba0858d75f (scenario 12): no shape of template — named skills,
+// an inline skills root, hooks in every in-box slot — puts image content on
+// the container: the attempt mounts exactly the result bind, the workspace
+// volume and the tmpfs writables, and nothing lands at /faber/skills,
+// /faber/hooks or /faber/bin.
+func TestBoxRun_NoImageContentMounts(t *testing.T) {
+	shapes := map[string]func(*config.ResolvedTemplate){
+		"named skills": func(tpl *config.ResolvedTemplate) {
+			tpl.Skills = &config.ResolvedSkills{Sources: []config.SkillSource{{Name: "a", Dir: t.TempDir()}}, Primary: "a", Link: ".x/skills"}
+		},
+		"inline root": func(tpl *config.ResolvedTemplate) {
+			tpl.Skills = &config.ResolvedSkills{Root: t.TempDir(), Primary: "a", Link: ".x/skills"}
+		},
+		"hooks": func(tpl *config.ResolvedTemplate) {
+			tpl.Hooks = config.HookSet{Context: "/host/hooks/context", Prelude: "/host/hooks/prelude", Postlude: "/host/hooks/postlude", OnFailure: "/host/hooks/release"}
+		},
+	}
+	for name, shape := range shapes {
+		t.Run(name, func(t *testing.T) {
+			containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "done"}, Attempt: 1}}
+			boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
+			attempt := boxAttempt(t)
+			shape(attempt.Template)
+			if _, err := boxes.RunAttempt(context.Background(), attempt); err != nil {
+				t.Fatalf("run attempt: %v", err)
+			}
+			var got []string
+			for _, m := range containers.specs[0].Mounts {
+				got = append(got, m.Container)
+			}
+			sort.Strings(got)
+			want := []string{contract.ContainerBundleDir, contract.ContainerHome, contract.ContainerResultDir, contract.ContainerWorkspace, "/tmp"}
+			sort.Strings(want)
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("mounts %v, want exactly %v", got, want)
+			}
+			if containers.specs[0].Entry[0] != contract.ContainerEntry {
+				t.Fatalf("entry %v, want the baked %s", containers.specs[0].Entry, contract.ContainerEntry)
+			}
+		})
 	}
 }

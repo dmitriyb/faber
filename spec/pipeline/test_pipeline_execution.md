@@ -69,18 +69,11 @@ docker anywhere in this section.
     (exit 1) — failures outrank halts — while the halt block still renders.
     On resume with the identical config, b re-runs (a halted record is not a
     reuse hit); scripted ok, the whole graph settles and exits 0.
-12. **Skills staging in run-prep.** The `steps` closure's `stageSkills` produces
-    the single `/faber/skills` mount for each `ResolvedSkills` shape (see
-    impl_scheduling.md "Skills staging"): a named-form template with
-    `Sources: [(a,→dirA),(b,→dirB)]` yields one read-only mount whose host tree is
-    a per-attempt copy of the sources into `a/`, `b/` (declared order) as real,
-    world-readable files — asserted to be real files, NOT symlinks, since a symlink
-    would dangle across the read-only bind into the container; an inline-form
-    template with `Root: dirR` yields one read-only mount of `dirR` **directly**
-    (no staged copy, no `<name>` wrapper); a template with no skills leg yields
-    **no** `/faber/skills` mount. In every case exactly one skills mount (or none)
-    reaches the RunSpec, so infra's argv builder sees the unchanged single-bind
-    contract.
+12. **No run-time staging of image content.** A named-form template, an
+    inline-form template and a template with hooks all yield ContainerSpecs with no
+    `/faber/skills`, `/faber/hooks` or `/faber/bin` mount and no entry-binary
+    field: those are image content. The attempt's mounts are the result bind,
+    the workspace volume and the tmpfs writables only.
 
 13. **Pause drains and resumes.** A three-step chain with the pause probe
     scripted to turn true after the first settlement: step one's record is
@@ -147,7 +140,7 @@ docker anywhere in this section.
     word is wrapped, in a palette slot, and the rest of the line is
     byte-identical. The JSON sink writes one object per event carrying the
     run-started caps and the run-ended counts.
-22. **Output log per attempt.** The run-prep seam sets `RunSpec.Output`;
+22. **Output log per attempt.** The run-prep seam sets `ContainerSpec.Output`;
     after `RunAttempt`, `<attempt>/output.log` holds exactly the bytes the
     container streamed.
 

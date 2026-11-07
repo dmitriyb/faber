@@ -19,7 +19,7 @@ const teardownGrace = 30 * time.Second
 
 // Assembled is one step attempt's security surface, ready for infra: Args is
 // the ordered docker-run argv fragment ContainerRunner splices verbatim
-// (RunSpec.Bindings), SecretsStdin is the framed JSON file-mode secrets
+// (ContainerSpec.Bindings), SecretsStdin is the framed JSON file-mode secrets
 // payload the runner streams on the container's stdin (nil = no file-mode
 // secret, no -i), and Teardown is the post-run hook that must bracket the Run
 // call — infra runs no hooks itself. Teardown is never nil, runs every

@@ -178,8 +178,8 @@ invocation are unchanged.
 
 Faber reads no configuration from its process environment. Per-machine
 inputs live in `host.json` beside the role registry under faber's config
-home: `box_bin` (absolute-only path of the faber-box sequencer; default
-next-to-faber), `agent_socket_group` (the identity binding's `--group-add`
+home: `box_bin` (absolute-only path of the faber-box binary `faber build` bakes
+into every image; default next-to-faber), `agent_socket_group` (the identity binding's `--group-add`
 escape; typically "0" on macOS docker VMs, unset on Linux), `state_dir`
 (default `.faber`). The wiring loads it exactly once, before anything is
 constructed: absent file = all defaults; a malformed file — bad JSON, an

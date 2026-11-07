@@ -6,11 +6,11 @@
 # verifies each signature against the embedded release-signing public key,
 # and installs both binaries side by side.
 #
-# faber-box is bind-mounted into every box and must be a Linux binary
-# regardless of the operator's own host OS (Docker Desktop shares the host
-# path into its own Linux VM) — on a darwin host this script still fetches
-# the linux/<arch> faber-box archive, matching the arch Docker Desktop's VM
-# runs as by default; it never silently skips faber-box.
+# faber-box is baked into every template image by `faber build` and must be
+# a Linux binary regardless of the operator's own host OS (the image runs in
+# Docker Desktop's Linux VM) — on a darwin host this script still fetches the
+# linux/<arch> faber-box archive, matching the arch Docker Desktop's VM runs
+# as by default; it never silently skips faber-box.
 #
 # This script's own content is version-agnostic: it does not change between
 # releases, so it carries the same signature on every release it is attached

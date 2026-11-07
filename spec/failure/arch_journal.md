@@ -59,8 +59,8 @@ format-tolerant; only interpretive replay refuses.
    means "same graph", and a mismatch is detected before any skip decision is
    trusted. The IR version distinguishes an engine-side IR schema change from
    operator config drift, so refusals blame the right party. The image tags
-   record the engine-compiled inputs (default nixpkgs pin, image schema) the
-   IR hash cannot see: resume recomputes and compares them, so a pin or
+   record the engine-compiled inputs (default nixpkgs pin, image schema, the
+   baked faber-box, hook and skill bytes) the IR hash cannot see: resume recomputes and compares them, so a pin or
    engine upgrade fails closed instead of silently invalidating every journal
    key.
 2. **Result** — one per settled step attempt sequence: the final ResultContract
