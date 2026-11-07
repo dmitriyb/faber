@@ -48,4 +48,4 @@ FLOW                                                                            
                                                                                              |
                                                                                              |
                                                                                              |
-j/k move   n problem   h history   p pause   R resume   t/w/l views   f follow   q back                                                                                                                 = faber runs + report
+j/k move   tab panes   n problem   h history   p pause   R resume   t/w/l views   f follow   q back                                                                                                     = faber runs + report

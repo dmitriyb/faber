@@ -29,8 +29,10 @@ type model struct {
 	shown      []RunRow // the runs Home lists: this config's, through the Home filter
 	rfilter    string   // the Home filter over id, name, workflow and state
 	runSel     int      // the cursor over shown
-	wfSel      int
-	focus      string // Home: "runs" | "workflows"
+	wfSel      int      // over the workflows, then the preflight classes
+	pfDrill    string   // the preflight class drilled into; "" = the checklist
+	pfSel      int      // the drill-down's cursor
+	focus      string   // Home: "runs" | "workflows"
 	stats      History
 	hscope     string          // the history scope in force: ScopeAllRuns or ScopeThisRun
 	preview    bool            // the Run screen is a static workflow preview (no journal)
@@ -47,21 +49,25 @@ type model struct {
 	ticks      int
 	loadErr    string // the last store error, shown instead of an empty table
 
-	run     *RunView
-	rows    []row
-	sel     int
-	frows   []frow   // the flow view's rows
-	fsel    int      // the flow cursor
-	trows   []trow   // the timeline's rows at the current level
-	tsel    int      // the timeline cursor
-	tpath   []string // the timeline's drill-down: the prefix of each level entered
-	tback   []int    // the cursor to restore when leaving each level
-	tzoom   int      // the timeline zoom exponent (columns x 2^tzoom)
-	view    string   // "tree" | "flow" | "timeline"
-	follow  bool
-	filter  string
-	open    map[string]bool
-	alerted map[string]bool // ids already belled
+	run      *RunView
+	rows     []row
+	sel      int
+	frows    []frow   // the flow view's rows
+	fsel     int      // the flow cursor
+	trows    []trow   // the timeline's rows at the current level
+	tsel     int      // the timeline cursor
+	tpath    []string // the timeline's drill-down: the prefix of each level entered
+	tback    []int    // the cursor to restore when leaving each level
+	tzoom    int      // the timeline zoom exponent (columns x 2^tzoom)
+	view     string   // "tree" | "flow" | "timeline"
+	rfocus   string   // Run: "" (the list) | "step" | "output" — the pane j/k scroll
+	soff     int      // STEP rows dropped from the top
+	ooff     int      // OUTPUT lines kept back from the tail
+	scrolled string   // the step the offsets belong to; a new selection resets them
+	follow   bool
+	filter   string
+	open     map[string]bool
+	alerted  map[string]bool // ids already belled
 
 	prompt   *prompt
 	quitCmd  string // printed on stdout after the terminal is restored
@@ -308,6 +314,9 @@ func (m *model) refresh(ctx context.Context) {
 	m.ticks++
 	if m.project == nil || !m.project.mtime.Equal(configMTime(m.uo.ConfigPath)) || m.ticks%probeEvery == 0 {
 		m.project = loadProject(ctx, m.uo.ConfigPath, m.opts.Images, m.opts.Keys)
+		if m.project.Err != nil {
+			m.pfDrill = "" // nothing to drill into while the config does not load
+		}
 	}
 	runs, err := loadRuns(m.cache, m.now())
 	if err != nil {
@@ -438,6 +447,7 @@ func (m *model) openRun(id string) {
 	m.run = v
 	m.quitCmd = ""
 	m.tpath, m.tback, m.tsel = nil, nil, 0
+	m.soff, m.ooff, m.scrolled, m.rfocus = 0, 0, "", "" // another run's steps may share ids
 	m.preview = false
 	m.screen = "run"
 	m.sel = 0
@@ -504,8 +514,11 @@ func (m *model) render(w, h int) *frame {
 }
 
 func (m *model) homeKeys() [][2]string {
+	if m.pfDrill != "" {
+		return [][2]string{{"j/k", "move"}, {"esc/<-", "back"}, {"q", "quit"}}
+	}
 	if m.focus == "workflows" {
-		return [][2]string{{"j/k", "move"}, {"enter", "preview"}, {"tab/->", "runs"}, {"/", "filter"}, {"r", "run workflow"}, {"q", "quit"}}
+		return [][2]string{{"j/k", "move"}, {"enter", "open"}, {"tab/->", "runs"}, {"/", "filter"}, {"r", "run workflow"}, {"q", "quit"}}
 	}
 	return [][2]string{{"j/k", "move"}, {"enter", "open"}, {"tab/<-", "workflows"}, {"/", "filter"}, {"r", "run workflow"}, {"p", "pause"}, {"R", "resume"}, {"q", "quit"}}
 }
@@ -520,13 +533,16 @@ func (m *model) workflowKeys() [][2]string {
 // runKeys is the footer per view: a key the footer does not list does not
 // exist.
 func (m *model) runKeys() [][2]string {
+	if m.rfocus != "" {
+		return [][2]string{{"j/k", "scroll"}, {"pgup/pgdn", "page"}, {"tab", "next pane"}, {"esc/<-", "list"}, {"q", "back"}}
+	}
 	switch m.view {
 	case "timeline":
-		return [][2]string{{"j/k", "move"}, {"->", "in"}, {"<-", "up"}, {"+/-", "zoom"}, {"n", "problem"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+		return [][2]string{{"j/k", "move"}, {"->", "in"}, {"<-", "up"}, {"+/-", "zoom"}, {"tab", "panes"}, {"n", "problem"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 	case "flow":
-		return [][2]string{{"j/k", "move"}, {"n", "problem"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+		return [][2]string{{"j/k", "move"}, {"tab", "panes"}, {"n", "problem"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 	}
-	return [][2]string{{"j/k", "move"}, {"->", "open"}, {"<-", "close"}, {"n", "problem"}, {"/", "filter"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
+	return [][2]string{{"j/k", "move"}, {"->", "open"}, {"<-", "close"}, {"tab", "panes"}, {"n", "problem"}, {"/", "filter"}, {"h", "history"}, {"p", "pause"}, {"R", "resume"}, {"t/w/l", "views"}, {"f", "follow"}, {"q", "back"}}
 }
 
 // handle applies one key; it returns false when the app should exit.
@@ -578,6 +594,9 @@ func p(m *model) *prompt { return m.prompt }
 // A key the footer does not list does not exist, and the footer folds to a
 // second row rather than dropping one.
 func (m *model) handleHome(ctx context.Context, k key) bool {
+	if m.pfDrill != "" {
+		return m.handleDrill(k)
+	}
 	switch {
 	case k.name == "esc" && m.rfilter != "":
 		m.rfilter = "" // back out one step: the filter goes before the screen
@@ -599,6 +618,8 @@ func (m *model) handleHome(ctx context.Context, k key) bool {
 		} else {
 			m.focus = "runs"
 		}
+	case k.name == "right" && m.focus == "workflows" && m.project.Err == nil && m.wfSel >= len(m.project.Workflows):
+		m.drillInto() // a class line: right goes in, like enter
 	case k.name == "right":
 		m.focus = "runs"
 	case k.name == "left":
@@ -615,6 +636,8 @@ func (m *model) handleHome(ctx context.Context, k key) bool {
 		if m.focus == "workflows" {
 			if m.wfSel < len(m.project.Workflows) {
 				m.openWorkflow(m.project.Workflows[m.wfSel].Name)
+			} else if m.project.Err == nil {
+				m.drillInto()
 			}
 			break
 		}
@@ -649,13 +672,47 @@ func (m *model) handleHome(ctx context.Context, k key) bool {
 	return true
 }
 
-// homeMove moves the focused Home list by d rows, clamped.
+// homeMove moves the focused Home list by d rows, clamped. The project
+// pane's list is the workflows followed by the preflight classes.
 func (m *model) homeMove(d int) {
 	if m.focus == "workflows" {
-		m.wfSel = clamp(m.wfSel+d, 0, len(m.project.Workflows)-1)
+		n := len(m.project.Workflows)
+		if m.project.Err == nil {
+			n += len(classNames)
+		}
+		m.wfSel = clamp(m.wfSel+d, 0, n-1)
 		return
 	}
 	m.runSel = clamp(m.runSel+d, 0, len(m.shown)-1)
+}
+
+// drillInto opens the checklist class under the cursor.
+func (m *model) drillInto() {
+	if classes := preflightClasses(m.project); m.wfSel-len(m.project.Workflows) < len(classes) {
+		m.pfDrill, m.pfSel = classes[m.wfSel-len(m.project.Workflows)].Name, 0
+	}
+}
+
+// handleDrill is the checklist's drill-down: a list with a cursor; esc or
+// left comes back to the class; q quits, as on Home.
+func (m *model) handleDrill(k key) bool {
+	c, _ := classByName(preflightClasses(m.project), m.pfDrill)
+	m.pfSel = clamp(m.pfSel, 0, len(c.Items)-1)
+	switch {
+	case k.name == "esc" || k.name == "left" || k.r == 0x7f || k.r == 0x08:
+		m.pfDrill = ""
+	case k.r == 'q':
+		return false
+	case k.r == 'j' || k.name == "down":
+		m.pfSel = clamp(m.pfSel+1, 0, len(c.Items)-1)
+	case k.r == 'k' || k.name == "up":
+		m.pfSel = clamp(m.pfSel-1, 0, len(c.Items)-1)
+	case k.name == "pgdn":
+		m.pfSel = clamp(m.pfSel+10, 0, len(c.Items)-1)
+	case k.name == "pgup":
+		m.pfSel = clamp(m.pfSel-10, 0, len(c.Items)-1)
+	}
+	return true
 }
 
 func clamp(v, lo, hi int) int {
@@ -695,7 +752,13 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 		return m.handleWorkflow(ctx, k)
 	}
 	back := k.name == "left" || k.r == 0x7f || k.r == 0x08
+	if m.rfocus != "" && k.r != 'q' {
+		return m.handlePaneScroll(k, back)
+	}
+	m.rfocus = "" // q leaves the run from any pane, with its re-enter command
 	switch {
+	case k.r == '\t':
+		m.rfocus = "step"
 	case (k.name == "esc" || back) && m.view == "timeline" && len(m.tpath) > 0:
 		m.timelineUp() // a level up comes before leaving the run
 	case k.name == "esc" && m.filter != "":
@@ -789,6 +852,38 @@ func (m *model) handleRun(ctx context.Context, k key) bool {
 			}
 			return "filter: " + text + " (empty or esc to clear)"
 		}}
+	}
+	return true
+}
+
+// handlePaneScroll is the Run screen with STEP or OUTPUT focused: j/k and
+// the page keys move the pane, tab goes to the next pane, esc or left back
+// to the list (q is handled before this, so it leaves the run from any
+// pane with its re-enter command). STEP hangs from its top (down drops
+// rows), OUTPUT from its tail (up walks back into the file); both read as
+// "down shows later, up shows earlier".
+func (m *model) handlePaneScroll(k key, back bool) bool {
+	off, step := &m.soff, 1
+	if m.rfocus == "output" {
+		off, step = &m.ooff, -1
+	}
+	switch {
+	case k.r == '\t':
+		if m.rfocus == "step" {
+			m.rfocus = "output"
+		} else {
+			m.rfocus = ""
+		}
+	case k.name == "esc" || back:
+		m.rfocus = ""
+	case k.r == 'j' || k.name == "down":
+		*off = max(0, *off+step)
+	case k.r == 'k' || k.name == "up":
+		*off = max(0, *off-step)
+	case k.name == "pgdn":
+		*off = max(0, *off+10*step)
+	case k.name == "pgup":
+		*off = max(0, *off-10*step)
 	}
 	return true
 }

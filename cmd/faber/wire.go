@@ -331,9 +331,16 @@ type imageProbe struct {
 
 // Tag recomputes on every probe — the view re-probes to pick up edits, so it
 // gets a fresh tagger each time; only a run memoizes (newImageTagger per
-// Execute). The builder's own faber-box cache keeps the big read cheap.
+// Execute). A hook the image cannot bake is reported through the view's
+// ErrImageInputs with the slot and reason, so Home shows the image as not
+// checked beside the templates row that names the slot, not as a second FAIL.
 func (p imageProbe) Tag(t *config.ResolvedTemplate) (string, error) {
-	return newImageTagger(p.b).Tag(t)
+	tag, err := newImageTagger(p.b).Tag(t)
+	var hook *infra.HookInputError
+	if errors.As(err, &hook) {
+		return "", fmt.Errorf("%w: hooks.%s %v", tui.ErrImageInputs, hook.Slot, hook.Err)
+	}
+	return tag, err
 }
 func (p imageProbe) Exists(ctx context.Context, tag string) (bool, error) {
 	return p.docker.ImageExists(ctx, tag)

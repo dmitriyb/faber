@@ -434,7 +434,7 @@ func TestHomeShowsMissingTagHash(t *testing.T) {
 	m := newApp(Options{Store: store, Now: func() time.Time { return fixed }, Images: fakeProbe{}}, config.UIOptions{ConfigPath: abs})
 	m.refresh(context.Background())
 	frame := m.render(221, 51).plain()
-	if !strings.Contains(frame, "images      4    4 MISSING") || !strings.Contains(frame, "merge            faber build   20be39bb9bb7") {
+	if !strings.Contains(frame, "images       MISSING      4 of 4   faber build") || !strings.Contains(frame, "fix                 faber build   20be39bb9bb7") || !strings.Contains(frame, "+2 more") {
 		t.Errorf("missing images: expected the count and a row per image with its tag hash:\n%s", frame)
 	}
 }
@@ -471,7 +471,7 @@ func TestPreflight(t *testing.T) {
 		t.Errorf("resolver: %+v", pf.Resolver)
 	}
 	frame := m.render(221, 51).plain()
-	for _, want := range []string{"identities  3    3 MISSING", "implementer      key file not found", "templates   4    3 MISSING", "implement   prelude    ./hooks/claim-item", "resolver MISSING  ./hooks/get-token   1 service"} {
+	for _, want := range []string{"PREFLIGHT    status       detail", "config       ok           valid", "keys         MISSING      3 of 3 roles", "implementer         key file not found", "merger              key file not found", "+1 more", "hooks        MISSING      5 slots in 3 templates", "fix/context         ./hooks/fetch-change missing", "+3 more", "credentials  MISSING      resolver missing, 1 service", "resolver            ./hooks/get-token missing"} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("Home lacks %q:\n%s", want, frame)
 		}
@@ -522,7 +522,7 @@ func TestPreflight(t *testing.T) {
 		t.Errorf("resolver with its file: %+v", m2.project.Preflight.Resolver)
 	}
 	frame = m2.render(221, 51).plain()
-	for _, want := range []string{"identities  4    1 MISSING", "merger           faber add-key --role merger", "auditor          unused", "templates   4    ok", "resolver ok   1 service   not checked"} {
+	for _, want := range []string{"keys         MISSING      1 of 4 roles, 1 unused", "merger              not in the registry", "hooks        ok           4 templates", "credentials  ok           resolver ./hooks/get-token, 1 service"} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("Home lacks %q:\n%s", want, frame)
 		}
@@ -540,7 +540,7 @@ func TestPreviewFolds(t *testing.T) {
 	m := testModel(t, store)
 	m.openWorkflow("task")
 	frame := m.render(221, 51).plain()
-	for _, want := range []string{"> PARAMS   2 params", "> STRUCTURE   1 loop", "v NEEDS   4 images   3 roles   4 templates   1 service   9 MISSING", "image       implement   not checked", "v STEP   implement   template implement   identity implementer", "v hooks   3 of 4 set   3 MISSING", "postlude    none", "> inputs/outputs   2 inputs   2 outputs", "> history   2 attempts   p50 3m00s   all runs of task"} {
+	for _, want := range []string{"> PARAMS   2 params", "> STRUCTURE   1 loop", "v NEEDS   4 images   3 roles   4 templates   1 service   9 MISSING", "images       not checked  4 of 4", "keys         MISSING      3 of 3 roles", "v STEP   implement   template implement   identity implementer", "v hooks   3 of 4 set   3 MISSING", "postlude    none", "> inputs/outputs   2 inputs   2 outputs", "> history   2 attempts   p50 3m00s   all runs of task"} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("preview pane lacks %q:\n%s", want, frame)
 		}
@@ -654,7 +654,7 @@ func TestTimelineCursorAndLetters(t *testing.T) {
 	if !strings.Contains(frame, "TIMELINE   review-cycle 2/3") || !strings.Contains(frame, "in task") || !strings.Contains(frame, "review-cycle 2/3 > review") {
 		t.Errorf("breadcrumb, parent bar or STEP missing inside the iteration:\n%s", frame)
 	}
-	if !strings.Contains(frame, "-> in   <- up") {
+	if !strings.Contains(frame, "-> in") || !strings.Contains(frame, "<- up") {
 		t.Errorf("the timeline footer does not name the level keys:\n%s", frame)
 	}
 	m.handle(context.Background(), key{name: "left"})
@@ -975,12 +975,20 @@ func TestKeysAreOneVocabulary(t *testing.T) {
 		t.Errorf("left on Home: focus %q", m.focus)
 	}
 	m.handle(context.Background(), key{name: "pgdn"})
-	if m.wfSel != len(m.project.Workflows)-1 {
-		t.Errorf("pgdn on the workflows: %d", m.wfSel)
+	if m.wfSel != len(m.project.Workflows)+len(classNames)-1 {
+		t.Errorf("pgdn on the project pane (workflows, then the checklist): %d", m.wfSel)
 	}
+	// right on a class line goes into it, as enter does; on a workflow it is
+	// the runs pane
 	m.handle(context.Background(), key{name: "right"})
-	if m.focus != "runs" {
-		t.Errorf("right on Home: focus %q", m.focus)
+	if m.pfDrill != classNames[len(classNames)-1] || m.focus != "workflows" {
+		t.Errorf("right on a class line: drill %q focus %q", m.pfDrill, m.focus)
+	}
+	m.handle(context.Background(), key{name: "esc"})
+	m.handle(context.Background(), key{name: "pgup"})
+	m.handle(context.Background(), key{name: "right"})
+	if m.focus != "runs" || m.pfDrill != "" {
+		t.Errorf("right on a workflow line: focus %q drill %q", m.focus, m.pfDrill)
 	}
 	// preview: right goes to details, left comes back, esc from the pane comes back first
 	m.openWorkflow("task")
@@ -1137,7 +1145,7 @@ func TestNeedsListsTheWorkflowsImages(t *testing.T) {
 	m.refresh(context.Background())
 	m.openWorkflow("task")
 	frame := m.render(221, 51).plain()
-	for _, want := range []string{"v NEEDS   4 images", "image       implement   MISSING   faber build   20be39bb9bb7", "image       review   MISSING"} {
+	for _, want := range []string{"v NEEDS   4 images", "images       MISSING      4 of 4   faber build", "implement           faber build   20be39bb9bb7", "+2 more"} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("task NEEDS lacks %q:\n%s", want, frame)
 		}
@@ -1145,7 +1153,12 @@ func TestNeedsListsTheWorkflowsImages(t *testing.T) {
 	m.handle(context.Background(), key{r: 'q'})
 	m.openWorkflow("epic")
 	frame = m.render(221, 51).plain()
-	if !strings.Contains(frame, "image       implement   MISSING") || !strings.Contains(frame, "image       merge   MISSING") {
-		t.Errorf("epic NEEDS lacks its templates' images:\n%s", frame)
+	images, _ := classByName(needsClasses(m.project, m.run.IR), "images")
+	names := map[string]bool{}
+	for _, it := range images.Items {
+		names[it.Who] = true
+	}
+	if !strings.Contains(frame, "images       MISSING") || !names["implement"] || !names["merge"] {
+		t.Errorf("epic NEEDS lacks its templates' images (%v):\n%s", names, frame)
 	}
 }

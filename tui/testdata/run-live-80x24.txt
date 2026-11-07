@@ -20,5 +20,5 @@ STEPS                                    | STEP
                                          |
                                          |
                                          |
-j/k move -> open <- close n problem / filter h history p pause R resume
-t/w/l views   f follow   q back
+j/k move -> open <- close tab panes n problem / filter h history p pause
+R resume   t/w/l views   f follow   q back

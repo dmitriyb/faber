@@ -20,5 +20,5 @@ TIMELINE   whole run   +/- zoom          | STEP
                                          |
                                          |
                                          |
-j/k move -> in <- up +/- zoom n problem h history p pause R resume t/w/l views
-f follow   q back
+j/k move -> in <- up +/- zoom tab panes n problem h history p pause R resume
+t/w/l views   f follow   q back

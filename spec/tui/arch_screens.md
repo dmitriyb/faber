@@ -20,7 +20,12 @@ a cursor position).
   and the **preflight**: what the run would find out when a box starts,
   read before anyone presses run and never by running anything. Images:
   tag resolution plus a daemon existence check through the injected
-  probe. Roles: every declared identity — `unused` when no template names
+  probe, in four states — `ok` (in the daemon), `MISSING` (not in the
+  daemon: `faber build`), `FAIL` (the tag cannot be computed for a reason
+  of its own: no faber-box to bake, a binary of the wrong kind), and `not
+  checked` (no probe wired, the daemon unreachable, or a hook the image
+  bakes is missing or broken — then the hooks class names the slot and the
+  image says `hook prelude missing`, never a second FAIL). Roles: every declared identity — `unused` when no template names
   it (a template without an identity needs no key, so a declared role is
   a problem only when it is used), `ok` when a key resolves (a path-form
   key by stat; a registry role through the injected key probe, the same
@@ -67,14 +72,31 @@ a cursor position).
 
 Header (the config path, the clock), a rule, two panes, a rule, the
 selected run's block, the footer. The project pane lists workflows with
-`name=<required>` / `name=default` params, then the preflight as
-**counts, with a row per problem**: `config ok valid`, `images 4 ok`,
-`identities 12   2 MISSING` with the two roles beneath it and their fix,
-`templates 4   1 MISSING` with `implement   prelude   ./hooks/claim-item`
-beneath it, `credentials resolver ok   3 services not checked`. Fifty
-healthy roles are one line; an unused one is a dim row; a missing image
-is a row with `faber build` and the tag hash it was looked up under, so
-"MISSING" is checkable against `docker image ls`. The runs
+`name=<required>` / `name=default` params, then the **preflight as a
+checklist**: a dim header `PREFLIGHT   status   detail`, then one line per
+class — `config`, `images`, `keys`, `hooks`, `credentials` — with the
+state in a fixed column of four words (`ok`, `MISSING`, `FAIL`, `not
+checked`, coloured) and one precise fact in the last (`valid`, `4 built`,
+`2 of 4   faber build`, `3 of 3 roles`, `3 slots in 2 templates`,
+`resolver ./hooks/get-token, 1 service`, `resolver missing, 1 service`, or
+`2 services, no resolver needed` when every service is a proxy or helper
+handle, since only file-mode services call the resolver). Beneath a class that is not ok,
+up to two problem rows as columns — who, then what (and the fix when it
+fits after the whole reason; the drill-down always has it): `merger      key file not found`, `implement/prelude
+./hooks/claim-item missing`, `review      faber build` — then `+k more`
+when the class has more; one row per class on a short pane. The summary
+never scrolls: five classes and at most three rows each. The cursor can
+rest on a class line; `enter` or right **drills in**: the pane shows the
+crumb `PREFLIGHT > hooks` and every problem of that class with its fix
+(`merger   not in the registry   faber add-key --role merger`), a cursor
+and a window that scrolls as the runs table does; `esc` or left comes back
+with the cursor on the class, `q` quits as on Home. On a pane under fifty
+columns the problem rows drop their indent and the drill-down folds the fix
+into the what column, so the reason stays on screen. Fifty healthy roles are one line; a
+missing image is a row with `faber build`, and its drill-down row carries
+the tag hash it was looked up under, so `MISSING` is checkable against
+`docker image ls`; a role no template names is counted as unused in the
+keys fact, not listed as a problem. The runs
 pane is the `faber runs` table with wall and a `now` column (the live run's
 breadcrumb), folding to id / state / now under a hundred columns; the
 selection is a full reverse-video row. Live runs are pinned at the top
@@ -88,7 +110,8 @@ never while drawing. A quiet live run gets no `next` line: the journal
 cannot say what the scheduler waits on, so the view does not guess. Keys: `tab` (or
 left/right) moves the focus between the runs and the workflows pane;
 `j`/`k` move within it; enter opens the selected run, or — with the
-workflows pane focused — the selected workflow's preview; `r` prompts `run
+workflows pane focused — the selected workflow's preview, or the
+preflight class under the cursor; `r` prompts `run
 <workflow> [k=v …]` and spawns the child; `p` pauses a live run (and
 refuses, with a message, a run that is not live — no marker is written);
 `R` spawns the resume (and refuses a live run, which holds its own lock);
@@ -161,12 +184,22 @@ over OUTPUT, and the footer.
   the screen is tall enough), the newest rows kept when short. A halt
   event's `next` sentence replaces `resume` on the now strip's
   `failed at … next:`. **OUTPUT**: the newest attempt's `output.log` tail,
-  terminal-sanitized, as the events are.
+  terminal-sanitized, as the events are. **Both scroll**: `tab` cycles the
+  Run screen's focus from the list to STEP to OUTPUT and back (left and
+  right keep their meaning on the list, so they do not switch panes here);
+  the focused pane's title is drawn in reverse, `j`/`k` and the page keys
+  move it a row or ten, and its title says how much lies above (`STEP
+  3 above`, `OUTPUT   attempt 1   output.log   40 above`). The offsets
+  reset when the selected step changes or another run opens; `esc` or left
+  returns the focus to the list, and `q` leaves the run from any pane with
+  the same re-enter command the list prints.
 
 One key vocabulary on every screen: `j`/`k`, arrows and page keys move
 the list that has the cursor; `tab` and left/right move between panes
 where a screen has two (Home: left is the project, right the runs; the
-preview: left the flow, right the details); right or enter goes into the
+preview: left the flow, right the details; on the Run screen `tab` alone
+cycles the list, STEP and OUTPUT, since left and right belong to the
+list there); right or enter goes into the
 thing under the cursor (opens an iteration, drills into a timeline group,
 opens a block) and left comes out of it (closes the iteration, even from
 inside it, with the cursor back on its row; a level up); esc backs out
@@ -195,11 +228,12 @@ since nothing has state. STRUCTURE lists loop shapes once (`cycles >
 review-cycle, up to 5`), never the unrolled iterations. The right pane
 is **blocks that start folded**, each one summary line, so the screen
 holds the minimum and opens on request: `PARAMS   2 params`, `STRUCTURE
-1 loop`, `NEEDS   4 images   3 roles   4 templates   1 service   ok` — the
-preflight narrowed to this workflow's templates: their images with the
-probe's verdict (so `task` lists `implement` and `epic` lists
-`implement-next`, while Home lists the union), its roles with their state,
-a template only by the slot that stops it, the services being global — and
+1 loop`, `NEEDS   4 images   3 roles   4 templates   1 service   ok` — Home's
+checklist narrowed to this workflow's templates (images, keys, hooks,
+credentials; the config line has no per-workflow meaning), the same
+state and fact columns and up to two problem rows per class (so `task`
+lists `implement` and `epic` lists `implement-next`, while Home lists the
+union); the full list is Home's drill-down — and
 `STEP`, open by default, with the selected step's schema
 facts: template, identity with its state, lane, guard (leaf names), retry,
 on_failure, then sub-blocks `hooks   2 of 4 set   ok` (all four hooks

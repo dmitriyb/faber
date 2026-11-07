@@ -7,14 +7,14 @@ PROJECT                              | RUNS   this config   LIVE 1
   epic        group=<required>  repo |   20260915-180538-4fc8c4f3 LIVE      revi
   task        item=<required>  repo= |
                                      |   20260902-170408-d0feb66b FAILED
-  preflight                          |
-  config           ok   valid        |
-  images      4    not checked       |
-  identities  3    3 MISSING         |
-                     implementer     |
-                     merger          |
-                     reviewer        |
-  templates   4    3 MISSING         |
+  PREFLIGHT    status       detail   |
+  config       ok           valid    |
+  images       not checked  4 of 4   |
+  keys         MISSING      3 of 3 r |
+    implementer key file not found   |
+    +2 more                          |
+  hooks        MISSING      5 slots  |
+    fix/context ./hooks/fetch-change |
 --------------------------------------------------------------------------------
 SELECTED   20260915-180538-4fc8c4f3   task   started 2026-09-02 19:29   LIVE
   now   review-cycle 1/3 > review   running  4m00s   usually 4m00s

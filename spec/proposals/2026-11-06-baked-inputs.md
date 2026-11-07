@@ -103,3 +103,18 @@ content; `box_bin` in host.json stays, now naming the binary to bake.
 - **docs**: `commands.md`, `install.md`, `deploy.md`, `configuration.md`.
 - **spec/project.json**: the untrusted-box requirement's "pure function of the
   toolset" becomes "of the toolset and the engine's own inputs".
+
+## Addendum, from the reviews and the first use
+
+- `infra.RunSpec`, `RunResult`, `RunArgs` and `agent.BuildRunSpec` are
+  renamed `ContainerSpec`, `ContainerResult`, `ContainerArgs`,
+  `BuildContainerSpec`: the struct is the specification of one container
+  launch, and "run" already names the workflow execution.
+- The live view's image probe computes tags from faber-box and the hooks
+  now, so a missing hook made the tag fail and Home reported one problem
+  twice. The probe tells the view apart (a typed `HookInputError` from the
+  builder, `tui.ErrImageInputs` to the view) and the preflight block is
+  redrawn as a checklist: one line per class with a state word and one
+  fact, up to two problem rows beneath a failing class, a drill-down per
+  class for the rest. STEP and OUTPUT scroll under `tab` focus. The tui
+  module's leaves carry the design; the view stays a reader.

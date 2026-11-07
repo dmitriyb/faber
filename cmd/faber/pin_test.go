@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/binary"
+	"errors"
+	"github.com/dmitriyb/faber/tui"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/dmitriyb/faber/config"
@@ -134,5 +137,22 @@ func TestImageProbeRecomputes(t *testing.T) {
 	}
 	if after == before {
 		t.Fatalf("the probe kept a stale tag %q after the hook changed", before)
+	}
+}
+
+// Verifies f392ecd71cd1: the probe hands the view ErrImageInputs for a hook
+// the image cannot bake, and the plain error for anything else, so Home
+// shows a missing hook once.
+func TestImageProbeClassifiesTagErrors(t *testing.T) {
+	b := infra.NewImageBuilder(nil, nil, infra.DefaultNixpkgsPin(), "", fakeBoxBin(t), nil)
+	probe := imageProbe{b: b}
+	_, err := probe.Tag(&config.ResolvedTemplate{Name: "box", Packages: []string{"git"}, Hooks: config.HookSet{Context: filepath.Join(t.TempDir(), "absent")}})
+	if !errors.Is(err, tui.ErrImageInputs) || !strings.Contains(err.Error(), "hooks.context not found") {
+		t.Fatalf("missing hook: %v", err)
+	}
+	none := imageProbe{b: infra.NewImageBuilder(nil, nil, infra.DefaultNixpkgsPin(), "", "", nil)}
+	_, err = none.Tag(&config.ResolvedTemplate{Name: "box", Packages: []string{"git"}})
+	if err == nil || errors.Is(err, tui.ErrImageInputs) {
+		t.Fatalf("a missing faber-box is not a hook problem: %v", err)
 	}
 }

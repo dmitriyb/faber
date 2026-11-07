@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -346,5 +347,17 @@ func TestCheckLinuxELFRefusesOtherOSABI(t *testing.T) {
 	}
 	if err := checkLinuxELF(fakeELF(runtime.GOARCH, ""), runtime.GOARCH); err != nil {
 		t.Fatalf("a linux ELF of the host arch refused: %v", err)
+	}
+}
+
+// Verifies 0acac696dcf1: a hook the image cannot bake is a typed error that
+// names the template, the slot and the path and unwraps to the hook-file
+// check's reason.
+func TestHookInputErrorIsTyped(t *testing.T) {
+	b := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testBox(t), testLogger())
+	_, err := b.ImageTag("review", config.BuildDef{Packages: []string{"git"}}, ImageInputs{Hooks: config.HookSet{Prelude: filepath.Join(t.TempDir(), "absent")}})
+	var hook *HookInputError
+	if !errors.As(err, &hook) || hook.Template != "review" || hook.Slot != "prelude" || !errors.Is(err, config.ErrHookNotFound) {
+		t.Fatalf("want a typed hook error unwrapping to not found, got %v", err)
 	}
 }

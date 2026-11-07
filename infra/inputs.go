@@ -92,11 +92,11 @@ func (b *ImageBuilder) readInputs(tpl string, build config.BuildDef, in ImageInp
 			continue
 		}
 		if err := config.CheckHookFile(p); err != nil {
-			return out, fmt.Errorf("templates.%s.hooks.%s: %s: %v", tpl, slot, p, err)
+			return out, &HookInputError{Template: tpl, Slot: slot, Path: p, Err: err}
 		}
 		data, err := os.ReadFile(p)
 		if err != nil {
-			return out, fmt.Errorf("templates.%s.hooks.%s: %w", tpl, slot, err)
+			return out, &HookInputError{Template: tpl, Slot: slot, Path: p, Err: err}
 		}
 		out.hooks = append(out.hooks, stagedHook{slot: slot, data: data})
 	}
@@ -125,6 +125,21 @@ func (b *ImageBuilder) readInputs(tpl string, build config.BuildDef, in ImageInp
 	}
 	return out, nil
 }
+
+// HookInputError is a hook the image would bake that cannot be read: absent,
+// not a regular file, not executable, no interpreter line. Typed so a caller
+// that already reports hook slots (the live view's preflight) can tell it
+// from every other reason a tag cannot be computed.
+type HookInputError struct {
+	Template, Slot, Path string
+	Err                  error
+}
+
+func (e *HookInputError) Error() string {
+	return fmt.Sprintf("templates.%s.hooks.%s: %s: %v", e.Template, e.Slot, e.Path, e.Err)
+}
+
+func (e *HookInputError) Unwrap() error { return e.Err }
 
 // readBox reads the faber-box binary, proven to be a linux ELF of the image's
 // architecture before a byte of it is staged. The bytes are cached by the
