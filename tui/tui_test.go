@@ -18,6 +18,13 @@ import (
 
 const refConfig = "../config/testdata/reference.yaml"
 
+// The screens render clock times in the local zone; the goldens were drawn
+// in UTC, so the tests pin the zone rather than the machine.
+func TestMain(m *testing.M) {
+	time.Local = time.UTC
+	os.Exit(m.Run())
+}
+
 var (
 	t0    = time.Date(2026, 9, 2, 19, 4, 8, 0, time.UTC)
 	fixed = t0.Add(45 * time.Minute)
