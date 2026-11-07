@@ -51,7 +51,8 @@ const (
 const HandoffKeyingSlot = "slot"
 
 // Result is one step attempt's record: the shape of result.json in the
-// mounted result directory and the value the host threads onward. The
+// box's result directory, shipped to the host, and the value the host
+// threads onward. The
 // pipeline executor adapts it to the failure module's step-result type at
 // integration.
 type Result struct {
@@ -147,8 +148,8 @@ type Handoff struct {
 }
 
 // WriteResultFile writes the attempt record atomically (temp file plus rename
-// within the result directory) so the mounted directory never exposes a
-// half-written record. It stamps the writer's ContractVersion so the host
+// within the result directory) so the directory never holds a half-written
+// record when the shipping step reads it. It stamps the writer's ContractVersion so the host
 // can assert the record's vintage on extract.
 func WriteResultFile(dir string, rec Result) error {
 	if rec.Contract == 0 {

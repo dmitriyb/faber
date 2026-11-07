@@ -22,20 +22,25 @@ import (
 // DockerClient is the typed docker CLI seam. ImageExists and NetworkExists
 // query with pinned --format json; Load parses the single fixed-format
 // "Loaded image:" result line; ContainerRun executes a pre-assembled argv
-// (only ContainerRunner ever constructs one) streaming combined output to the
-// writer; Kill stops a container by its deterministic name.
+// (only ContainerRunner ever constructs one); Exec runs an argv inside a
+// running container; ExecTerminal does the same with the operator's
+// terminal attached; Kill stops a container by its deterministic name.
 //
-// When stdin is non-nil ContainerRun wires it to the container's standard
-// input (the caller has already put "-i" in args), copies it to EOF, and
-// closes the pipe — a clean EOF the box reads as end-of-payload. stdin == nil
-// leaves stdin unattached. The stdin bytes are a potential credential (the
-// file-mode secrets payload), so they are never logged, exactly like a
-// CommandRunner's stdout.
+// The container's two output streams are never merged: stdout is the box's
+// frame channel, stderr (with docker's own messages, which the client prints
+// on stderr) the human log. When stdin is non-nil ContainerRun and Exec wire
+// it to the process's standard input (the caller has put "-i" in args, or
+// Exec adds it), copy it to EOF, and close the pipe — a clean EOF the box
+// reads as end-of-payload. stdin == nil leaves stdin unattached. The stdin
+// bytes are a potential credential (the file-mode secrets payload), so they
+// are never logged, exactly like a CommandRunner's stdout.
 type DockerClient interface {
 	ImageExists(ctx context.Context, tag string) (bool, error)
 	Load(ctx context.Context, tarball string) (string, error) // returns the loaded tag
 	NetworkExists(ctx context.Context, name string) (bool, error)
-	ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error)
+	ContainerRun(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
+	Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
+	ExecTerminal(ctx context.Context, name string, argv []string, env map[string]string, user, workdir string) error
 	Kill(ctx context.Context, name string) error
 	// Remove force-removes a container by name (docker rm -f), running or
 	// stopped; an absent container is success, so eviction is idempotent.

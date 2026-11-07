@@ -52,11 +52,19 @@ func (f *fakeDocker) NetworkExists(_ context.Context, name string) (bool, error)
 	return f.networks[name], nil
 }
 
-func (f *fakeDocker) ContainerRun(context.Context, []string, io.Reader, io.Writer) (int, error) {
+func (f *fakeDocker) ContainerRun(context.Context, []string, io.Reader, io.Writer, io.Writer) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runCalls++
 	return 0, nil
+}
+
+func (f *fakeDocker) Exec(context.Context, string, []string, io.Reader, io.Writer, io.Writer) (int, error) {
+	return 0, nil
+}
+
+func (f *fakeDocker) ExecTerminal(context.Context, string, []string, map[string]string, string, string) error {
+	return nil
 }
 
 func (f *fakeDocker) Kill(_ context.Context, name string) error {

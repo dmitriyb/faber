@@ -205,7 +205,8 @@ func TestBranchDeclarationWithoutRepo(t *testing.T) {
 }
 
 // Verifies b880aa49b3b9: the fail-stop path snapshots the bundle directory
-// into the mounted result dir so container removal cannot lose it.
+// into the result dir, shipped with the record, so container removal
+// cannot lose it.
 func TestFailStopSnapshotsBundle(t *testing.T) {
 	d := newTestDirs(t)
 	fr := &fakeRunner{}

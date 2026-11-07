@@ -98,7 +98,7 @@
       "id": "932a73dcb170",
       "type": "non_functional",
       "title": "Untrusted box",
-      "description": "The thing inside the container is untrusted. Every real control is enforced from outside the container or is immutable relative to it. The image is a pure function of the toolset and of the engine's own static inputs (faber-box, the hook scripts, the skills tree), so the box shares no host path for them; trust lives in the run bindings and companion services. An optional isolation-runtime knob hardens the container boundary where desired.",
+      "description": "The thing inside the container is untrusted. Every real control is enforced from outside the container or is immutable relative to it. The image is a pure function of the toolset and of the engine's own static inputs (faber-box, the hook scripts, the skills tree), and what the box hands back travels on its standard output, so the box shares no host path with the engine; trust lives in the run bindings and companion services. An optional isolation-runtime knob hardens the container boundary where desired.",
       "priority": 2
     },
     {

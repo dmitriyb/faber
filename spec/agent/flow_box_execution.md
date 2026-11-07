@@ -7,12 +7,14 @@ inside the sealed container.
 ```
 host: step spec (resolved template + bound inputs)
         │  box contract: FABER_* env (incl. FABER_SKILLS_LINK,
-        │  FABER_SECRETS_STDIN), result-dir mount; faber-box, the hooks
-        │  and /faber/skills are image content; binding fragments
-        │  (network/remote/identity/credentials) composed by security,
-        │  argv assembled by infra; file-mode tokens streamed on stdin
+        │  FABER_SECRETS_STDIN); no host path mounted — faber-box, the
+        │  hooks and /faber/skills are image content, /faber/result a
+        │  tmpfs; binding fragments (network/remote/identity/credentials)
+        │  composed by security, argv assembled by infra; file-mode
+        │  tokens streamed on stdin
         ▼
 ──────────────── container start ───────────────────────────────
+ 0 preamble: chown the writables (result, bundle, tmp, home), drop to the run user
  1 skills link                 $HOME/<link> ──► /faber/skills (no-op if unset)
  2 env contract check          FABER_INPUT_*, FABER_SKILL, dirs
  3 stdin payload ──► /run/secrets/* (file mode)  then  /run/secrets/* ──► process env
@@ -29,8 +31,12 @@ host: step spec (resolved template + bound inputs)
         └──► result.json (one attempt record)      [any failed phase:
                                                     handoff.json + failed
                                                     result.json, exit 1]
+   ship: result/** (result.json last), sessions/**, end ──► stdout frames
+   (events.jsonl lines went out as event frames while 7–10 ran;
+    everything human — box log, hook and agent output — went to stderr)
 ──────────────── container exit ────────────────────────────────
-        │
+        │  stdout ──► demuxer ──► <attempt>/result/**, <attempt>/sessions/**
+        │  stderr ──► <attempt>/output.log (live, as it streamed)
         ▼
 host: ExtractResult ──► re-validate ──► failure.Result
         ├──► threading (declared output fields to downstream slots)
@@ -42,11 +48,11 @@ host: ExtractResult ──► re-validate ──► failure.Result
 
 | Boundary | Shape | Contract |
 |----------|-------|----------|
-| host -> box | env vars + read-only mounts (+ stdin in file mode) | typed inputs as `FABER_INPUT_<SLOT>`; no secret ever in the docker `-e` argv or a host file — file-mode tokens arrive as a JSON payload on the container's stdin |
+| host -> box | env vars (+ stdin in file mode); no host path | typed inputs as `FABER_INPUT_<SLOT>`; no secret ever in the docker `-e` argv or a host file — file-mode tokens arrive as a JSON payload on the container's stdin |
 | setup -> hooks | the box environment | hooks see inputs, handles, workspace cwd; nothing else |
 | hooks -> agent | context bundle | `CONTEXT.md` mandatory (or synthesized); `bundle.env` values opaque, `BRANCH` = declared side-effect |
 | agent -> extractor | `output.json` | declared output fields only; absence triggers the fallback |
-| box -> host | `result.json` in the mounted dir | exactly one record per attempt: `{status, payload\|error, timing, attempt}` |
+| box -> host | frames on the container's stdout: `event` lines live, `result/**` and `sessions/**` at the end, `result.json` last, then `end` | exactly one record per attempt: `{status, payload\|error, timing, attempt}`; names contained under two roots, bodies bounded, a truncated frame is an absent file |
 | host -> downstream | `failure.Result` | schema re-validated before threading, journaling, metering |
 
 ## Error paths
@@ -56,9 +62,10 @@ plus a failed `result.json` and exits nonzero — hook exit, missing bundle,
 agent crash, schema violation, and unverified side-effect differ only in the
 record's `error.reason` and handoff contents. There are exactly two shapes the
 host can observe after exit: one valid record, or no readable record (the
-sequencer itself died), which the host converts into a synthesized
-`box-vanished` failure. Two records, zero records, or a half-written record
-cannot occur (atomic rename, single writer).
+sequencer itself died, or the stream broke before its last frame), which the
+host converts into a synthesized `box-vanished` failure. Two records, zero
+records, or a half-written record cannot occur (atomic rename in the box,
+`result.json` sent last, temporary name and rename on the host).
 
 ## Who runs it
 

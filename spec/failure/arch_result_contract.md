@@ -14,7 +14,8 @@ never launched, the engine holds exactly one record of the same shape.
 ```
 
 Exactly one of `payload`/`error`/`halt` is present, discriminated by `status`. The
-record is written by the box to the mounted result directory as `result.json`;
+record is written by the box to its result directory as `result.json` and
+shipped to the host over the box's stdout as the attempt's last frame;
 the engine writes a minimal fallback if the agent succeeded but wrote none
 (the proven harness does the same). The payload is schema-validated against
 the template's declared output — by the agent module's ResultExtractor, before

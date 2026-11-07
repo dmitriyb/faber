@@ -14,6 +14,7 @@ type Box struct {
     Env     *BoxEnv
     Runner  CmdRunner     // os/exec behind an interface; faked in tests
     Log     *slog.Logger
+    Frames  *contract.FrameWriter // the box's stdout; nil ships nothing (unit tests with a fake runner)
     Workdir string        // set by clone (or scratch)
     Bundle  *Bundle       // set after prelude
     Timing  map[string]time.Duration
@@ -39,7 +40,7 @@ type BoxEnv struct {
     SecretsStdin         bool              // FABER_SECRETS_STDIN=1; file-mode tokens arrive on stdin for phase 3 to materialize
     AgentOptional        bool              // FABER_AGENT_OPTIONAL=1; the template declares itself agent-skippable (exact "1", like TOFU)
     Invoke               config.ResolvedInvoke // FABER_INVOKE_PROFILE (concrete JSON); absent/empty ⇒ config.DefaultInvoke(); malformed or rule-breaking ⇒ env-phase violation
-    SessionsDir          string            // FABER_SESSIONS_DIR; container path of the live sessions bind under HOME, "" = capture off
+    SessionsDir          string            // FABER_SESSIONS_DIR; container path under HOME the box ships as sessions/<rel> at the end, "" = capture off
     Slots                []string          // FABER_INPUT_SLOTS; declared slot names, for the slot-keyed handoff
     // FABER_CONTRACT_VERSION is validated by the env phase (see the contract
     // version handshake in impl_hook_result_contracts.md)
@@ -79,6 +80,8 @@ func Main(ctx context.Context, box *Box) int {
         box.failStop("preamble", err)
         return 1
     }
+    stopTail := box.tailEvents(ctx) // event frames while the user phases run
+    defer stopTail()
     for _, p := range phases {
         start := time.Now()
         err := p.Run(box, ctx)
@@ -101,6 +104,21 @@ func Main(ctx context.Context, box *Box) int {
 }
 ```
 
+`main` calls `Main` and then, whatever it returned, `box.Ship(ctx)`: the
+events tail is stopped and flushed, every regular file under `Env.ResultDir`
+goes out as a `result/<rel>` frame (symlinks skipped and logged: none may go
+among the records), `result.json` last, then with `Env.SessionsDir` set
+every entry under it as `sessions/<rel>` with its mtime, symlinks as
+`link`, then `end`. A file over `MaxRecordBytes` is logged and
+skipped. `Ship` is the one place the records leave the container, so it
+cannot be skipped by any exit path: `Main` returns a code on every path and
+never exits the process itself.
+
+```go
+func (b *Box) tailEvents(ctx context.Context) (stop func())   // polls hooks/events.jsonl, sends complete new lines as event frames
+func (b *Box) Ship(ctx context.Context)                       // result/<rel> (result.json last), sessions/<rel>, end
+```
+
 `checkHalt` reads `$FABER_RESULT_DIR/halt.json` (size-bounded like every
 container-boundary record): absent ⇒ `(false, nil)`; unparseable or missing
 its `reason` ⇒ a `halt-invalid` boxError; else it writes the `halted` attempt
@@ -118,7 +136,7 @@ func (b *Box) enterRunUser() error {
         return nil // already non-root, or no drop requested (gateless local)
     }
     home := "/home/box"
-    for _, d := range []string{contract.ContainerWorkspace, b.Env.BundleDir, "/tmp", home} {
+    for _, d := range []string{contract.ContainerWorkspace, b.Env.ResultDir, b.Env.BundleDir, "/tmp", home} {
         if err := os.Chown(d, b.Env.RunUID, b.Env.RunGID); err != nil {
             return fmt.Errorf("preamble: chown %s: %w", d, err)
         }
@@ -129,20 +147,6 @@ func (b *Box) enterRunUser() error {
     if _, err := os.Stat(contract.ContainerSecretsDir); err == nil {
         if err := os.Chown(contract.ContainerSecretsDir, b.Env.RunUID, b.Env.RunGID); err != nil {
             return fmt.Errorf("preamble: chown %s: %w", contract.ContainerSecretsDir, err)
-        }
-    }
-    // The sessions bind is another gated add. The bind target itself is
-    // host-owned by the run user already (the host pre-created it, like the
-    // result dir), but the daemon created its INTERMEDIATE components inside
-    // the HOME tmpfs as root — chown each component between the bind and
-    // HOME (exclusive), or the dropped harness cannot write its own files
-    // beside them. sessionChownPaths CLEANS the value first: this walk runs
-    // as root, and a raw prefix check would let a hand-authored
-    // "/home/box/../../etc" (direct invocations take env verbatim) chown
-    // outside HOME. A value cleaning outside HOME yields the empty set.
-    for _, p := range sessionChownPaths(b.Env.SessionsDir) {
-        if err := os.Chown(p, b.Env.RunUID, b.Env.RunGID); err != nil {
-            return fmt.Errorf("preamble: chown %s: %w", p, err)
         }
     }
     b.setEnv("HOME", home) // b.Environ only — never os.Setenv (no-global-state policy)
@@ -217,8 +221,8 @@ cancellation plumbing is in place.
 
 ```go
 type CmdRunner interface {
-    Run(ctx context.Context, spec CmdSpec) (CmdResult, error) // captured output
-    Stream(ctx context.Context, spec CmdSpec) (int, error)    // inherited stdio
+    Run(ctx context.Context, spec CmdSpec) (CmdResult, error) // captured stdout
+    Stream(ctx context.Context, spec CmdSpec) (int, error)    // stdout AND stderr to the box's stderr: fd 1 is the frame channel
 }
 type CmdSpec struct{ Argv []string; Dir string; Env []string }
 type CmdResult struct{ Stdout []byte; StderrTail []byte; ExitCode int }
@@ -259,7 +263,7 @@ type CmdResult struct{ Stdout []byte; StderrTail []byte; ExitCode int }
   hook file is absent (the absence CHECK is per hook; the shared
   `hookDeclared` flag it sets is consumed only by the pre-agent pair, which
   already ran); runs
-  the mounted `/faber/hooks/postlude` with the box child env, cwd = the
+  the baked `/faber/hooks/postlude` with the box child env, cwd = the
   workdir; nonzero exit fail-stops with phase `postlude` and the stderr
   tail in the handoff. No bundle-existence assertion follows it (that
   gate belongs to the pre-agent pair); the result phase's own validations
@@ -307,8 +311,9 @@ dialect.
 
 `runAgent` builds the Invocation from `BoxEnv` + `Bundle.Doc`, merges the
 bundle sidecar values into the child environment, and calls `Runner.Stream`
-(inherited stdio — agent output belongs to the container log, never to a
-parser). A nonzero exit code returns an error carrying the code and the
+(both of the child's streams go to the container's stderr — agent output
+belongs to the human log, never to a parser, and never to the frame
+channel). A nonzero exit code returns an error carrying the code and the
 stderr tail for the handoff; exit 0 falls through to `emitResult`. No output
 of this phase is interpreted: the result file is the only channel.
 
@@ -322,6 +327,27 @@ skip so the diagnosis names the prelude, not a silent agent.
 No global state anywhere: `Box` is constructed in `main` from `os.Environ()`,
 the runner and logger are injected, and every phase is a method taking the
 context — the whole sequence unit-tests as a plain value with a fake runner.
+
+## The hold and receive entries
+
+```go
+// agent/box, dispatched by cmd/faber-box on its first argument
+func Hold(ctx context.Context) int                                              // blocks until the context is cancelled (SIGTERM, SIGINT)
+func Receive(ctx context.Context, env *BoxEnv, in io.Reader, log *slog.Logger) error
+```
+
+`Receive` runs `contract.ReadFrames` over its stdin with a handler that
+roots `handoff/` at `env.HandoffDir` (`contract.ContainerHandoffDir`, with
+the usual plain-process override) and `sessions/` at `env.SessionsDir`
+(refusing `sessions/` when it is unset, and any other first segment), each
+tree behind an `os.Root` opened on first use so no frame can resolve outside
+it, writes each file through a temporary name, applies the frame's mtime,
+recreates links, and then — as root — chowns both trees to
+`env.RunUID:env.RunGID` plus what the preamble would have chowned and a held
+box lacks: the workspace, `/tmp`, `HOME`, and the components between `HOME`
+and the sessions directory (`holdChownPaths`), so the operator's exec, which
+drops to that user, owns what it finds and can write beside it. Foreign
+bytes on its stdin are a stream error: nothing but faber feeds it.
 
 ## Check runs
 

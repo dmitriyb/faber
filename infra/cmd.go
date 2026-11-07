@@ -76,9 +76,11 @@ func (c *cliRunner) run(ctx context.Context, args ...string) ([]byte, error) {
 	}
 }
 
-// runStreaming executes the tool with combined stdout+stderr streamed to
-// output, returning the exit code. Unlike run, a plain non-zero exit is
-// returned as (code, nil) — the docker run verb treats exit codes as data.
+// runStreaming executes the tool with its two output streams going to two
+// writers as they arrive, returning the exit code. Unlike run, a plain
+// non-zero exit is returned as (code, nil) — the docker run and exec verbs
+// treat exit codes as data. The streams are never merged: for a container
+// run, stdout is the box's frame channel and stderr the human log.
 // When stdin is non-nil os/exec copies it to the child's standard input and
 // closes the pipe on EOF; the bytes are never logged (they may be a
 // credential). stdin == nil leaves the child's stdin unattached.
@@ -91,10 +93,10 @@ func (c *cliRunner) run(ctx context.Context, args ...string) ([]byte, error) {
 // clean end-of-payload. Were cmd.Stdin ever an *os.File (or an already-open fd)
 // os/exec would dup that fd straight through with no copier and no close-on-EOF,
 // and the box's read would hang — do not pass an *os.File here.
-func (c *cliRunner) runStreaming(ctx context.Context, output io.Writer, stdin io.Reader, args ...string) (int, error) {
+func (c *cliRunner) runStreaming(ctx context.Context, stdout, stderr io.Writer, stdin io.Reader, args ...string) (int, error) {
 	cmd := exec.CommandContext(ctx, c.name, args...)
-	cmd.Stdout = output
-	cmd.Stderr = output
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if stdin != nil {
 		cmd.Stdin = stdin
 	}

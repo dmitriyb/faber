@@ -21,7 +21,7 @@ import (
 
 // BoxSpec is everything the host needs to launch one box attempt: the
 // resolved template from the IR (never re-read from YAML), the stringified
-// input bindings, and the host paths of the mounted pieces. The security
+// input bindings, and the per-attempt switches. The security
 // bindings (network, remote, identity, credentials) are composed separately
 // by the pipeline via security.BindingSet and spliced into the returned
 // ContainerSpec's Bindings field.
@@ -43,10 +43,6 @@ type BoxSpec struct {
 	// the remote binding host-side; the box itself keys clone behavior off
 	// the remote env's presence.
 	Inputs map[string]string
-
-	// ResultDir is the host directory mounted read-write as the box's result
-	// directory — the container boundary's only writable engine mount.
-	ResultDir string
 
 	// SkillsLink is the agent-specific $HOME-relative path the box symlinks to
 	// the baked /faber/skills tree (emitted as FABER_SKILLS_LINK). Empty means
@@ -79,14 +75,14 @@ type BoxSpec struct {
 	// a plain full clone.
 	GitCache string
 
-	// SessionsDir is the host directory mounted read-write at
-	// $HOME/<profile session_dir> to capture the harness's native session
-	// transcripts live (crash-safe: on the host the moment they are written).
-	// Set by the pipeline only when the per-run sessions toggle is on AND the
-	// template's resolved profile names a session_dir; setting it against a
-	// template whose profile names none is a refusal (the pair-set guard).
-	// Empty means no capture — no mount, no env, byte-identical run specs.
-	SessionsDir string
+	// Sessions turns transcript capture on: the box is told the container
+	// path of the profile's session_dir (FABER_SESSIONS_DIR) and ships
+	// everything under it to the host when the step ends. Set by the pipeline
+	// only when the per-run sessions toggle is on AND the template's resolved
+	// profile names a session_dir; setting it against a template whose profile
+	// names none is a refusal (the pair-set guard). Off means no env,
+	// byte-identical run specs.
+	Sessions bool
 
 	// Check marks a check run: emitted as FABER_CHECK=1, the box skips the
 	// agent and fills unwritten outputs with placeholders.
@@ -94,9 +90,9 @@ type BoxSpec struct {
 }
 
 // BuildContainerSpec assembles the engine half of the box run contract: container
-// name, engine mounts (result dir, template volumes; faber-box, hooks and
-// skills are image content),
-// the FABER_* environment, and the entry argv. No secret ever enters the
+// name, engine mounts (the workspace volume, the tmpfs writables, template
+// volumes; faber-box, hooks and skills are image content and the result dir
+// is a tmpfs the box ships out), the FABER_* environment, and the entry argv. No secret ever enters the
 // environment — credentials arrive only through the security bindings the
 // caller splices in afterwards. All violations are collected, never
 // first-error.
@@ -112,7 +108,6 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 	check(spec.RunID != "", "run id: required")
 	check(spec.NodeID != "", "node id: required")
 	check(spec.Attempt >= 1, "attempt: must be >= 1")
-	check(spec.ResultDir != "", "result dir: required")
 	if spec.Template == nil {
 		return infra.ContainerSpec{}, fmt.Errorf("agent: build run spec: %w", errors.Join(errs...))
 	}
@@ -120,14 +115,14 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 	check(tpl.Skill != "", "template skill: required")
 	check(spec.AgentCLI != "" || tpl.Env[contract.EnvAgentCLI] != "",
 		"agent cli: required (no vendor default); set BoxSpec.AgentCLI or the template env "+contract.EnvAgentCLI)
-	// The sessions bind needs its container target from the profile; a
-	// SessionsDir against a template whose profile names no session_dir has
-	// nowhere to land. The container path must stay strictly inside HOME —
-	// config validation guarantees it for engine callers, re-checked here for
-	// direct BoxSpec callers (a bind over or outside the HOME tmpfs would
-	// shadow engine mounts or escape the box's writable scratch).
+	// Session capture needs its container path from the profile; capture
+	// against a template whose profile names no session_dir has nothing to
+	// ship. The container path must stay strictly inside HOME — config
+	// validation guarantees it for engine callers, re-checked here for direct
+	// BoxSpec callers (the box ships that tree, and a path outside its HOME
+	// tmpfs would ship something that is not the harness's session).
 	sessionsContainer := ""
-	if spec.SessionsDir != "" {
+	if spec.Sessions {
 		switch {
 		case tpl.Invoke == nil || tpl.Invoke.SessionDir == "":
 			errs = append(errs, errors.New("sessions: dir set but the template's invocation profile names no session_dir"))
@@ -232,8 +227,9 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 	if spec.Check {
 		env[contract.EnvCheck] = "1"
 	}
-	// The box starts as root and drops to the host user: its uid:gid so the
-	// files the box writes to the result bind stay host-owned.
+	// The box starts as root and drops to a run user. The value is the host
+	// user's uid:gid for continuity; nothing host-owned is shared with the
+	// box any more, so inside the container it is an id and nothing more.
 	env[contract.EnvRunUID] = strconv.Itoa(os.Getuid())
 	env[contract.EnvRunGID] = strconv.Itoa(os.Getgid())
 	for slot, val := range spec.Inputs {
@@ -241,25 +237,18 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 	}
 
 	// The entry binary, the hook scripts and the skills tree are image content
-	// (the image builder bakes them under /faber), so the engine mounts only
-	// what the box writes.
+	// (the image builder bakes them under /faber), and nothing host-owned is
+	// shared with the box: the writable engine mounts are the disk-backed
+	// clone volume and the tmpfs scratch (result, bundle, tmp, home). All
+	// arrive root-owned; the box's preamble chowns them to the run user and
+	// drops privileges before any hook or agent runs. The result tmpfs is
+	// shipped to the host over the box's stdout at the end of the attempt.
 	mounts := []infra.Mount{
-		{Host: spec.ResultDir, Container: contract.ContainerResultDir},
-	}
-	// Writable engine mounts: the disk-backed clone volume and the tmpfs scratch
-	// (bundle, tmp, home). All arrive root-owned; the box's preamble chowns them
-	// to the run user and drops privileges before any hook or agent runs.
-	mounts = append(mounts,
-		infra.Mount{Kind: infra.KindVolume, Container: contract.ContainerWorkspace},
-		infra.Mount{Kind: infra.KindTmpfs, Container: contract.ContainerBundleDir},
-		infra.Mount{Kind: infra.KindTmpfs, Container: "/tmp"},
-		infra.Mount{Kind: infra.KindTmpfs, Container: contract.ContainerHome},
-	)
-	// The live sessions bind nests inside the HOME tmpfs (the daemon orders
-	// nested mounts by target depth); listed after it for the same reason.
-	// Read-write and host-pre-owned by the run user, like the result dir.
-	if sessionsContainer != "" {
-		mounts = append(mounts, infra.Mount{Host: spec.SessionsDir, Container: sessionsContainer})
+		{Kind: infra.KindVolume, Container: contract.ContainerWorkspace},
+		{Kind: infra.KindTmpfs, Container: contract.ContainerResultDir},
+		{Kind: infra.KindTmpfs, Container: contract.ContainerBundleDir},
+		{Kind: infra.KindTmpfs, Container: "/tmp"},
+		{Kind: infra.KindTmpfs, Container: contract.ContainerHome},
 	}
 	for _, host := range slices.Sorted(maps.Keys(tpl.Volumes)) {
 		mounts = append(mounts, infra.Mount{Host: host, Container: tpl.Volumes[host]})
@@ -278,7 +267,7 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 // reservedContainerPaths are the container paths owned by the box run
 // contract and the security bindings; template volumes may not touch them.
 var reservedContainerPaths = []string{
-	"/faber", // result dir, bundle dir, hooks, entry binary
+	"/faber", // result dir, bundle dir, handoff dir, hooks, skills, entry binary
 	security.ContainerSecretsDir,
 	security.ContainerAgentSocket,
 	contract.ContainerWorkspace,

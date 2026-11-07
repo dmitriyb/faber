@@ -91,7 +91,7 @@ PhaseSequencer's halt-request contract defines; exit codes never carry that
 third meaning. A halting prelude is exempt from the bundle postcondition:
 the agent will never run, so no prompt bundle is owed.
 A pre-agent failure means the agent never starts; a postlude failure comes
-after the agent ran, and its artifacts survive in the mounted result
+after the agent ran, and its artifacts survive in the shipped result
 directory for diagnosis. There is no
 partial credit and no retry inside the box; the host's failure policy decides
 whether the whole step runs again (with `on_failure` cleanup between

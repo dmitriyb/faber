@@ -128,11 +128,12 @@ func Interactive(ctx context.Context, runDir, stepID string, deps Deps) error
    (upstream payloads come from the journal — a failed step's dependencies
    necessarily settled ok).
 3. Rebuild the step's BindingSet via the security module — same network,
-   remote, credential handles, and a freshly spawned single-key agent for the
-   same identity — and run the container through infra's ContainerRunner with
-   the entry program replaced by a login shell, `-it` wired to the operator's
-   TTY (x/term for raw-mode handling), inputs exported as the step env, and
-   the record's handoff directory mounted read-only at a well-known path.
+   remote, and a freshly spawned single-key agent for the same identity (no
+   credential handles) — and enter the container through infra's
+   `ContainerRunner.Enter`: the box held on `faber-box hold`, the record's
+   handoff directory (and a saved transcript) sent in as a frame stream over
+   `docker exec`, then the operator's shell or the harness's resume argv on a
+   second exec with the terminal attached, inputs exported as the step env.
 4. On shell exit: BindingSet teardown hooks run unconditionally; nothing is
    appended to the journal; exit code is the shell's.
 

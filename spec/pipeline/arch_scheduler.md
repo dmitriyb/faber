@@ -188,7 +188,9 @@ Two durable companions make the stream reconstructible from disk alone: the
 journal's `start` record (appended by the box worker right before each
 attempt's `RunAttempt`, the failure module's shape) and the per-attempt
 `output.log` the run-prep seam opens under the attempt directory and hands
-to the container runner as `ContainerSpec.Output`. A reader of the run directory
+to the container runner as `ContainerSpec.Output` (the container's stderr; its
+stdout is the box's frame stream, which the seam demultiplexes into the
+attempt's `result/` and `sessions/`). A reader of the run directory
 sees the same timeline the sink saw.
 
 ## Bounds: the semaphore, generate pools, lanes

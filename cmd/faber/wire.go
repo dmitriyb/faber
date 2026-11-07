@@ -12,7 +12,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 
@@ -279,7 +278,7 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			IR:          ir,
 			Images:      images,
 			Bindings:    reentryBindings,
-			Interactive: terminalRunner{},
+			Interactive: terminalRunner{runner: infra.NewContainerRunner(w.docker, logger)},
 			Network:     network,
 			Remote:      remote,
 			Identities:  cfg.Identities,
@@ -396,14 +395,11 @@ func (t imageTagger) Tag(template *config.ResolvedTemplate) (string, error) {
 	return tag, nil
 }
 
-// terminalRunner is the interactive TTY variant of the container run: the
-// same argv infra assembles, plus -it, attached to the operator's terminal.
-type terminalRunner struct{}
+// terminalRunner is the interactive variant of the container run: infra's
+// Enter choreography (hold, receive the stream, attach the operator's
+// terminal, kill) over the same docker client the runs use.
+type terminalRunner struct{ runner *infra.ContainerRunner }
 
-func (terminalRunner) RunInteractive(ctx context.Context, spec infra.ContainerSpec) error {
-	args := infra.ContainerArgs(spec)
-	argv := append([]string{args[0], "-it"}, args[1:]...)
-	cmd := exec.CommandContext(ctx, "docker", argv...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
+func (t terminalRunner) RunInteractive(ctx context.Context, s pipeline.InteractiveSession) error {
+	return t.runner.Enter(ctx, s.Spec, s.Input, s.Session)
 }

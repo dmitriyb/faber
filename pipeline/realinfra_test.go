@@ -11,7 +11,7 @@ package pipeline
 // What it verifies on a real machine (test_pipeline_execution.md's "whatever
 // needs real containers" remainder):
 //   - AgentBoxes launches a real container from BuildContainerSpec with the
-//     security fragment spliced, and the mounted result channel round-trips:
+//     security fragment spliced, and the frame channel round-trips:
 //     the box's phase sequencer writes a structured record on its exit path
 //     (here an early phase failure — no hooks, no agent CLI on PATH), and
 //     ExtractResult adapts it; the exit code is never consulted.

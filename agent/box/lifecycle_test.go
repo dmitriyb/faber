@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,7 +46,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// fixture is one boxed step attempt run as a plain process.
+// fixture is one boxed step attempt run as a plain process. The binary's
+// stdout is the frame channel: run captures it and demultiplexes it into
+// shipped/ (result/ and sessions/ beneath), and every record a scenario
+// reads is the shipped one — never the binary's own result directory.
 type fixture struct {
 	t    *testing.T
 	root string
@@ -54,7 +58,72 @@ type fixture struct {
 	stdin []byte // fed to the box's stdin (the file-mode secrets payload)
 
 	resultDir, bundleDir, hooksDir, secretsDir, workspace string
+	shipped                                               string // where the captured frames land
+	frames                                                *shippedFrames
 }
+
+// shippedFrames is the harness's demuxer: it writes result/ and sessions/
+// frames under dir, appends event frames to result/hooks/events.jsonl, and
+// keeps the frame list and any foreign bytes for assertions.
+type shippedFrames struct {
+	dir     string
+	names   []string // "<kind> <name>" in arrival order
+	events  [][]byte
+	foreign []byte
+	ended   bool
+	onEvent func() // runs when an event frame arrives (the liveness probe)
+}
+
+// root opens <dir>/<name> as an os.Root, as the pipeline's demuxer does.
+func (s *shippedFrames) root(name string) (*os.Root, error) {
+	dir := filepath.Join(s.dir, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	return os.OpenRoot(dir)
+}
+
+func (s *shippedFrames) Frame(kind, name string, mtime time.Time, body io.Reader, n int64) error {
+	s.names = append(s.names, kind+" "+name)
+	switch kind {
+	case contract.FrameEnd:
+		s.ended = true
+	case contract.FrameEvent:
+		line, _ := io.ReadAll(body)
+		s.events = append(s.events, line)
+		root, err := s.root("result")
+		if err != nil {
+			return err
+		}
+		defer root.Close()
+		if err := contract.AppendFrameLine(root, contract.HooksEventsFile, bytes.NewReader(line), int64(len(line))); err != nil {
+			return err
+		}
+		if s.onEvent != nil {
+			s.onEvent()
+		}
+	case contract.FrameFile, contract.FrameLink:
+		rootName, rel, _ := strings.Cut(name, "/")
+		root, err := s.root(rootName)
+		if err != nil {
+			return err
+		}
+		defer root.Close()
+		if kind == contract.FrameFile {
+			return contract.WriteFrameFile(root, rel, body, n, mtime)
+		}
+		return contract.WriteFrameLink(root, rel, body, n)
+	}
+	return nil
+}
+
+func (s *shippedFrames) Foreign(p []byte) error {
+	s.foreign = append(s.foreign, p...)
+	return nil
+}
+
+// shippedResult is the host-side image of the box's result directory.
+func (f *fixture) shippedResult() string { return filepath.Join(f.shipped, "result") }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
@@ -67,8 +136,9 @@ func newFixture(t *testing.T) *fixture {
 		hooksDir:   filepath.Join(root, "hooks"),
 		secretsDir: filepath.Join(root, "secrets"),
 		workspace:  filepath.Join(root, "workspace"),
+		shipped:    filepath.Join(root, "shipped"),
 	}
-	for _, dir := range []string{f.resultDir, f.bundleDir, f.hooksDir, f.secretsDir, f.workspace} {
+	for _, dir := range []string{f.resultDir, f.bundleDir, f.hooksDir, f.secretsDir, f.workspace, f.shipped} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -105,6 +175,9 @@ for a in "$@"; do
   printf '%s' "$a" > "$STUB_DIR/argv.$n"
 done
 env > "$STUB_DIR/agent-env"
+if [ -n "$STUB_ECHO" ]; then
+  echo "$STUB_ECHO"
+fi
 if [ -n "$STUB_OUTPUT" ]; then
   printf '%s' "$STUB_OUTPUT" > "$FABER_RESULT_DIR/output.json"
 fi
@@ -224,8 +297,9 @@ func (f *fixture) sshAgent(n int) []string {
 	return pubs
 }
 
-// run executes the box binary with the fixture env and returns the exit code
-// plus captured stderr (the structured log).
+// run executes the box binary with the fixture env, demultiplexes its
+// stdout into the shipped dir, and returns the exit code plus captured
+// stderr (the structured log and everything the children printed).
 func (f *fixture) run() (int, string) {
 	f.t.Helper()
 	cmd := exec.Command(boxBin)
@@ -252,21 +326,25 @@ func (f *fixture) run() (int, string) {
 		}
 		code = xerr.ExitCode()
 	}
+	f.frames = &shippedFrames{dir: f.shipped}
+	if rerr := contract.ReadFrames(strings.NewReader(stdout.String()), f.frames); rerr != nil {
+		f.t.Fatalf("demux the box's stdout: %v\nstdout:\n%q\nstderr:\n%s", rerr, stdout.String(), stderr.String())
+	}
 	return code, stderr.String()
 }
 
 func (f *fixture) record() contract.Result {
 	f.t.Helper()
-	rec, err := contract.ReadResultFile(f.resultDir)
+	rec, err := contract.ReadResultFile(f.shippedResult())
 	if err != nil {
-		f.t.Fatalf("read record: %v", err)
+		f.t.Fatalf("read shipped record: %v (frames %v)", err, f.frames.names)
 	}
 	return rec
 }
 
 func (f *fixture) handoff() contract.Handoff {
 	f.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(f.resultDir, contract.HandoffFile))
+	raw, err := os.ReadFile(filepath.Join(f.shippedResult(), contract.HandoffFile))
 	if err != nil {
 		f.t.Fatalf("read handoff: %v", err)
 	}
@@ -682,7 +760,7 @@ func TestLifecycle_SecretsReachHooksNeverHandoff(t *testing.T) {
 			t.Fatalf("handoff inputs = %v", h.Inputs)
 		}
 		for _, file := range []string{contract.HandoffFile, contract.ResultFile} {
-			raw, err := os.ReadFile(filepath.Join(f.resultDir, file))
+			raw, err := os.ReadFile(filepath.Join(f.shippedResult(), file))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -876,7 +954,7 @@ func TestLifecycle_HostBoundary(t *testing.T) {
 		t.Fatalf("exit = %d\n%s", code, log)
 	}
 
-	rec, err := agent.ExtractResult(f.resultDir, schema)
+	rec, err := agent.ExtractResult(f.shippedResult(), schema)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -884,7 +962,7 @@ func TestLifecycle_HostBoundary(t *testing.T) {
 		t.Fatalf("extract = %+v", rec)
 	}
 
-	resultPath := filepath.Join(f.resultDir, contract.ResultFile)
+	resultPath := filepath.Join(f.shippedResult(), contract.ResultFile)
 	raw, err := os.ReadFile(resultPath)
 	if err != nil {
 		t.Fatal(err)
@@ -892,7 +970,7 @@ func TestLifecycle_HostBoundary(t *testing.T) {
 	if err := os.WriteFile(resultPath, raw[:len(raw)/2], 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rec, err = agent.ExtractResult(f.resultDir, schema)
+	rec, err = agent.ExtractResult(f.shippedResult(), schema)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -904,7 +982,7 @@ func TestLifecycle_HostBoundary(t *testing.T) {
 	if err := os.WriteFile(resultPath, []byte(tampered), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rec, err = agent.ExtractResult(f.resultDir, schema)
+	rec, err = agent.ExtractResult(f.shippedResult(), schema)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -942,6 +1020,269 @@ func TestLifecycle_EffortAndBudgetPassThrough(t *testing.T) {
 			if !strings.Contains(joined, want) {
 				t.Errorf("argv = %q, want %q", argv, want)
 			}
+		}
+	})
+}
+
+// Scenario 19. Verifies 93ba0858d75f and ff8e85704b0a: the box's stdout is
+// frames and nothing else — hook and agent stdout land on stderr — and the
+// shipped set is the result directory with result.json last, then end, on
+// the ok, failed and halted paths alike; no frame name is absolute or
+// carries "..".
+func TestLifecycle_StdoutIsFramesOnly(t *testing.T) {
+	check := func(t *testing.T, f *fixture, wantNames []string) {
+		t.Helper()
+		if len(f.frames.foreign) != 0 {
+			t.Fatalf("foreign bytes on stdout: %q", f.frames.foreign)
+		}
+		if !f.frames.ended {
+			t.Fatal("stream has no end frame")
+		}
+		got := strings.Join(f.frames.names, "|")
+		if got != strings.Join(wantNames, "|") {
+			t.Fatalf("frames = %s\nwant     %s", got, strings.Join(wantNames, "|"))
+		}
+		for _, n := range f.frames.names {
+			name := strings.SplitN(n, " ", 2)[1]
+			if strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
+				t.Fatalf("frame name %q escapes", name)
+			}
+		}
+		own, _ := os.ReadFile(filepath.Join(f.resultDir, contract.ResultFile))
+		shipped, _ := os.ReadFile(filepath.Join(f.shippedResult(), contract.ResultFile))
+		if len(own) == 0 || !bytes.Equal(own, shipped) {
+			t.Fatalf("shipped record %q differs from the written one %q", shipped, own)
+		}
+	}
+
+	t.Run("ok path", func(t *testing.T) {
+		f := newFixture(t)
+		f.writeHook(contract.HookContext, "#!/bin/sh\necho context-stdout-marker\nprintf 'ctx\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
+		f.env["STUB_OUTPUT"] = `{"a":"b"}`
+		f.env["STUB_ECHO"] = "agent-stdout-marker"
+		code, stderr := f.run()
+		if code != 0 {
+			t.Fatalf("exit %d\n%s", code, stderr)
+		}
+		if !strings.Contains(stderr, "context-stdout-marker") || !strings.Contains(stderr, "agent-stdout-marker") {
+			t.Fatalf("children's stdout must reach stderr; got\n%s", stderr)
+		}
+		check(t, f, []string{"file result/output.json", "file result/result.json", "end "})
+	})
+	t.Run("failed path", func(t *testing.T) {
+		f := newFixture(t)
+		f.writeHook(contract.HookContext, "#!/bin/sh\nprintf 'ctx\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
+		f.writeHook(contract.HookPrelude, "#!/bin/sh\necho 'claim rejected' >&2\nexit 3\n")
+		if code, _ := f.run(); code == 0 {
+			t.Fatal("want nonzero exit")
+		}
+		// Lexical walk order: the handoff/ directory sorts before handoff.json.
+		check(t, f, []string{"file result/handoff/bundle/CONTEXT.md", "file result/handoff.json", "file result/result.json", "end "})
+	})
+	t.Run("halted path", func(t *testing.T) {
+		f := newFixture(t)
+		f.writeHook(contract.HookPrelude, "#!/bin/sh\nprintf '{\"reason\":\"needs-triage\"}' > \"$FABER_RESULT_DIR/halt.json\"\n")
+		if code, stderr := f.run(); code != 0 {
+			t.Fatalf("exit %d\n%s", code, stderr)
+		}
+		check(t, f, []string{"file result/halt.json", "file result/result.json", "end "})
+		if rec := f.record(); rec.Status != contract.StatusHalted {
+			t.Fatalf("record %+v", rec)
+		}
+	})
+}
+
+// Scenario 20. Verifies 3fe064781899: the hooks' events file is streamed
+// while the phases run — the prelude writes two lines and then waits for
+// the harness, which releases it only once both have arrived as event
+// frames, so the frames provably left the box before the hook finished;
+// the final file frame carries the same lines, and a line without its
+// newline is not sent as an event.
+func TestLifecycle_EventsStreamed(t *testing.T) {
+	f := newFixture(t)
+	f.writeHook(contract.HookPrelude, "#!/bin/sh\n"+
+		"mkdir -p \"$FABER_RESULT_DIR/hooks\"\n"+
+		"printf '{\"ts\":\"2026-11-07T10:00:00Z\",\"hook\":\"p\",\"event\":\"one\"}\\n' >> \"$FABER_RESULT_DIR/hooks/events.jsonl\"\n"+
+		"printf '{\"ts\":\"2026-11-07T10:00:01Z\",\"hook\":\"p\",\"event\":\"two\"}\\n' >> \"$FABER_RESULT_DIR/hooks/events.jsonl\"\n"+
+		"printf '{\"ts\":\"2026-11-07T10:00:02Z\",\"hook\":\"p\",\"event\":\"partial\"}' >> \"$FABER_RESULT_DIR/hooks/events.jsonl\"\n"+
+		"n=0\nwhile [ ! -f \"$STUB_DIR/go-on\" ]; do n=$((n+1)); [ $n -gt 100 ] && { echo 'never released' >&2; exit 9; }; sleep 0.1; done\n"+
+		"printf 'ctx\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
+	// Read the box's stdout as it streams; release the hook on the second
+	// event frame.
+	cmd := exec.Command(boxBin)
+	for k, v := range f.env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	frames := &shippedFrames{dir: f.shipped}
+	frames.onEvent = func() {
+		if len(frames.events) == 2 {
+			if err := os.WriteFile(filepath.Join(f.root, "go-on"), nil, 0o644); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	rerr := contract.ReadFrames(stdout, frames)
+	io.Copy(io.Discard, stdout)
+	if err := cmd.Wait(); err != nil || rerr != nil {
+		t.Fatalf("box: %v, stream: %v\n%s", err, rerr, stderr.String())
+	}
+	f.frames = frames
+	if len(frames.events) != 2 || !strings.Contains(string(frames.events[1]), `"two"`) {
+		t.Fatalf("events = %q, want the two complete lines", frames.events)
+	}
+	names := strings.Join(frames.names, "|")
+	if !strings.HasPrefix(names, "event hooks/events.jsonl|event hooks/events.jsonl|file ") {
+		t.Fatalf("events must precede the shipped files: %s", names)
+	}
+	raw, err := os.ReadFile(filepath.Join(f.shippedResult(), "hooks", "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(raw)), "\n"); len(lines) != 3 || !strings.Contains(lines[2], "partial") {
+		t.Fatalf("final events file = %q, want the three lines the hook wrote", raw)
+	}
+}
+
+// Scenario 21. Verifies 93ba0858d75f: with FABER_SESSIONS_DIR set the box
+// ships everything under it at the end — files with their mtimes, a
+// symlink as a link — under sessions/; unset, nothing of the kind is sent.
+func TestLifecycle_SessionsShippedAtTheEnd(t *testing.T) {
+	f := newFixture(t)
+	sessions := filepath.Join(f.root, "h", "sessions")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.WriteFile(filepath.Join(sessions, "a.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(sessions, "a.jsonl"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("a.jsonl", filepath.Join(sessions, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	f.env[contract.EnvSessionsDir] = sessions
+	if code, stderr := f.run(); code != 0 {
+		t.Fatalf("exit %d\n%s", code, stderr)
+	}
+	names := strings.Join(f.frames.names, "|")
+	if !strings.Contains(names, "file result/result.json|file sessions/a.jsonl|link sessions/latest|end") {
+		t.Fatalf("frames = %s", names)
+	}
+	if fi, err := os.Stat(filepath.Join(f.shipped, "sessions", "a.jsonl")); err != nil || !fi.ModTime().Equal(old) {
+		t.Fatalf("shipped transcript mtime: %v %v", fi, err)
+	}
+	if link, err := os.Readlink(filepath.Join(f.shipped, "sessions", "latest")); err != nil || link != "a.jsonl" {
+		t.Fatalf("shipped link = %q %v", link, err)
+	}
+
+	g := newFixture(t)
+	if code, stderr := g.run(); code != 0 {
+		t.Fatalf("exit %d\n%s", code, stderr)
+	}
+	if strings.Contains(strings.Join(g.frames.names, "|"), "sessions/") {
+		t.Fatalf("sessions shipped without the variable: %v", g.frames.names)
+	}
+}
+
+// Scenario 22. Verifies 87f006277d2c: faber-box receive writes a frame
+// stream under the two roots with the frames' mtimes and links, refuses any
+// other root and sessions/ without the variable, and a stream error.
+func TestLifecycle_Receive(t *testing.T) {
+	stream := func(build func(w *contract.FrameWriter)) []byte {
+		var buf bytes.Buffer
+		build(contract.NewFrameWriter(&buf))
+		return buf.Bytes()
+	}
+	run := func(t *testing.T, env map[string]string, in []byte) (int, string) {
+		t.Helper()
+		cmd := exec.Command(boxBin, "receive")
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		cmd.Stdin = bytes.NewReader(in)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err == nil {
+			return 0, stderr.String()
+		}
+		xerr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("run receive: %v", err)
+		}
+		return xerr.ExitCode(), stderr.String()
+	}
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	full := stream(func(w *contract.FrameWriter) {
+		w.Frame(contract.FrameFile, "handoff/handoff.json", old, strings.NewReader(`{"phase":"agent"}`), 17)
+		w.Frame(contract.FrameFile, "handoff/bundle/CONTEXT.md", time.Time{}, strings.NewReader("ctx"), 3)
+		w.Frame(contract.FrameFile, "sessions/a.jsonl", old, strings.NewReader("{}\n"), 3)
+		w.Frame(contract.FrameLink, "sessions/latest", time.Time{}, strings.NewReader("a.jsonl"), 7)
+		w.End()
+	})
+
+	t.Run("two roots", func(t *testing.T) {
+		handoff, sessions := filepath.Join(t.TempDir(), "handoff"), filepath.Join(t.TempDir(), "s")
+		if code, log := run(t, map[string]string{contract.EnvHandoffDir: handoff, contract.EnvSessionsDir: sessions}, full); code != 0 {
+			t.Fatalf("exit %d\n%s", code, log)
+		}
+		if fi, err := os.Stat(filepath.Join(handoff, "handoff.json")); err != nil || !fi.ModTime().Equal(old) {
+			t.Fatalf("handoff.json: %v %v", fi, err)
+		}
+		if raw, _ := os.ReadFile(filepath.Join(handoff, "bundle", "CONTEXT.md")); string(raw) != "ctx" {
+			t.Fatalf("CONTEXT.md = %q", raw)
+		}
+		if link, err := os.Readlink(filepath.Join(sessions, "latest")); err != nil || link != "a.jsonl" {
+			t.Fatalf("latest = %q %v", link, err)
+		}
+	})
+	t.Run("sessions without the variable", func(t *testing.T) {
+		handoff := filepath.Join(t.TempDir(), "handoff")
+		code, log := run(t, map[string]string{contract.EnvHandoffDir: handoff}, full)
+		if code == 0 || !strings.Contains(log, "sessions/a.jsonl") {
+			t.Fatalf("exit %d\n%s", code, log)
+		}
+	})
+	t.Run("foreign root", func(t *testing.T) {
+		handoff := filepath.Join(t.TempDir(), "handoff")
+		in := stream(func(w *contract.FrameWriter) {
+			w.Frame(contract.FrameFile, "result/x", time.Time{}, strings.NewReader("x"), 1)
+			w.End()
+		})
+		code, log := run(t, map[string]string{contract.EnvHandoffDir: handoff}, in)
+		if code == 0 || !strings.Contains(log, "result/x") {
+			t.Fatalf("exit %d\n%s", code, log)
+		}
+		if _, err := os.Stat(filepath.Join(handoff, "..", "result", "x")); err == nil {
+			t.Fatal("a foreign-rooted frame was written")
+		}
+	})
+	t.Run("foreign bytes", func(t *testing.T) {
+		handoff := filepath.Join(t.TempDir(), "handoff")
+		if code, log := run(t, map[string]string{contract.EnvHandoffDir: handoff}, append([]byte("garbage\n"), full...)); code == 0 || !strings.Contains(log, "outside any frame") {
+			t.Fatalf("exit %d\n%s", code, log)
+		}
+	})
+	t.Run("a link under handoff is refused", func(t *testing.T) {
+		handoff := filepath.Join(t.TempDir(), "handoff")
+		in := stream(func(w *contract.FrameWriter) {
+			w.Frame(contract.FrameLink, "handoff/latest", time.Time{}, strings.NewReader("handoff.json"), 12)
+			w.End()
+		})
+		if code, log := run(t, map[string]string{contract.EnvHandoffDir: handoff}, in); code == 0 || !strings.Contains(log, "sessions/ only") {
+			t.Fatalf("exit %d\n%s", code, log)
 		}
 	})
 }

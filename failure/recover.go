@@ -173,9 +173,9 @@ type InteractiveTarget struct {
 // HandoffPath resolves the failed record's handoff pointer under the run
 // directory. ok is false when the record preserved no handoff state — or
 // when the journaled pointer does not stay under the run directory: the
-// pointer's parent is bind-mounted into the operator's re-entry container,
-// so a pointer that cleans to an escape (a hand-edited or pre-hardening
-// journal) must never resolve.
+// pointer's parent is sent into the operator's re-entry container, so a
+// pointer that cleans to an escape (a hand-edited or pre-hardening journal)
+// must never resolve.
 func (t InteractiveTarget) HandoffPath() (string, bool) {
 	if t.Record.Result.Error == nil || t.Record.Result.Error.Handoff == "" {
 		return "", false
@@ -190,8 +190,8 @@ func (t InteractiveTarget) HandoffPath() (string, bool) {
 
 // BoxReentry reconstructs a failed step's box — same image tag, same security
 // bindings, same resolved inputs exported as the step env — with the entry
-// program replaced by an interactive shell and the handoff directory
-// surfaced read-only. It is implemented by the executor (over the infra and
+// program replaced by an interactive shell and the handoff directory sent
+// into the box. It is implemented by the executor (over the infra and
 // security modules) at integration time and is fakeable in tests.
 type BoxReentry interface {
 	Reenter(ctx context.Context, t InteractiveTarget) error

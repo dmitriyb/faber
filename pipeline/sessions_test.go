@@ -1,11 +1,13 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dmitriyb/faber/agent/contract"
 	"github.com/dmitriyb/faber/config"
@@ -20,13 +22,27 @@ func sessionProfile() *config.ResolvedInvoke {
 	return &ri
 }
 
-// Verifies spec/proposals/2026-08-14-session-transcripts.md (pipeline test 16):
-// capture gates on the per-run toggle AND the profile's session_dir; on, the
-// attempt gets a fresh empty host dir mounted read-write at
-// $HOME/<session_dir> with FABER_SESSIONS_DIR set; each attempt's dir is its
-// own, and earlier attempts' transcripts survive later attempts' scrubs.
+// shipSessions is a frames hook: a record plus one transcript under
+// sessions/, with an mtime, the way the box ships capture at step end.
+func shipSessions(mtime time.Time) func(w *contract.FrameWriter) {
+	return func(w *contract.FrameWriter) {
+		body := []byte("{}\n")
+		w.Frame(contract.FrameFile, "sessions/a.jsonl", mtime, bytes.NewReader(body), int64(len(body)))
+		rec := []byte(`{"status":"ok","contract":2,"payload":{"out":"d"},"attempt":1}`)
+		w.Frame(contract.FrameFile, "result/"+contract.ResultFile, time.Time{}, bytes.NewReader(rec), int64(len(rec)))
+		w.End()
+	}
+}
+
+// Verifies pipeline test 16: capture gates on the per-run toggle AND the
+// profile's session_dir; on, the attempt gets a fresh empty host dir, the
+// box is told the container path (FABER_SESSIONS_DIR) and mounts nothing
+// for it, and the sessions/ frames it ships at the end land in that dir
+// with their mtimes; each attempt's dir is its own, and earlier attempts'
+// transcripts survive later attempts' scrubs.
 func TestBoxRun_SessionsCapture(t *testing.T) {
-	containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1}}
+	mtime := testBase.Add(-time.Hour)
+	containers := &fakeContainers{frames: shipSessions(mtime)}
 	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 
 	box := boxAttempt(t)
@@ -41,33 +57,23 @@ func TestBoxRun_SessionsCapture(t *testing.T) {
 	if got := spec.Env[contract.EnvSessionsDir]; got != wantContainer {
 		t.Errorf("env[%s] = %q, want %q", contract.EnvSessionsDir, got, wantContainer)
 	}
-	found := false
 	for _, m := range spec.Mounts {
-		if m.Container == wantContainer {
-			found = true
-			if m.Host != wantHost || m.ReadOnly {
-				t.Errorf("sessions mount = %+v, want %s bound read-write", m, wantHost)
-			}
+		if m.Host != "" || strings.HasPrefix(m.Container, contract.ContainerHome+"/") {
+			t.Errorf("capture must mount nothing: %+v", m)
 		}
 	}
-	if !found {
-		t.Fatalf("sessions bind missing from mounts: %v", spec.Mounts)
-	}
-	if fi, err := os.Stat(wantHost); err != nil || !fi.IsDir() {
-		t.Fatalf("sessions host dir must exist before the container runs: %v", err)
+	if fi, err := os.Stat(filepath.Join(wantHost, "a.jsonl")); err != nil || !fi.ModTime().Equal(mtime) {
+		t.Fatalf("shipped transcript missing or without its mtime: %v %v", fi, err)
 	}
 
-	// A transcript the harness "wrote" in attempt 1 survives attempt 2's
-	// scrub (the scrub clears only its own attempt dir) — and attempt 2 gets
-	// its own fresh dir.
-	if err := os.WriteFile(filepath.Join(wantHost, "t.jsonl"), []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// A transcript from attempt 1 survives attempt 2's scrub (the scrub
+	// clears only its own attempt dir) — and attempt 2 gets its own dir.
+	containers.frames = func(w *contract.FrameWriter) { w.End() }
 	box.Attempt = 2
 	if _, err := boxes.RunAttempt(context.Background(), box); err != nil {
 		t.Fatalf("second attempt: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(wantHost, "t.jsonl")); err != nil {
+	if _, err := os.Stat(filepath.Join(wantHost, "a.jsonl")); err != nil {
 		t.Fatalf("attempt 1's transcript must survive attempt 2: %v", err)
 	}
 	host2 := filepath.Join(box.RunDir, "boxes", pathToken(box.NodeID), "attempt-2", "sessions")
@@ -94,12 +100,13 @@ func TestBoxRun_SessionsCapture(t *testing.T) {
 }
 
 // Verifies pipeline test 16's off-gates: sessions off, or a profile without
-// session_dir, or no profile — no bind, no variable, run specs byte-identical
-// to a capture-less attempt.
+// session_dir, or no profile — no variable, run specs byte-identical to a
+// capture-less attempt; a sessions/ frame from the box still lands (the
+// demuxer does not gate on the toggle; the box does).
 func TestBoxRun_SessionsOffGates(t *testing.T) {
 	run := func(t *testing.T, mutate func(*BoxAttempt)) {
 		t.Helper()
-		containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1}}
+		containers := &fakeContainers{frames: shipSessions(testBase)}
 		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 		box := boxAttempt(t)
 		mutate(&box)
@@ -110,13 +117,8 @@ func TestBoxRun_SessionsOffGates(t *testing.T) {
 		if v, ok := spec.Env[contract.EnvSessionsDir]; ok {
 			t.Errorf("env[%s] = %q, want absent", contract.EnvSessionsDir, v)
 		}
-		for _, m := range spec.Mounts {
-			if strings.HasPrefix(m.Container, contract.ContainerHome+"/") {
-				t.Errorf("unexpected mount inside HOME: %+v", m)
-			}
-		}
-		if _, err := os.Stat(filepath.Join(box.RunDir, "boxes", pathToken(box.NodeID), "attempt-1", "sessions")); !os.IsNotExist(err) {
-			t.Errorf("no sessions host dir may be created, stat err %v", err)
+		if _, err := os.Stat(filepath.Join(box.RunDir, "boxes", pathToken(box.NodeID), "attempt-1", "sessions", "a.jsonl")); err != nil {
+			t.Errorf("a shipped sessions/ frame must still land: %v", err)
 		}
 	}
 	t.Run("toggle off despite a session_dir profile", func(t *testing.T) {
@@ -136,9 +138,10 @@ func TestBoxRun_SessionsOffGates(t *testing.T) {
 
 // Verifies pipeline test 17: interactive re-entry lands the operator inside
 // the harness's resumed session when the failed attempt saved one — the
-// profile's resume_argv as entry, HOME pinned to the box home, and the mount
-// at $HOME/<session_dir> a COPY under the salted throwaway dir, so the
-// archived attempt bytes stay immutable. Each fallback yields the bare shell.
+// profile's resume_argv as the operator's entry, HOME pinned to the box
+// home, the saved session sent into the held box as sessions/<rel> frames
+// with its mtimes and links (never bound, so the archived attempt bytes stay
+// immutable). Each fallback yields the bare shell with the handoff only.
 func TestBoxRun_ReentrySessionResume(t *testing.T) {
 	setup := func(t *testing.T, tpl *config.ResolvedTemplate, saved map[string]string) (*failure.Store, *fakeInteractive, *Reentry, string) {
 		t.Helper()
@@ -196,69 +199,42 @@ func TestBoxRun_ReentrySessionResume(t *testing.T) {
 		tpl.Invoke = sessionProfile()
 		return tpl
 	}
+	wantContainer := contract.ContainerHome + "/.h/sessions"
 
 	t.Run("saved session resumes", func(t *testing.T) {
 		store, interactive, re, savedDir := setup(t, sessionTemplate(), map[string]string{"t.jsonl": "{}\n"})
-		copied := ""
-		interactive.onRun = func() {
-			// Captured DURING the session: the salted dir (and the copy) are
-			// removed when Reenter returns.
-			for _, m := range interactive.spec.Mounts {
-				if m.Container == contract.ContainerHome+"/.h/sessions" {
-					copied = m.Host
-				}
-			}
-			if copied == "" {
-				t.Errorf("session copy not mounted: %v", interactive.spec.Mounts)
-				return
-			}
-			if copied == savedDir {
-				t.Errorf("the archive itself is mounted; want a copy")
-			}
-			if raw, err := os.ReadFile(filepath.Join(copied, "t.jsonl")); err != nil || string(raw) != "{}\n" {
-				t.Errorf("copy misses the transcript: %q %v", raw, err)
-			}
-			// Diverge the ephemeral session; the archive must stay untouched.
-			os.WriteFile(filepath.Join(copied, "t.jsonl"), []byte("diverged"), 0o644)
-		}
 		if err := store.Interactive(context.Background(), "run-s", "w/x", false, re); err != nil {
 			t.Fatalf("interactive: %v", err)
 		}
-		spec := interactive.spec
-		if got := strings.Join(spec.Entry, " "); got != "harness resume --latest" {
-			t.Fatalf("entry = %v, want the profile resume_argv", spec.Entry)
+		if got := strings.Join(interactive.session.Entry, " "); got != "harness resume --latest" {
+			t.Fatalf("entry = %v, want the profile resume_argv", interactive.session.Entry)
 		}
-		if spec.Env["HOME"] != contract.ContainerHome {
-			t.Errorf("HOME = %q, want the box home", spec.Env["HOME"])
+		if interactive.session.Env["HOME"] != contract.ContainerHome {
+			t.Errorf("HOME = %q, want the box home", interactive.session.Env["HOME"])
+		}
+		if got := interactive.spec.Env[contract.EnvSessionsDir]; got != wantContainer {
+			t.Errorf("env[%s] = %q, want %q so receive knows where the session lands", contract.EnvSessionsDir, got, wantContainer)
+		}
+		fr, ok := interactive.frame("sessions/t.jsonl")
+		if !ok || string(fr.body) != "{}\n" {
+			t.Fatalf("transcript not sent: %+v", interactive.frames)
+		}
+		if _, ok := interactive.frame("handoff/" + contract.HandoffFile); !ok {
+			t.Errorf("handoff not sent beside the session: %+v", interactive.frames)
+		}
+		for _, m := range interactive.spec.Mounts {
+			if m.Host != "" {
+				t.Errorf("re-entry mounts a host path: %+v", m)
+			}
 		}
 		if raw, err := os.ReadFile(filepath.Join(savedDir, "t.jsonl")); err != nil || string(raw) != "{}\n" {
 			t.Errorf("archived transcript changed: %q %v — the record must stay immutable", raw, err)
 		}
-		if copied != "" {
-			if _, err := os.Stat(copied); !os.IsNotExist(err) {
-				t.Errorf("the session copy must go with the salted dir, stat err %v", err)
-			}
-		}
 	})
 
-	shellCase := func(t *testing.T, tpl *config.ResolvedTemplate, saved map[string]string, shell bool) {
-		t.Helper()
-		store, interactive, re, _ := setup(t, tpl, saved)
-		if err := store.Interactive(context.Background(), "run-s", "w/x", shell, re); err != nil {
-			t.Fatalf("interactive: %v", err)
-		}
-		if got := interactive.spec.Entry[0]; got != "/bin/sh" {
-			t.Fatalf("entry = %v, want the bare shell", interactive.spec.Entry)
-		}
-		for _, m := range interactive.spec.Mounts {
-			if strings.HasPrefix(m.Container, contract.ContainerHome+"/") {
-				t.Errorf("unexpected session mount on the shell path: %+v", m)
-			}
-		}
-	}
-	t.Run("the copy preserves mtimes and symlinks", func(t *testing.T) {
+	t.Run("the stream carries mtimes and symlinks", func(t *testing.T) {
 		// Harnesses find "the most recent session" via file mtimes or a
-		// latest-pointer symlink; a copy that flattens either resumes the
+		// latest-pointer symlink; a stream that flattens either resumes the
 		// wrong conversation.
 		store, interactive, re, savedDir := setup(t, sessionTemplate(), map[string]string{"old.jsonl": "{}\n", "new.jsonl": "{}\n"})
 		oldTime := testBase.Add(-2 * 3600e9)
@@ -272,32 +248,41 @@ func TestBoxRun_ReentrySessionResume(t *testing.T) {
 		if err := os.Symlink("new.jsonl", filepath.Join(savedDir, "latest")); err != nil {
 			t.Fatal(err)
 		}
-		interactive.onRun = func() {
-			copied := ""
-			for _, m := range interactive.spec.Mounts {
-				if m.Container == contract.ContainerHome+"/.h/sessions" {
-					copied = m.Host
-				}
-			}
-			if copied == "" {
-				t.Error("session copy not mounted")
-				return
-			}
-			if fi, err := os.Stat(filepath.Join(copied, "old.jsonl")); err != nil || !fi.ModTime().Equal(oldTime) {
-				t.Errorf("old.jsonl mtime = %v (%v), want %v preserved", fi.ModTime(), err, oldTime)
-			}
-			if fi, err := os.Stat(filepath.Join(copied, "new.jsonl")); err != nil || !fi.ModTime().Equal(newTime) {
-				t.Errorf("new.jsonl mtime = %v (%v), want %v preserved", fi.ModTime(), err, newTime)
-			}
-			if link, err := os.Readlink(filepath.Join(copied, "latest")); err != nil || link != "new.jsonl" {
-				t.Errorf("latest symlink = %q (%v), want new.jsonl recreated verbatim", link, err)
-			}
-		}
 		if err := store.Interactive(context.Background(), "run-s", "w/x", false, re); err != nil {
 			t.Fatalf("interactive: %v", err)
 		}
+		if fr, ok := interactive.frame("sessions/old.jsonl"); !ok || !fr.mtime.Equal(oldTime) {
+			t.Errorf("old.jsonl mtime = %v (%v), want %v", fr.mtime, ok, oldTime)
+		}
+		if fr, ok := interactive.frame("sessions/new.jsonl"); !ok || !fr.mtime.Equal(newTime) {
+			t.Errorf("new.jsonl mtime = %v (%v), want %v", fr.mtime, ok, newTime)
+		}
+		if fr, ok := interactive.frame("sessions/latest"); !ok || fr.kind != contract.FrameLink || string(fr.body) != "new.jsonl" {
+			t.Errorf("latest = %+v (%v), want a link to new.jsonl", fr, ok)
+		}
 	})
 
+	shellCase := func(t *testing.T, tpl *config.ResolvedTemplate, saved map[string]string, shell bool) {
+		t.Helper()
+		store, interactive, re, _ := setup(t, tpl, saved)
+		if err := store.Interactive(context.Background(), "run-s", "w/x", shell, re); err != nil {
+			t.Fatalf("interactive: %v", err)
+		}
+		if got := interactive.session.Entry[0]; got != "/bin/sh" {
+			t.Fatalf("entry = %v, want the bare shell", interactive.session.Entry)
+		}
+		if v, ok := interactive.spec.Env[contract.EnvSessionsDir]; ok {
+			t.Errorf("env[%s] = %q on the shell path, want absent", contract.EnvSessionsDir, v)
+		}
+		for _, fr := range interactive.frames {
+			if strings.HasPrefix(fr.name, "sessions/") {
+				t.Errorf("session frame on the shell path: %+v", fr)
+			}
+		}
+		if _, ok := interactive.frame("handoff/" + contract.HandoffFile); !ok {
+			t.Errorf("handoff not sent on the shell path: %+v", interactive.frames)
+		}
+	}
 	t.Run("--shell forces the shell despite a saved session", func(t *testing.T) {
 		shellCase(t, sessionTemplate(), map[string]string{"t.jsonl": "{}\n"}, true)
 	})

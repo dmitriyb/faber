@@ -30,14 +30,13 @@ func testTemplate() *config.ResolvedTemplate {
 
 func validSpec() BoxSpec {
 	return BoxSpec{
-		RunID:     "run1",
-		NodeID:    "task/implement",
-		Attempt:   2,
-		Template:  testTemplate(),
-		Image:     "faber/tpl-a:abc",
-		Inputs:    map[string]string{"alpha": "v1"},
-		ResultDir: "/host/results/task-implement",
-		AgentCLI:  "agent-cli",
+		RunID:    "run1",
+		NodeID:   "task/implement",
+		Attempt:  2,
+		Template: testTemplate(),
+		Image:    "faber/tpl-a:abc",
+		Inputs:   map[string]string{"alpha": "v1"},
+		AgentCLI: "agent-cli",
 	}
 }
 
@@ -90,8 +89,8 @@ func TestBuildContainerSpecContract(t *testing.T) {
 		}
 	}
 	want := []string{
-		"/host/results/task-implement:" + contract.ContainerResultDir,
 		"vol:" + contract.ContainerWorkspace,
+		"tmpfs:" + contract.ContainerResultDir,
 		"tmpfs:" + contract.ContainerBundleDir,
 		"tmpfs:/tmp",
 		"tmpfs:" + contract.ContainerHome,
@@ -166,12 +165,12 @@ func TestBuildContainerSpecInvokeProfile(t *testing.T) {
 	}
 }
 
-// Verifies ae434449cac9 (session transcripts): the sessions bind and
-// FABER_SESSIONS_DIR are pair-set from the profile's session_dir — mount and
-// variable together, read-write, inside HOME; absent SessionsDir emits
-// neither; a SessionsDir against a profile without session_dir, or with an
+// Verifies ae434449cac9 (session transcripts): with capture on,
+// FABER_SESSIONS_DIR names the profile's session_dir under HOME and nothing
+// is mounted for it (the box ships the tree at the end); capture off emits
+// no variable; capture against a profile without session_dir, or with an
 // escaping session_dir, is a refusal.
-func TestBuildContainerSpecSessionsBind(t *testing.T) {
+func TestBuildContainerSpecSessions(t *testing.T) {
 	sessionDir := func(dir string) *config.ResolvedInvoke {
 		ri := config.DefaultInvoke()
 		ri.SessionDir = dir
@@ -180,7 +179,7 @@ func TestBuildContainerSpecSessionsBind(t *testing.T) {
 
 	spec := validSpec()
 	spec.Template.Invoke = sessionDir(".h/sessions")
-	spec.SessionsDir = "/host/run/boxes/x/attempt-1/sessions"
+	spec.Sessions = true
 	rs, err := BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -189,20 +188,13 @@ func TestBuildContainerSpecSessionsBind(t *testing.T) {
 	if got := rs.Env[contract.EnvSessionsDir]; got != wantContainer {
 		t.Errorf("env[%s] = %q, want %q", contract.EnvSessionsDir, got, wantContainer)
 	}
-	var found *infra.Mount
-	for i, m := range rs.Mounts {
-		if m.Container == wantContainer {
-			found = &rs.Mounts[i]
+	for _, m := range rs.Mounts {
+		if m.Container == wantContainer || strings.HasPrefix(m.Container, contract.ContainerHome+"/") {
+			t.Errorf("capture must mount nothing, got %+v", m)
 		}
 	}
-	if found == nil {
-		t.Fatalf("sessions bind missing from mounts: %v", rs.Mounts)
-	}
-	if found.Host != spec.SessionsDir || found.ReadOnly {
-		t.Errorf("sessions mount = %+v, want the host dir bound read-write", *found)
-	}
 
-	// No SessionsDir: no mount, no variable — even with a session_dir profile.
+	// Capture off: no variable — even with a session_dir profile.
 	spec = validSpec()
 	spec.Template.Invoke = sessionDir(".h/sessions")
 	rs, err = BuildContainerSpec(spec)
@@ -210,17 +202,12 @@ func TestBuildContainerSpecSessionsBind(t *testing.T) {
 		t.Fatal(err)
 	}
 	if v, ok := rs.Env[contract.EnvSessionsDir]; ok {
-		t.Errorf("env[%s] = %q, want absent without a SessionsDir", contract.EnvSessionsDir, v)
-	}
-	for _, m := range rs.Mounts {
-		if strings.HasPrefix(m.Container, contract.ContainerHome+"/") {
-			t.Errorf("unexpected mount inside HOME: %+v", m)
-		}
+		t.Errorf("env[%s] = %q, want absent with capture off", contract.EnvSessionsDir, v)
 	}
 
-	// A SessionsDir with nowhere to land refuses.
+	// Capture with nowhere to look refuses.
 	spec = validSpec()
-	spec.SessionsDir = "/host/sessions"
+	spec.Sessions = true
 	if _, err := BuildContainerSpec(spec); err == nil || !strings.Contains(err.Error(), "session_dir") {
 		t.Fatalf("want a refusal naming the missing profile session_dir, got %v", err)
 	}
@@ -229,7 +216,7 @@ func TestBuildContainerSpecSessionsBind(t *testing.T) {
 	// authoritative gate; this is the direct-caller re-check).
 	spec = validSpec()
 	spec.Template.Invoke = sessionDir("../../etc")
-	spec.SessionsDir = "/host/sessions"
+	spec.Sessions = true
 	if _, err := BuildContainerSpec(spec); err == nil || !strings.Contains(err.Error(), "proper subpath") {
 		t.Fatalf("want a refusal for the escaping session_dir, got %v", err)
 	}

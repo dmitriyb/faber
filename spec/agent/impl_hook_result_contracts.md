@@ -81,9 +81,82 @@ a clear message.
 The failed attempt record's `error.handoff` carries the path; the interactive
 recovery mode reconstructs the box from exactly this data.
 
+## The frame channel
+
+The box's standard output is not a log: it is the channel the records
+travel on. One binary record shape, read and written by the contract
+package (`frame.go`) so both halves link the same code:
+
+```
+\x00faber\x00<kind>\x00<name>\x00<mtime>\x00<len>\n<len bytes>
+```
+
+- `kind` is `event`, `file`, `link` or `end` (`FrameEvent`, `FrameFile`,
+  `FrameLink`, `FrameEnd`); anything else is a stream error.
+- `name` is a relative slash path with no empty, `.` or `..` segment, no
+  leading slash, no backslash and no NUL (`ValidFrameName`) — the same
+  containment rule the handoff pointer obeys. `end` carries no name.
+- `mtime` is the file's modification time in unix nanoseconds, `0` where it
+  has no meaning; a reader applies it to the file it writes, because a
+  harness finds its latest session by mtime.
+- `len` is the body length in decimal, at most `MaxRecordBytes`; the header
+  itself is bounded (`MaxFrameHeaderBytes`, 4 KiB). The leading NUL is what
+  keeps a text line from ever parsing as a header.
+
+```go
+type FrameWriter struct{ w io.Writer; mu sync.Mutex }
+func NewFrameWriter(w io.Writer) *FrameWriter
+func (w *FrameWriter) Frame(kind, name string, mtime time.Time, body io.Reader, n int64) error
+func (w *FrameWriter) Event(line []byte) error       // one events.jsonl line, kind event, name hooks/events.jsonl
+func (w *FrameWriter) End() error
+
+// FrameHandler receives each frame's body as a bounded reader it must drain,
+// and the bytes that arrive outside any frame (a foreign writer on stdout).
+type FrameHandler interface {
+    Frame(kind, name string, mtime time.Time, body io.Reader, n int64) error
+    Foreign(p []byte) error
+}
+func ReadFrames(r io.Reader, h FrameHandler) error
+```
+
+`ReadFrames` is a streaming reader: it never buffers a body, it hands the
+handler an `io.LimitReader` over the stream and drains whatever the handler
+left. Bytes before the next magic that are not a header go to `Foreign`
+instead of failing the stream — a foreign writer on the container's stdout
+(a toolset binary that ignores the convention) must not cost the attempt
+its record. A header that parses but violates a bound, an unknown kind or an
+invalid name is a stream error and ends the read; the demuxer records it.
+
+What the box sends, in order, on every exit path of `Main`:
+
+1. during the user phases, each complete new line of
+   `$FABER_RESULT_DIR/hooks/events.jsonl` as an `event` frame, so the
+   operator's view of a hook's account is live;
+2. after the result phase (or the fail-stop, or the halt), every regular
+   file under `$FABER_RESULT_DIR` as `result/<rel>` (`file`),
+   `result/result.json` last; a file over the frame bound is skipped with a
+   log line, never cut, and so is a symlink — none may go among the records,
+   and the host refuses one there, so a record can never be read through a
+   link the box planted;
+3. with `FABER_SESSIONS_DIR` set, every entry under it as `sessions/<rel>`
+   with its mtime, symlinks as `link` with the target in the body (a
+   harness's latest-pointer is a real link), the same way;
+4. `end`.
+
+The host side (pipeline's demuxer, spec/pipeline/impl_scheduling.md) roots
+`result/` and `sessions/` under the attempt directory and refuses any other
+first segment, appends `event` frames to the host's `hooks/events.jsonl`,
+writes every file to a temporary name and renames it into place through an
+`os.Root` of its tree, so a truncated frame is an absent file, never a
+half-written record, and a link the box planted cannot redirect a later
+frame outside the tree. Because `result.json` is sent after the other result
+files, a stream that breaks before it extracts as `box-vanished`, with the
+stream error in the record's detail; a break among the sessions after it
+leaves the record standing.
+
 ## Contract version handshake
 
-`contract.ContractVersion` (currently 1) is the faber↔faber-box result
+`contract.ContractVersion` (currently 2) is the faber↔faber-box result
 contract's schema version, independent of the application version. The host
 stamps it into the box env as `FABER_CONTRACT_VERSION`; the box's env phase
 refuses a mismatching value (absence is tolerated for direct sequencer
@@ -91,17 +164,20 @@ invocations), and `WriteResultFile` stamps the writer's version into
 `result.json` (`contract` field), which the host asserts on extract. Since
 faber-box ships from the host as the same build, any mismatch is a
 stale-image detector (the baked faber-box predates or postdates this host:
-run `faber build`) — not a migration path.
+run `faber build`) — not a migration path. Version 2 is the frame channel:
+a v1 box writes its records into a mount the v2 host no longer provides, a
+v2 box's stdout is frames a v1 host would file as output, so neither pair
+may run.
 
 `FABER_INVOKE_PROFILE` (the concrete invocation-profile JSON) is the worked
 example of the additive rule: an env variable whose absence the box tolerates
 with a defined default (the built-in dialect) does **not** bump the version —
 an old box under a new host ignores the unknown variable, and a new box under
 an old host falls back to the default. `FABER_SESSIONS_DIR` rides the same
-rule: the host sets it (a container path under `HOME`) exactly when it also
-mounted the live sessions bind there — the pair-set discipline of
-`FABER_SECRETS_STDIN` — and absence simply means capture is off, so the
-preamble's gated component-chown never runs.
+rule: the host sets it (a container path under `HOME`) exactly when capture
+is on and the profile names a `session_dir`, the box ships that directory
+at the end as `sessions/<rel>` frames, and absence simply means capture is
+off, so nothing is shipped.
 
 ## Result emission (internal/agent/result.go)
 
@@ -127,8 +203,9 @@ func (b *Box) emitResult(ctx context.Context) error {
   `git ls-remote --exit-code origin refs/heads/<name>` via the runner; a
   nonzero exit yields reason `side-effect-unverified`.
 - `writeResult` marshals the failure module's record type and writes it
-  atomically (temp file + `os.Rename` within the result dir): the mounted
-  directory never exposes a half-written record.
+  atomically (temp file + `os.Rename` within the result dir, a tmpfs); the
+  shipping step then sends it last, so the host never sees a record ahead of
+  the files it points at.
 - Every path through `failStop` also ends in `writeResult` with a failed
   record — one record per attempt is an invariant of the binary, not a
   convention.
@@ -149,8 +226,11 @@ instead of a guess.
 `$FABER_RESULT_DIR/hooks/events.jsonl` (`contract.HooksEventsFile`) is the
 hooks' own account of the attempt for the operator — which PR this cycle
 is on, whether the push landed, why the hook halted and what to do next.
-Hooks write it (creating `hooks/` themselves); the box never reads or
-creates it, and nothing fails over it. The host-side on_failure hook is
+Hooks write it (creating `hooks/` themselves); the box never interprets or
+creates it, and nothing fails over it — the box only tails it, sending each
+complete new line to the host as an `event` frame while the user phases run,
+so the host's copy under the attempt's result directory grows as the hooks
+write. The host-side on_failure hook is
 given the same directory under the same `FABER_RESULT_DIR` name by the
 failure module's hook runner, so all four slots share one file per attempt.
 
@@ -205,8 +285,10 @@ and the report (`(check)` on the step line).
 func ExtractResult(dir string, schema config.OutputSchema) (failure.Result, error)
 ```
 
-Re-parses `result.json`, re-validates the payload against the same schema
-(defense against a tampering agent — mis-shaped data must not thread), and
-synthesizes `failed / box-vanished` when the file is missing or unparseable.
+Re-parses `result.json` from the attempt's result directory on the host —
+the file the demuxer wrote from the box's last frame — re-validates the
+payload against the same schema (defense against a tampering agent —
+mis-shaped data must not thread), and synthesizes `failed / box-vanished`
+when the file is missing or unparseable.
 This function is the only agent-module code the host executes; everything
 else in this section runs inside the box.

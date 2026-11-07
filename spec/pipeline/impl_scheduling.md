@@ -36,7 +36,8 @@ queue are single-threaded by construction, and `go test -race` stays quiet.
 The `steps` closure is the host-side `infra.ContainerSpec` assembly seam: it bridges
 the security module's `Assembled` (verbatim argv fragment + `SecretsStdin`) and
 the engine mounts/env into one run spec before handing it to
-`infra.ContainerRunner`, so it is the single place that owns `ContainerSpec.Env`
+`infra.ContainerRunner`, attaches the attempt's two writers (`Output` for the
+human log, `Stdout` for the demuxer), so it is the single place that owns `ContainerSpec.Env`
 assembly and therefore enforces the credentials pairing — a non-empty
 `Assembled.SecretsStdin` is copied into `ContainerSpec.StdinSecrets` and
 `ContainerSpec.Env[contract.EnvSecretsStdin]="1"` is set in the same step, never one
@@ -55,7 +56,67 @@ image tag. Run-prep stages nothing for it, and the `ContainerSpec` carries no
 `<name>/SKILL.md` tree and symlinks `$HOME/<SkillsLink> -> /faber/skills` from
 `FABER_SKILLS_LINK`, unchanged.
 
-## Session capture (the run-prep seam owns the live bind)
+## The demuxer (the run-prep seam owns the box's stdout)
+
+The box's stdout is the frame stream the agent module defines
+(spec/agent/impl_hook_result_contracts.md, "The frame channel"). `RunAttempt`
+points `ContainerSpec.Stdout` at a demuxer rooted in the attempt directory
+and runs `contract.ReadFrames` over it as the container streams:
+
+```go
+type demuxer struct {
+    attemptDir string      // <run>/boxes/<step>/attempt-<n>
+    log        io.Writer   // output.log, for foreign bytes
+    total      int64       // bytes accepted so far, against MaxAttemptStreamBytes
+    err        error       // the first violation; set, the demuxer discards
+}
+const MaxAttemptStreamBytes = 1 << 30
+func (d *demuxer) Frame(kind, name string, mtime time.Time, body io.Reader, n int64) error
+func (d *demuxer) Foreign(p []byte) error
+func (d *demuxer) Close() error   // ends the stream, waits for the reader; the first violation or stream error
+func (d *demuxer) Ended() bool    // the end frame arrived
+```
+
+Every write goes through an `os.Root` of `<attempt>/result` or
+`<attempt>/sessions`, opened on first use: the reader proves a name
+lexically contained, the root keeps it contained through whatever the box
+planted earlier (a link frame followed by a file, an event, or a link
+through it resolves outside and is refused in the kernel).
+
+- `event` frames append the line to `<attemptDir>/result/hooks/events.jsonl`
+  (the `hooks/` dir created on first use), so the file the live view and the
+  on_failure hook read grows as the hooks write.
+- `file` and `link` frames land under the attempt directory. The name's
+  first segment must be `result` or `sessions`; any other root is a
+  violation, and so is a `link` under `result/` — the extractor and the
+  view read the records there, and must never read one through a link the
+  box planted (a harness's latest-pointer under `sessions/` is a real link
+  and is kept). A file is written to a temporary name beside its target and
+  renamed into place, with the frame's mtime applied, so a stream that
+  breaks mid-frame leaves no partial file; a link replaces whatever was at
+  its name.
+- Foreign bytes go to `output.log` with one warning per attempt: a toolset
+  binary that writes to the container's stdout costs the attempt nothing but
+  noise.
+- A frame over `MaxRecordBytes`, an attempt over `MaxAttemptStreamBytes`, an
+  invalid name or an unknown kind is the demuxer's first violation: it is
+  kept, every later frame is drained and discarded, and after the container
+  exits `RunAttempt` logs it with the step and folds it into the record the
+  same way an actuation error is folded when the record is missing — the box
+  ships `result.json` after the other result files, so a violation among
+  them leaves the extractor no record and it synthesizes `box-vanished`,
+  whose detail names the violation. A violation after the record (the
+  sessions are shipped last) leaves the record standing; the log line is its
+  trace. The stream of a re-entry is the host's own and fails the session
+  when a file cannot be sent (`handoffStream` reports it after the runner
+  returns).
+
+Nothing downstream changed: `ExtractResult`, `readUsage`, `AttemptEvents`,
+the on_failure hook's `FABER_RESULT_DIR` and the live view read the attempt
+directory exactly as they did when the result dir was a bind. The pairing
+discipline of the secrets payload is untouched.
+
+## Session capture (shipped at step end)
 
 Session transcripts are the harness's native session state — where it keeps
 them is the invocation profile's `session_dir` (vendor dialect as data, see
@@ -64,18 +125,20 @@ spec/config/arch_schema_types.md); whether to keep them is per-run policy
 `resume --sessions`). When capture is on **and** the step template's resolved
 profile carries a `session_dir`, `RunAttempt` creates
 `<attemptDir>/sessions/` (after the pre-attempt scrub, so each attempt starts
-empty) and passes it as `BoxSpec.SessionsDir`; the run-spec assembler then
-mounts it read-write at `$HOME/<session_dir>` and sets `FABER_SESSIONS_DIR`
-to that container path — mount and variable always together, the
-`FABER_SECRETS_STDIN` pair-set discipline. Either gate absent ⇒ no mount, no
-variable, byte-identical run specs.
+empty) and sets `BoxSpec.Sessions`; the run-spec assembler then
+sets `FABER_SESSIONS_DIR` to `$HOME/<session_dir>` and mounts nothing — the
+harness writes into the `HOME` tmpfs as it always did, and the box ships the
+directory as `sessions/<rel>` frames when the step ends, which the demuxer
+writes under `<attemptDir>/sessions/` with the frames' mtimes and links.
+Either gate absent ⇒ no variable, nothing shipped, byte-identical run specs.
 
 Consequences, all by construction: each attempt's transcripts are isolated
 and addressed by the existing `boxes/<step>/attempt-<n>/` layout (the scrub
 clears only its *own* attempt dir, so earlier attempts' records persist); the
-transcript is on the host the moment the harness writes it, so a container
-that dies mid-step leaves the record behind; `/workspace` stays an anonymous
-native volume — only append-scale transcript writes cross the bind. The one
+transcript reaches the host when the step ends, so a container killed
+mid-step loses it (the trade for sharing no host path with the box — the
+events and `output.log` it streamed live are what remains); `/workspace`
+stays an anonymous native volume. The one
 place the scrub WOULD eat a transcript is the resume-reuse case: a resumed
 run restarts attempt numbering, so the re-run of a failed step reuses the
 failed attempt's dir — and that failed attempt's transcript is the record
@@ -85,32 +148,37 @@ attempt dir's non-empty `sessions/` aside — to the sibling
 the current toggle: whatever a prior execution captured is a record. Re-entry
 keeps reading `attempt-<final>/sessions` (the latest failed execution's
 transcript); the `.sessions.<k>` siblings are older preserved generations. The
-assembler re-checks the profile pairing (a `SessionsDir` without a profile
+assembler re-checks the profile pairing (`Sessions` without a profile
 `session_dir` is a refusal) and the container path stays inside `HOME` by
 config validation, re-checked as defense in depth. The engine's job ends at
 durable, step-addressed transcripts under the run directory; reading them is
 user-side work.
 
-## Session-resuming interactive re-entry
+## Interactive re-entry as a session
 
-Re-entry (`Reentry.Reenter`) keeps its shape — same image, bindings, inputs,
-handoff mount — but when the failed attempt saved a session
+Re-entry (`Reentry.Reenter`) keeps its shape — same image, bindings, inputs
+— but mounts nothing from the host. It builds a frame stream
+(`handoffStream`, over `contract.FrameWriter.Tree`: regular files as `file`
+with their mtimes, symlinks as `link` under `sessions/` only, under a given
+first segment) from the
+failed attempt's handoff directory as
+`handoff/<rel>` and, when the failed attempt saved a session
 (`boxes/<step>/attempt-<final>/sessions/` exists and is non-empty), the
-profile defines `resume_argv`, and the operator did not force `--shell`, the
-saved session is **copied** (never bound — the archived record stays
-immutable while the ephemeral session diverges freely) into the salted
-interactive dir and that copy is mounted read-write at `$HOME/<session_dir>`.
-The copy is faithful, not the skills stager's normalizing `copyTree`:
-harnesses locate "the most recent session" via file mtimes or a
-latest-pointer symlink, so `copySessionTree` preserves file modes and mtimes
-and recreates symlinks verbatim (they resolve inside the operator's own
-debug container);
-the entry program becomes `resume_argv` with `HOME` pinned to the box home
-(the raw entry replaces the sequencer, so no preamble exports it), landing
-the operator inside the conversation that produced the failure. The salted
-dir — copy included — is removed when the session exits, as today. Fallback
-to the bare shell: `--shell`, no saved session, or no `resume_argv`.
-Re-entry scope stays failed-only.
+profile defines `resume_argv`, and the operator did not force `--shell`, from
+that directory as `sessions/<rel>`. The stream is what the operator's box
+receives: the archived record stays untouched on the host while the
+ephemeral session diverges freely inside the container. The spec carries a
+`--tmpfs /faber/handoff` beside the engine tmpfs, `FABER_SESSIONS_DIR` when
+a session rides along, and the entry `faber-box hold`; the session is
+`{Entry: resume_argv | shell, Env: {HOME: /home/box}, User: <uid>:<gid> from
+the spec's FABER_RUN_UID/GID, Workdir: /workspace}` — `HOME` pinned because
+the exec, not the sequencer, is the operator's entry, and no preamble exports
+it. The seam is `InteractiveRunner.RunInteractive(ctx, InteractiveSession{Spec,
+Input, Session})`; the wiring hands it to infra's `ContainerRunner.Enter`
+(hold, receive, attach, kill). The salted interactive dir holds only the
+binding scratch and is removed when the session exits. Fallback to the bare
+shell: `--shell`, no saved session, or no `resume_argv`. Re-entry scope
+stays failed-only.
 
 ## The loop
 
@@ -285,8 +353,10 @@ re-dispatch starts as attempt 1 again, exactly as its result records it.
 
 The run-prep seam (`AgentBoxes.RunAttempt`) opens
 `<attemptDir>/output.log` (`O_CREATE|O_TRUNC`, after the pre-attempt scrub)
-and sets `ContainerSpec.Output` to it; the container runner tees the streamed
-combined output into it beside the bounded tail and the debug forwarding.
+and sets `ContainerSpec.Output` to it; the container runner tees the
+container's stderr (the human channel: the box's log, hook and agent output,
+docker's own messages) into it beside the bounded tail and the debug
+forwarding. `ContainerSpec.Stdout` is the demuxer above.
 The executor emits `run-started` (run id, workflow, every loop cap off the
 IR via `loopBounds`) before scheduling; `applyExpansion` adds the spliced
 instances' caps to `generate-expanded`. The renderers are the reporter's

@@ -45,6 +45,11 @@ type Box struct {
 	// the phase never touches it.
 	Stdin io.Reader
 
+	// Frames is the box's standard output: the frame channel the events
+	// stream and the result directory travel on. The binary wires os.Stdout;
+	// nil ships nothing (unit tests with a fake runner).
+	Frames *contract.FrameWriter
+
 	// Environ is the child environment for hooks and the agent: the process
 	// environment plus everything the setup phases export (secrets, git ssh
 	// policy). Kept on the Box instead of os.Setenv so the sequencer holds no
@@ -120,13 +125,15 @@ var phases = []phase{
 // no later phase runs — a prelude halt skips the agent, an agent halt skips
 // the postlude. The check runs only on an orderly exit; a phase that fails
 // after writing the halt file is a failure, never a halt. The return value
-// is the process exit code (the mounted record, not the code, is what the
-// host trusts).
+// is the process exit code (the shipped record, not the code, is what the
+// host trusts); main ships the result directory after it returns.
 func Main(ctx context.Context, b *Box) int {
 	if err := b.enterRunUser(ctx); err != nil {
 		b.failStop(ctx, "preamble", err)
 		return 1
 	}
+	stopTail := b.tailEvents(ctx)
+	defer stopTail()
 	for _, p := range phases {
 		b.Log.InfoContext(ctx, "phase start", "phase", p.name)
 		start := time.Now()
@@ -153,7 +160,8 @@ func Main(ctx context.Context, b *Box) int {
 
 // enterRunUser is the privileged preamble (arch phase 0). The container starts
 // as root because the writable mounts arrive root-owned; this chowns exactly
-// those mounts to the run user, exports HOME, and drops privileges — setgroups
+// those mounts (the result tmpfs among them) to the run user, exports HOME,
+// and drops privileges — setgroups
 // to the run group (plus the forwarded agent socket's group, when granted),
 // setgid, setuid — so every phase below, and the untrusted agent above all,
 // runs non-root. The toolset store paths stay root-owned and read-only. A box
@@ -167,7 +175,7 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 	fail := func(step string, err error) error {
 		return &boxError{Reason: contract.ReasonEnvContract, Detail: fmt.Sprintf("preamble: %s: %v", step, err)}
 	}
-	for _, dir := range []string{b.Env.WorkspaceDir, b.Env.BundleDir, "/tmp", contract.ContainerHome} {
+	for _, dir := range []string{b.Env.WorkspaceDir, b.Env.ResultDir, b.Env.BundleDir, "/tmp", contract.ContainerHome} {
 		if err := os.Chown(dir, b.Env.RunUID, b.Env.RunGID); err != nil {
 			return fail("chown "+dir, err)
 		}
@@ -179,16 +187,6 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 	if _, err := os.Stat(b.Env.SecretsDir); err == nil {
 		if err := os.Chown(b.Env.SecretsDir, b.Env.RunUID, b.Env.RunGID); err != nil {
 			return fail("chown "+b.Env.SecretsDir, err)
-		}
-	}
-	// The sessions bind itself arrives host-owned by the run user (the host
-	// pre-created it, like the result dir), but the daemon creates its
-	// INTERMEDIATE path components inside the HOME tmpfs as root — chown each
-	// component from the bind up to (not including) HOME, or the dropped
-	// harness could not write its own files beside them.
-	for _, p := range sessionChownPaths(b.Env.SessionsDir) {
-		if err := os.Chown(p, b.Env.RunUID, b.Env.RunGID); err != nil {
-			return fail("chown "+p, err)
 		}
 	}
 	b.setEnv("HOME", contract.ContainerHome)
@@ -221,25 +219,6 @@ func runUserGroups(runGID, agentSocketGID int) []int {
 	return groups
 }
 
-// sessionChownPaths lists what the preamble chowns for the sessions bind: the
-// bind and every daemon-created intermediate component, bottom-up, strictly
-// inside HOME — never HOME itself (the general chown set covers it). Empty
-// when capture is off ("") or the path does not sit under HOME, so a stray
-// value contributes nothing. The value is CLEANED first: this walk runs as
-// root, and a raw prefix check would let a hand-authored
-// "/home/box/../../etc" (direct sequencer invocations take env verbatim)
-// walk the chown outside HOME.
-func sessionChownPaths(sessionsDir string) []string {
-	if sessionsDir == "" {
-		return nil
-	}
-	var out []string
-	for p := filepath.Clean(sessionsDir); strings.HasPrefix(p, contract.ContainerHome+"/"); p = filepath.Dir(p) {
-		out = append(out, p)
-	}
-	return out
-}
-
 // boxError is a phase failure carrying the record fields the fail-stop funnel
 // needs. Detail must be secret-free: engine prose plus, at most, the exit
 // code — never an env value.
@@ -258,10 +237,11 @@ func (e *boxError) Error() string {
 }
 
 // failStop is the single failure funnel: it writes the structured handoff
-// record plus a snapshot of the bundle directory into the mounted result
-// directory (so container removal cannot lose them), then the failed attempt
-// record carrying the handoff pointer. Errors here can only be logged — the
-// host synthesizes a box-vanished record when no readable record remains.
+// record plus a snapshot of the bundle directory into the result directory
+// (shipped to the host with everything else, so container removal cannot
+// lose them), then the failed attempt record carrying the handoff pointer.
+// Errors here can only be logged — the host synthesizes a box-vanished
+// record when no readable record remains.
 func (b *Box) failStop(ctx context.Context, phaseName string, err error) {
 	berr := asBoxError(phaseName, err)
 	b.Log.ErrorContext(ctx, "phase failed", "phase", phaseName, "reason", berr.Reason, "exit_code", berr.ExitCode)

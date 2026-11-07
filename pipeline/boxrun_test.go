@@ -1,16 +1,19 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dmitriyb/faber/agent/contract"
 	"github.com/dmitriyb/faber/config"
@@ -20,37 +23,46 @@ import (
 )
 
 // fakeContainers is a scripted ContainerRunner: it captures the ContainerSpec and
-// writes a canned record into the mounted result directory — no docker.
+// speaks the box's frame channel into spec.Stdout — a canned record as the
+// last result/ frame, the usage sidecar before it, then end — no docker. A
+// frames hook writes an arbitrary stream instead.
 type fakeContainers struct {
 	mu     sync.Mutex
 	specs  []infra.ContainerSpec
-	record *contract.Result // nil writes nothing (box vanished)
+	record *contract.Result // nil ships no record (box vanished)
 	usage  map[string]int64
 	runErr error  // actuation failure returned by Run
-	output []byte // captured container output tail
+	output []byte // the container's human channel (stderr)
+	frames func(w *contract.FrameWriter)
 }
 
 func (f *fakeContainers) Run(ctx context.Context, spec infra.ContainerSpec) (infra.ContainerResult, error) {
 	f.mu.Lock()
 	f.specs = append(f.specs, spec)
 	f.mu.Unlock()
-	resultDir := ""
-	for _, m := range spec.Mounts {
-		if m.Container == contract.ContainerResultDir {
-			resultDir = m.Host
-		}
-	}
-	if f.record != nil && resultDir != "" {
-		if err := contract.WriteResultFile(resultDir, *f.record); err != nil {
-			return infra.ContainerResult{}, err
-		}
-	}
-	if f.usage != nil && resultDir != "" {
-		raw, _ := json.Marshal(f.usage)
-		os.WriteFile(filepath.Join(resultDir, contract.UsageFile), raw, 0o644)
-	}
 	if spec.Output != nil && len(f.output) > 0 {
 		spec.Output.Write(f.output)
+	}
+	if spec.Stdout != nil {
+		w := contract.NewFrameWriter(spec.Stdout)
+		switch {
+		case f.frames != nil:
+			f.frames(w)
+		default:
+			if f.usage != nil {
+				raw, _ := json.Marshal(f.usage)
+				w.Frame(contract.FrameFile, "result/"+contract.UsageFile, time.Time{}, bytes.NewReader(raw), int64(len(raw)))
+			}
+			if f.record != nil {
+				rec := *f.record
+				if rec.Contract == 0 {
+					rec.Contract = contract.ContractVersion
+				}
+				raw, _ := json.Marshal(rec)
+				w.Frame(contract.FrameFile, "result/"+contract.ResultFile, time.Time{}, bytes.NewReader(raw), int64(len(raw)))
+			}
+			w.End()
+		}
 	}
 	return infra.ContainerResult{ExitCode: 0, Output: f.output, Started: testBase, Duration: 2e9}, f.runErr
 }
@@ -210,26 +222,61 @@ func TestBoxRun_VanishedAndHandoff(t *testing.T) {
 	}
 }
 
-// fakeInteractive captures the interactive run spec. onRun, when set, runs
-// DURING the session — the window in which per-session state (the salted
-// dir, the session copy) still exists.
+// fakeInteractive captures the interactive session: the held box's spec,
+// the operator's exec, and every frame of the input stream (bodies read in
+// full, as the receive would). onRun, when set, runs DURING the session —
+// the window in which per-session state (the salted dir) still exists.
 type fakeInteractive struct {
-	spec  *infra.ContainerSpec
-	onRun func()
+	spec    *infra.ContainerSpec
+	session infra.Session
+	frames  []sentFrame
+	onRun   func()
 }
 
-func (f *fakeInteractive) RunInteractive(ctx context.Context, spec infra.ContainerSpec) (err error) {
-	f.spec = &spec
+type sentFrame struct {
+	kind, name string
+	mtime      time.Time
+	body       []byte
+}
+
+func (f *fakeInteractive) RunInteractive(ctx context.Context, s InteractiveSession) (err error) {
+	f.spec = &s.Spec
+	f.session = s.Session
+	f.frames = nil
+	if err := contract.ReadFrames(s.Input, f); err != nil {
+		return fmt.Errorf("fakeInteractive: input stream: %w", err)
+	}
 	if f.onRun != nil {
 		f.onRun()
 	}
 	return nil
 }
 
+func (f *fakeInteractive) Frame(kind, name string, mtime time.Time, body io.Reader, n int64) error {
+	raw, _ := io.ReadAll(body)
+	f.frames = append(f.frames, sentFrame{kind: kind, name: name, mtime: mtime, body: raw})
+	return nil
+}
+
+func (f *fakeInteractive) Foreign(p []byte) error {
+	return fmt.Errorf("foreign bytes %q on the re-entry stream", p)
+}
+
+// frame finds a captured frame by name.
+func (f *fakeInteractive) frame(name string) (sentFrame, bool) {
+	for _, fr := range f.frames {
+		if fr.name == name {
+			return fr, true
+		}
+	}
+	return sentFrame{}, false
+}
+
 // Verifies a0f44481f57b: interactive re-entry reconstructs the failed step's
 // box from the journal and its handoff record — same image and inputs, the
-// entry program replaced by a shell, the handoff state mounted read-only —
-// and refuses steps that did not fail.
+// box held, the operator's exec a shell, the handoff state sent in as
+// handoff/<rel> frames onto a tmpfs rather than mounted — and refuses steps
+// that did not fail.
 func TestBoxRun_InteractiveReentry(t *testing.T) {
 	store := failure.NewStore(t.TempDir(), nil)
 	ir := testIR("w", []config.Node{agentNode("w/x", "out")}, nil)
@@ -287,23 +334,35 @@ func TestBoxRun_InteractiveReentry(t *testing.T) {
 	if spec == nil {
 		t.Fatalf("interactive runner never invoked")
 	}
-	if spec.Entry[0] != "/bin/sh" {
-		t.Errorf("entry %v, want the interactive shell", spec.Entry)
+	if got := strings.Join(spec.Entry, " "); got != contract.ContainerEntry+" hold" {
+		t.Errorf("held box entry %q, want faber-box hold", got)
+	}
+	if interactive.session.Entry[0] != "/bin/sh" {
+		t.Errorf("operator entry %v, want the interactive shell", interactive.session.Entry)
+	}
+	if want := spec.Env[contract.EnvRunUID] + ":" + spec.Env[contract.EnvRunGID]; interactive.session.User != want || interactive.session.Workdir != contract.ContainerWorkspace {
+		t.Errorf("session user %q workdir %q, want %q %q", interactive.session.User, interactive.session.Workdir, want, contract.ContainerWorkspace)
 	}
 	if spec.Env[contract.InputEnv("out")] != "v" {
 		t.Errorf("inputs not re-exported: %v", spec.Env)
 	}
 	foundHandoff := false
 	for _, m := range spec.Mounts {
-		if m.Container == containerHandoffDir {
+		if m.Kind == infra.KindBind {
+			t.Errorf("re-entry mounts a host path: %+v", m)
+		}
+		if m.Container == contract.ContainerHandoffDir && m.Kind == infra.KindTmpfs {
 			foundHandoff = true
-			if !m.ReadOnly {
-				t.Errorf("handoff mount is writable")
-			}
 		}
 	}
 	if !foundHandoff {
-		t.Errorf("handoff state not mounted: %v", spec.Mounts)
+		t.Errorf("no handoff tmpfs among %v", spec.Mounts)
+	}
+	if fr, ok := interactive.frame("handoff/" + contract.HandoffFile); !ok || !strings.Contains(string(fr.body), `"agent-failed"`) {
+		t.Errorf("handoff record not sent: %+v", interactive.frames)
+	}
+	if last := interactive.frames[len(interactive.frames)-1]; last.kind != contract.FrameEnd {
+		t.Errorf("stream does not end with end: %+v", last)
 	}
 
 	// A step that settled ok refuses re-entry (the failure store's guard).
@@ -699,8 +758,8 @@ func TestBoxRun_WritesOutputLog(t *testing.T) {
 
 // Verifies 93ba0858d75f (scenario 12): no shape of template — named skills,
 // an inline skills root, hooks in every in-box slot — puts image content on
-// the container: the attempt mounts exactly the result bind, the workspace
-// volume and the tmpfs writables, and nothing lands at /faber/skills,
+// the container: the attempt mounts exactly the workspace volume and the
+// tmpfs writables (the result dir among them), and nothing lands at /faber/skills,
 // /faber/hooks or /faber/bin.
 func TestBoxRun_NoImageContentMounts(t *testing.T) {
 	shapes := map[string]func(*config.ResolvedTemplate){
@@ -725,6 +784,9 @@ func TestBoxRun_NoImageContentMounts(t *testing.T) {
 			}
 			var got []string
 			for _, m := range containers.specs[0].Mounts {
+				if m.Kind == infra.KindBind {
+					t.Fatalf("a host path is mounted: %+v", m)
+				}
 				got = append(got, m.Container)
 			}
 			sort.Strings(got)

@@ -46,9 +46,10 @@ type CmdRunner interface {
 	// streamed to the box log plus retained as a tail.
 	Run(ctx context.Context, spec CmdSpec) (CmdResult, error)
 
-	// Stream executes with stdout inherited by the container log (never
-	// parsed) and stderr streamed plus retained as a tail. Used for the
-	// user-filled phases: hooks and the agent invocation.
+	// Stream executes with stdout sent to the box's human log (never
+	// parsed, and never the box's own stdout, which is the frame channel)
+	// and stderr streamed plus retained as a tail. Used for the user-filled
+	// phases: hooks and the agent invocation.
 	Stream(ctx context.Context, spec CmdSpec) (CmdResult, error)
 }
 
@@ -58,8 +59,9 @@ type execRunner struct {
 	stderr io.Writer
 }
 
-// NewExecRunner constructs the real runner; stdout/stderr are the container's
-// log streams (os.Stdout/os.Stderr in the faber-box binary).
+// NewExecRunner constructs the real runner: stdout is where a streamed
+// child's stdout goes, stderr where every child's stderr goes. The faber-box
+// binary points both at its own stderr — fd 1 belongs to the frame channel.
 func NewExecRunner(stdout, stderr io.Writer) CmdRunner {
 	if stdout == nil {
 		stdout = io.Discard

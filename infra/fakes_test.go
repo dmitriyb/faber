@@ -25,8 +25,11 @@ type fakeDocker struct {
 	loadTag    string           // tag Load reports
 	loadErr    error
 	markLoaded bool // Load marks loadTag as existing (daemon-as-cache)
-	runFn      func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error)
+	runFn      func(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 	runStdins  [][]byte // full contents of each ContainerRun's stdin (nil when unattached)
+	execFn     func(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
+	execStdins [][]byte // full contents of each Exec's stdin (nil when unattached)
+	termErr    error
 	killErr    error
 	killed     []string
 }
@@ -82,7 +85,7 @@ func (f *fakeDocker) NetworkExists(ctx context.Context, name string) (bool, erro
 	return f.exists[name], nil
 }
 
-func (f *fakeDocker) ContainerRun(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
+func (f *fakeDocker) ContainerRun(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	f.record("run", args...)
 	// Drain stdin to EOF exactly as the real adapter does — the box reads the
 	// clean EOF as end-of-payload. nil stdin records a nil entry.
@@ -94,9 +97,29 @@ func (f *fakeDocker) ContainerRun(ctx context.Context, args []string, stdin io.R
 	f.runStdins = append(f.runStdins, drained)
 	f.mu.Unlock()
 	if f.runFn != nil {
-		return f.runFn(ctx, args, stdin, output)
+		return f.runFn(ctx, args, stdin, stdout, stderr)
 	}
 	return 0, nil
+}
+
+func (f *fakeDocker) Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	f.record("exec", append([]string{name}, argv...)...)
+	var drained []byte
+	if stdin != nil {
+		drained, _ = io.ReadAll(stdin)
+	}
+	f.mu.Lock()
+	f.execStdins = append(f.execStdins, drained)
+	f.mu.Unlock()
+	if f.execFn != nil {
+		return f.execFn(ctx, name, argv, stdin, stdout, stderr)
+	}
+	return 0, nil
+}
+
+func (f *fakeDocker) ExecTerminal(ctx context.Context, name string, argv []string, env map[string]string, user, workdir string) error {
+	f.record("exec-terminal", append([]string{name, user, workdir}, argv...)...)
+	return f.termErr
 }
 
 func (f *fakeDocker) Kill(ctx context.Context, name string) error {
