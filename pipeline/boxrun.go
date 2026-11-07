@@ -210,6 +210,7 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		return BoxResult{}, err
 	}
 	spec.Bindings = asm.Args
+	spec.Attach = asm.Attach
 	// The attempt's human channel streams into a durable file beside its
 	// result dir — the only record of hook and phase output that outlives the
 	// bounded in-memory tail. The attempt dir was scrubbed above, so the file

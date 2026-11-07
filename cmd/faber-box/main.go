@@ -31,8 +31,9 @@ func main() {
 
 	// The box is normally invoked with no args (env-var driven, as the
 	// container's fixed entrypoint). The exceptions are checked before
-	// anything phase-sequencer-related starts: version, and the two entries
-	// of a reconstructed box the operator enters through docker exec.
+	// anything phase-sequencer-related starts: version, the two entries of a
+	// reconstructed box the operator enters through docker exec, and the
+	// agent relay the host execs into every box.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
@@ -43,6 +44,12 @@ func main() {
 		case "receive":
 			if err := box.Receive(ctx, box.ParseEnv(os.Environ()), os.Stdin, logger); err != nil {
 				logger.Error("receive failed", "err", err)
+				os.Exit(1)
+			}
+			return
+		case "relay":
+			if err := box.Relay(ctx, box.ParseEnv(os.Environ()), os.Stdin, os.Stdout, logger); err != nil {
+				logger.Error("relay failed", "err", err)
 				os.Exit(1)
 			}
 			return

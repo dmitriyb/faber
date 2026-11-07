@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -286,6 +287,7 @@ const testToken = "tok-agent-api-31337"
 type harness struct {
 	docker   *fakeDocker
 	agent    *fakeAgent
+	relay    *fakeRelayExec
 	resolver *fakeResolver
 	broker   *CredentialBroker
 	set      *BindingSet
@@ -298,18 +300,22 @@ func newHarness(t *testing.T) *harness {
 	logger := slog.New(slog.NewTextHandler(logBuf, nil))
 	docker := &fakeDocker{networks: map[string]bool{"agents-internal": true}}
 	agent := newFakeAgent()
+	relay := newFakeRelayExec(t)
+	identity := NewIdentityBinding(agent, logger)
+	identity.Exec = relay
 	resolver := &fakeResolver{token: []byte(testToken)}
 	broker := NewCredentialBroker(resolver, logger)
 	return &harness{
 		docker:   docker,
 		agent:    agent,
+		relay:    relay,
 		resolver: resolver,
 		broker:   broker,
 		logBuf:   logBuf,
 		set: NewBindingSet(
 			NewNetworkBinding(docker, logger),
 			NewRemoteBinding(logger),
-			NewIdentityBinding(agent, logger),
+			identity,
 			broker,
 			logger,
 		),
@@ -343,11 +349,10 @@ func mergeStep(scratch string) StepSpec {
 }
 
 // implementFragment is the exact ordered argv fragment the implement step
-// must assemble to, given the attempt's agent socket host path (the one
-// attempt-unique value — a per-spawn MkdirTemp dir, see the identity
-// binding). File mode contributes exactly one --tmpfs /run/secrets and no
-// token flag — the token rides Assembled.SecretsStdin, not the argv.
-func implementFragment(sock string) []string {
+// must assemble to; nothing in it is attempt-unique. File mode contributes
+// exactly one --tmpfs /run/secrets and no token flag — the token rides
+// Assembled.SecretsStdin, not the argv.
+func implementFragment() []string {
 	return []string{
 		"--network", "agents-internal",
 		"-e", "HTTPS_PROXY=http://egress:8888",
@@ -355,11 +360,14 @@ func implementFragment(sock string) []string {
 		"-e", "NO_PROXY=gateway,localhost,127.0.0.1",
 		"-e", "FABER_REMOTE_URL=ssh://git@gateway/srv/git/sandbox.git",
 		"-e", "FABER_HOST_KEY=" + hostKeyLine,
-		"-v", sock + ":/ssh-agent",
-		"-e", "SSH_AUTH_SOCK=/ssh-agent",
+		"--tmpfs", "/faber/agent",
+		"-e", "SSH_AUTH_SOCK=/faber/agent/agent.sock",
 		"--tmpfs", "/run/secrets",
 	}
 }
+
+// identityArgs is the identity binding's share of a fragment.
+var identityArgs = []string{"--tmpfs", "/faber/agent", "-e", "SSH_AUTH_SOCK=/faber/agent/agent.sock"}
 
 // errContains fails the test unless err is non-nil and mentions want.
 func errContains(t *testing.T, err error, want string) {
@@ -379,4 +387,155 @@ var errBoom = errors.New("boom")
 func ed25519Gen(r io.Reader) (interface{}, interface{}, error) {
 	pub, priv, err := ed25519.GenerateKey(r)
 	return pub, priv, err
+}
+
+func (f *fakeDocker) Running(context.Context, string) (bool, error) { return true, nil }
+
+// fakeRelayExec implements infra.Execer with the box's half of the agent
+// relay in-process: Exec serves a unix socket per container under a short
+// temp dir and pumps agent messages over the exec's stdin and stdout the
+// way `faber-box relay` does, so a test dials the attached proxy exactly as
+// a box's ssh would. notRunning polls report the container down first.
+type fakeRelayExec struct {
+	mu         sync.Mutex
+	dir        string
+	notRunning int
+	polls      int
+	execs      [][]string
+	stdinNil   bool
+	execCode   int    // returned instead of running the pump when non-zero
+	execStderr string // written to the exec's stderr when execCode is set
+	goneAfter  bool   // Running reports the container gone once an exec happened
+}
+
+func newFakeRelayExec(t *testing.T) *fakeRelayExec {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "faber-rl") // short: the sun_path cap
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return &fakeRelayExec{dir: dir}
+}
+
+// socket is where the relay for container listens.
+func (f *fakeRelayExec) socket(container string) string {
+	return filepath.Join(f.dir, container+".sock")
+}
+
+func (f *fakeRelayExec) Running(_ context.Context, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.polls++
+	if f.goneAfter && len(f.execs) > 0 {
+		return false, nil
+	}
+	return f.polls > f.notRunning, nil
+}
+
+func (f *fakeRelayExec) Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	f.mu.Lock()
+	f.execs = append(f.execs, argv)
+	f.stdinNil = stdin == nil
+	code, msg := f.execCode, f.execStderr
+	f.mu.Unlock()
+	if code != 0 {
+		io.WriteString(stderr, msg)
+		return code, nil
+	}
+	ln, err := net.Listen("unix", f.socket(name))
+	if err != nil {
+		return 1, err
+	}
+	defer ln.Close()
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+	}()
+	var pump sync.Mutex
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return 0, nil
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer conn.Close()
+			for {
+				msg, err := readAgentMessage(conn)
+				if err != nil {
+					return
+				}
+				pump.Lock()
+				_, werr := stdout.Write(msg)
+				var reply []byte
+				if werr == nil {
+					reply, err = readAgentMessage(stdin)
+				}
+				pump.Unlock()
+				if werr != nil || err != nil {
+					return
+				}
+				if _, err := conn.Write(reply); err != nil {
+					return
+				}
+			}
+		}()
+	}
+}
+
+// readAgentMessage reads one length-prefixed agent message, prefix included.
+func readAgentMessage(r io.Reader) ([]byte, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return nil, err
+	}
+	n := int(hdr[0])<<24 | int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
+	if n <= 0 || n > 256<<10 {
+		return nil, errors.New("agent message length out of bounds")
+	}
+	msg := make([]byte, 4+n)
+	copy(msg, hdr[:])
+	if _, err := io.ReadFull(r, msg[4:]); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// attachRelay runs the contribution's attach against the binding's fake
+// relay exec for container and returns the socket a box would dial, plus
+// the stop that cancels the attach and waits for it.
+func attachRelay(t *testing.T, exec *fakeRelayExec, attach func(context.Context, string) error, container string) (sock string, stop func()) {
+	t.Helper()
+	if attach == nil {
+		t.Fatal("the contribution carries no attach")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- attach(ctx, container) }()
+	sock = exec.socket(container)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("attach ended before the relay listened: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("relay socket %s never appeared", sock)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return sock, func() {
+		cancel()
+		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("attach: %v", err)
+		}
+	}
 }

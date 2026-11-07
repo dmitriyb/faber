@@ -117,7 +117,7 @@ func TestIdentityBindingResolvesViaRegistry(t *testing.T) {
 	agent := newFakeAgent()
 	// The located private key reports the pinned fingerprint — the correct pair.
 	agent.fpBySource = map[string]string{"/keys/located-impl": fpA}
-	b := identityBinding(agent, nil)
+	b, relay := identityBinding(t, agent, nil)
 	b.Registry = Registry{"implementer": {Fingerprint: fpA}}
 	b.Locator = &fakeLocator{byFP: map[string]string{fpA: "/keys/located-impl"}}
 
@@ -126,14 +126,12 @@ func TestIdentityBindingResolvesViaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	sock := contributedSocket(t, c.Args)
+	sock, stop := attachRelay(t, relay, c.Attach, "box-1")
 	// fakeAgent names the key by the keySource basename it was handed.
 	if got := proxyKeyComments(t, sock); len(got) != 1 || got[0] != "located-impl" {
 		t.Fatalf("the box must see exactly the located key, got %q", got)
 	}
-	if err := c.Teardown(context.Background()); err != nil {
-		t.Fatalf("Teardown: %v", err)
-	}
+	stop()
 	if err := b.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -148,7 +146,7 @@ func TestIdentityBindingRejectsFingerprintMismatch(t *testing.T) {
 	// The registry pins fpA, the locator finds a key, but the loaded key
 	// reports fpB — the pub/private pairing was not the pinned key.
 	agent.fpBySource = map[string]string{"/keys/wrong-half": fpB}
-	b := identityBinding(agent, nil)
+	b, _ := identityBinding(t, agent, nil)
 	b.Registry = Registry{"implementer": {Fingerprint: fpA}}
 	b.Locator = &fakeLocator{byFP: map[string]string{fpA: "/keys/wrong-half"}}
 
@@ -173,7 +171,7 @@ func TestIdentityBindingRejectsFingerprintMismatch(t *testing.T) {
 // Prepare before any agent is spawned or socket dir created.
 func TestIdentityBindingUnknownRoleFailsBeforeSpawn(t *testing.T) {
 	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
+	b, _ := identityBinding(t, agent, nil)
 	b.Registry = Registry{}
 	b.Locator = &fakeLocator{byFP: map[string]string{}}
 
@@ -190,7 +188,7 @@ func TestIdentityBindingUnknownRoleFailsBeforeSpawn(t *testing.T) {
 // fails Prepare before any spawn, naming role and fingerprint.
 func TestIdentityBindingLocatorMissFailsBeforeSpawn(t *testing.T) {
 	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
+	b, _ := identityBinding(t, agent, nil)
 	b.Registry = Registry{"implementer": {Fingerprint: fpA}}
 	b.Locator = &fakeLocator{byFP: map[string]string{}} // no match
 

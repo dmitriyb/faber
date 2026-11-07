@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dmitriyb/faber/agent/contract"
 	"github.com/dmitriyb/faber/security"
@@ -126,7 +128,7 @@ func newTestBox(t *testing.T, d testDirs, overrides map[string]string, fr *fakeR
 }
 
 // oneKeyHandler answers the deterministic setup calls of a repo-bound step:
-// clone and config succeed, the forwarded agent lists exactly one key.
+// clone and config succeed, the agent lists exactly one key.
 func oneKeyHandler(next func(spec CmdSpec, stream bool) (CmdResult, error)) func(CmdSpec, bool) (CmdResult, error) {
 	return func(spec CmdSpec, stream bool) (CmdResult, error) {
 		switch spec.Argv[0] {
@@ -675,7 +677,7 @@ func TestGatelessStepSkipsCloneAndSigning(t *testing.T) {
 	}
 }
 
-// Verifies 93ba0858d75f: signing config is derived from the forwarded agent
+// Verifies 93ba0858d75f: signing config is derived from the box's agent
 // socket; zero or several listed keys is an identity-binding violation.
 func TestSigningOneKeyInvariant(t *testing.T) {
 	for _, tt := range []struct {
@@ -927,59 +929,87 @@ func TestContractVersionHandshake(t *testing.T) {
 	}
 }
 
-// Verifies the agent-socket-group setgroups fix's group-list construction:
-// the run gid is always present; the socket gid joins it only when granted
-// (>= 0) and distinct from the run gid — covering the exact logic the
-// preamble hands to setgroups without a real (root-only) syscall.
-func TestRunUserGroups(t *testing.T) {
-	cases := []struct {
-		name           string
-		runGID         int
-		agentSocketGID int
-		want           []int
-	}{
-		{"no socket gid (sentinel -1)", 1000, -1, []int{1000}},
-		{"distinct socket gid (macOS root socket)", 1000, 0, []int{1000, 0}},
-		{"socket gid equals run gid: no duplicate", 1000, 1000, []int{1000}},
-		{"positive distinct socket gid", 1000, 101, []int{1000, 101}},
+// Verifies 93ba0858d75f: SSH_AUTH_SOCK is the box's agent socket the relay
+// serves; the env carries it verbatim and empty means no identity.
+func TestParseEnvAgentSocket(t *testing.T) {
+	d := newTestDirs(t)
+	if env := ParseEnv(baseEnv(d, nil)); env.AgentSocket != "" {
+		t.Fatalf("AgentSocket = %q, want empty without the variable", env.AgentSocket)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := runUserGroups(tc.runGID, tc.agentSocketGID)
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("runUserGroups(%d, %d) = %v, want %v", tc.runGID, tc.agentSocketGID, got, tc.want)
-			}
-		})
+	env := ParseEnv(baseEnv(d, map[string]string{security.EnvSSHAuthSock: security.ContainerAgentSocket}))
+	if env.AgentSocket != security.ContainerAgentSocket {
+		t.Fatalf("AgentSocket = %q", env.AgentSocket)
 	}
 }
 
-// Verifies the agent-socket-group setgroups fix's parse side: -1 is the
-// "none" sentinel (0 is a valid gid — macOS's socket group — and cannot
-// double as unset), a present "0" parses to 0, a positive value parses
-// normally, and blank or garbage both fall back to -1.
-func TestParseEnvAgentSocketGID(t *testing.T) {
+// Verifies 93ba0858d75f (test scenario 24): the clone phase waits for the
+// relay's socket to accept — one that appears a moment later lets the clone
+// proceed after it exists; one that never appears fails the phase with the
+// signing reason before any git command runs, on a gateless step too;
+// without SSH_AUTH_SOCK nothing is waited for.
+func TestCloneWaitsForAgentSocket(t *testing.T) {
 	d := newTestDirs(t)
-	cases := []struct {
-		name string
-		val  string
-		want int
-	}{
-		{"absent", "", -1},
-		{"zero", "0", 0},
-		{"positive", "101", 101},
-		{"garbage", "not-a-gid", -1},
+	sockDir, err := os.MkdirTemp("", "faber-sk") // short: unix socket limit
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			overrides := map[string]string{}
-			if tc.val != "" {
-				overrides[security.EnvAgentSocketGID] = tc.val
-			}
-			env := ParseEnv(baseEnv(d, overrides))
-			if env.AgentSocketGID != tc.want {
-				t.Fatalf("AgentSocketGID = %d, want %d", env.AgentSocketGID, tc.want)
-			}
-		})
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	sock := filepath.Join(sockDir, "s")
+	var clonedAfterSocket bool
+	fr := &fakeRunner{}
+	fr.handle = func(spec CmdSpec, stream bool) (CmdResult, error) {
+		if spec.Argv[0] == "git" {
+			_, serr := os.Stat(sock)
+			clonedAfterSocket = serr == nil
+		}
+		return CmdResult{}, nil
+	}
+	b := newTestBox(t, d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git", security.EnvSSHAuthSock: sock}, fr)
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		t.Cleanup(func() { ln.Close() })
+	}()
+	if err := b.clone(context.Background()); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	if !clonedAfterSocket {
+		t.Fatal("the clone ran before the agent socket existed")
+	}
+
+	old := agentSocketWait
+	agentSocketWait = 200 * time.Millisecond
+	t.Cleanup(func() { agentSocketWait = old })
+	fr2 := &fakeRunner{handle: oneKeyHandler(nil)}
+	b2 := newTestBox(t, d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git", security.EnvSSHAuthSock: filepath.Join(sockDir, "never")}, fr2)
+	err = b2.clone(context.Background())
+	var berr *boxError
+	if !errors.As(err, &berr) || berr.Reason != contract.ReasonSigning || !strings.Contains(berr.Detail, "relay never attached") {
+		t.Fatalf("clone with no relay: %v", err)
+	}
+	if len(fr2.calls) != 0 {
+		t.Fatalf("git ran without an agent socket: %q", fr2.argvs())
+	}
+
+	// A gateless step with an identity waits too: its hooks may use the
+	// agent, and nothing untrusted may run before the relay has set up.
+	b4 := newTestBox(t, d, map[string]string{security.EnvSSHAuthSock: filepath.Join(sockDir, "never")}, &fakeRunner{})
+	if err = b4.clone(context.Background()); !errors.As(err, &berr) || berr.Reason != contract.ReasonSigning {
+		t.Fatalf("gateless clone with no relay: %v", err)
+	}
+
+	fr3 := &fakeRunner{handle: oneKeyHandler(nil)}
+	b3 := newTestBox(t, d, map[string]string{"FABER_REMOTE_URL": "/gw/repo-a.git"}, fr3)
+	start := time.Now()
+	if err := b3.clone(context.Background()); err != nil {
+		t.Fatalf("clone without an identity: %v", err)
+	}
+	if time.Since(start) > agentSocketWait {
+		t.Fatal("a box without SSH_AUTH_SOCK waited for a socket")
 	}
 }
 

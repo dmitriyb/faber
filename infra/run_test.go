@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ var goldenStdinSecrets = []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
 // fullRunSpec is the golden-argv fixture: limits, every engine mount kind (a
 // template bind rw, a :ro bind, a workspace volume, a /faber/result and a
 // /tmp tmpfs), three env keys, a StdinSecrets payload, and a
-// representative binding fragment (--network, agent-socket -v, SSH_AUTH_SOCK,
+// representative binding fragment (--network, the agent tmpfs, SSH_AUTH_SOCK,
 // proxy env, --tmpfs /run/secrets, --runtime).
 func fullRunSpec() ContainerSpec {
 	return ContainerSpec{
@@ -47,8 +48,8 @@ func fullRunSpec() ContainerSpec {
 		StdinSecrets: goldenStdinSecrets,
 		Bindings: []string{
 			"--network", "wf-net",
-			"-v", "/run/faber/agent.sock:/agent.sock",
-			"-e", "SSH_AUTH_SOCK=/agent.sock",
+			"--tmpfs", "/faber/agent",
+			"-e", "SSH_AUTH_SOCK=/faber/agent/agent.sock",
 			"-e", "HTTPS_PROXY=http://egress:3128",
 			"--tmpfs", "/run/secrets",
 			"--runtime", "runsc",
@@ -77,8 +78,8 @@ func TestGoldenArgv(t *testing.T) {
 		"-e", "FABER_RESULT=/result/result.json",
 		"-e", "FABER_STEP=impl",
 		"--network", "wf-net",
-		"-v", "/run/faber/agent.sock:/agent.sock",
-		"-e", "SSH_AUTH_SOCK=/agent.sock",
+		"--tmpfs", "/faber/agent",
+		"-e", "SSH_AUTH_SOCK=/faber/agent/agent.sock",
 		"-e", "HTTPS_PROXY=http://egress:3128",
 		"--tmpfs", "/run/secrets",
 		"--runtime", "runsc",
@@ -562,5 +563,129 @@ func TestEnter(t *testing.T) {
 	}
 	if got := verbs(docker); got[len(got)-1] != "kill" {
 		t.Fatalf("no kill after a failed attach: %q", got)
+	}
+}
+
+// Verifies 0c82c6478856 (test scenario 15): Run starts the spec's attach
+// with the container's name while the container runs and cancels it once
+// the run returns; the attach's error never becomes the run's; a spec
+// without one starts nothing.
+func TestRunAttachLifecycle(t *testing.T) {
+	attached := make(chan string, 1)
+	docker := &fakeDocker{runFn: func(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+		select {
+		case name := <-attached:
+			attached <- name // leave it for the assertion
+		case <-time.After(5 * time.Second):
+			return 1, errors.New("the attach never ran while the container did")
+		}
+		return 0, nil
+	}}
+	var stopped atomic.Bool
+	spec := ContainerSpec{Name: "faber-a", Image: "faber/t:abc", Attach: func(ctx context.Context, container string) error {
+		attached <- container
+		<-ctx.Done()
+		stopped.Store(true)
+		return ctx.Err()
+	}}
+	var logBuf bytes.Buffer
+	r := NewContainerRunner(docker, slog.New(slog.NewTextHandler(&logBuf, nil)))
+	res, err := r.Run(context.Background(), spec)
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("run: %v exit %d", err, res.ExitCode)
+	}
+	if name := <-attached; name != "faber-a" {
+		t.Fatalf("attach got container %q", name)
+	}
+	if !stopped.Load() {
+		t.Fatal("the attach was not cancelled when the run returned")
+	}
+	if strings.Contains(logBuf.String(), "attach ended") {
+		t.Fatalf("the cancellation was logged as a failure: %s", logBuf.String())
+	}
+
+	// A companion that fails on its own is a warning, not the run's error.
+	docker = &fakeDocker{}
+	logBuf.Reset()
+	spec.Attach = func(context.Context, string) error { return errors.New("relay refused") }
+	r = NewContainerRunner(docker, slog.New(slog.NewTextHandler(&logBuf, nil)))
+	if _, err := r.Run(context.Background(), spec); err != nil {
+		t.Fatalf("attach failure leaked into the run: %v", err)
+	}
+	if !strings.Contains(logBuf.String(), "relay refused") {
+		t.Fatalf("attach failure not logged: %s", logBuf.String())
+	}
+}
+
+// Verifies 0c82c6478856 (test scenario 15): Enter starts the attach after
+// the held box is up and before the receive, and ends it before the kill.
+func TestEnterStartsAttach(t *testing.T) {
+	docker := &fakeDocker{}
+	spec := ContainerSpec{Name: "faber-i", Image: "faber/t:abc", Attach: func(ctx context.Context, container string) error {
+		docker.record("attach", container)
+		<-ctx.Done()
+		docker.record("attach-stopped")
+		return ctx.Err()
+	}}
+	r := NewContainerRunner(docker, testLogger())
+	if err := r.Enter(context.Background(), spec, strings.NewReader("s"), Session{Entry: []string{"sh"}}); err != nil {
+		t.Fatalf("enter: %v", err)
+	}
+	var verbs []string
+	for _, c := range docker.calls {
+		verbs = append(verbs, c[0])
+	}
+	// The attach runs concurrently with the receive and the terminal exec
+	// (instant in the fake), so its first record may land anywhere after
+	// the run; what is fixed is: after the run, stopped before the kill.
+	idx := func(v string) int { return slices.Index(verbs, v) }
+	if !(idx("run") < idx("attach") && idx("attach") < idx("attach-stopped") && idx("attach-stopped") < idx("kill")) {
+		t.Fatalf("verbs = %q", verbs)
+	}
+	if got := verbs[len(verbs)-1]; got != "kill" {
+		t.Fatalf("last verb = %q", got)
+	}
+}
+
+// Verifies b8db21752444 (test scenario 15): ExecWhenRunning polls the
+// running query until true and execs exactly once; a context that ends
+// while polling returns its error with no exec.
+func TestExecWhenRunning(t *testing.T) {
+	polls := 0
+	docker := &fakeDocker{runningFn: func(string) (bool, error) {
+		polls++
+		return polls >= 3, nil
+	}}
+	code, err := ExecWhenRunning(context.Background(), docker, "faber-a", []string{"/faber/bin/faber-box", "relay"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err != nil || code != 0 {
+		t.Fatalf("exec: code %d err %v", code, err)
+	}
+	if polls != 3 || len(docker.callsFor("exec")) != 1 {
+		t.Fatalf("polls %d, execs %d", polls, len(docker.callsFor("exec")))
+	}
+	if ex := docker.callsFor("exec")[0]; !slices.Equal(ex, []string{"exec", "faber-a", "/faber/bin/faber-box", "relay"}) {
+		t.Fatalf("exec argv = %q", ex)
+	}
+
+	docker = &fakeDocker{runningFn: func(string) (bool, error) { return false, nil }}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	if _, err := ExecWhenRunning(ctx, docker, "faber-a", nil, nil, io.Discard, io.Discard); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the context's", err)
+	}
+	if len(docker.callsFor("exec")) != 0 {
+		t.Fatal("exec ran against a container that never came up")
+	}
+}
+
+// Verifies b8db21752444: the running query decodes the one JSON boolean.
+func TestParseJSONBool(t *testing.T) {
+	for raw, want := range map[string]bool{"true\n": true, "false": false} {
+		if got, err := parseJSONBool([]byte(raw)); err != nil || got != want {
+			t.Fatalf("parseJSONBool(%q) = %v, %v", raw, got, err)
+		}
+	}
+	if _, err := parseJSONBool([]byte(`"running"`)); err == nil {
+		t.Fatal("a non-boolean must not parse")
 	}
 }

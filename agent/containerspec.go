@@ -137,7 +137,7 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 
 	// Template env is opaque user config for the box's own toolchain — it may
 	// never set engine- or security-owned names (the FABER_ namespace, the
-	// forwarded agent socket), or it could redirect hooks, enable TOFU, or
+	// agent socket), or it could redirect hooks, enable TOFU, or
 	// point the box at an arbitrary remote. FABER_AGENT_CLI is the one
 	// documented exception.
 	for _, key := range slices.Sorted(maps.Keys(tpl.Env)) {
@@ -150,7 +150,7 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 	}
 	// Template volumes may never shadow an engine mount or a binding mount —
 	// docker's last-mount-wins would sever the result channel or substitute
-	// hooks, secrets, or the forwarded socket.
+	// hooks, secrets, or the agent socket.
 	for _, host := range slices.Sorted(maps.Keys(tpl.Volumes)) {
 		if r := reservedMountConflict(tpl.Volumes[host]); r != "" {
 			errs = append(errs, fmt.Errorf("template volume %q -> %q: overlaps the reserved container path %q", host, tpl.Volumes[host], r))
@@ -267,9 +267,8 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 // reservedContainerPaths are the container paths owned by the box run
 // contract and the security bindings; template volumes may not touch them.
 var reservedContainerPaths = []string{
-	"/faber", // result dir, bundle dir, handoff dir, hooks, skills, entry binary
+	"/faber", // result dir, bundle dir, handoff dir, agent socket, hooks, skills, entry binary
 	security.ContainerSecretsDir,
-	security.ContainerAgentSocket,
 	contract.ContainerWorkspace,
 	contract.ContainerHome, // the box's HOME tmpfs — last-mount-wins would replace it
 	"/tmp",                 // the box's scratch tmpfs

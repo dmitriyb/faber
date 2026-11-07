@@ -26,12 +26,17 @@ func TestLoadHostConfig(t *testing.T) {
 	}
 
 	hc, err = LoadHostConfig(writeHostCfg(t,
-		`{"box_bin":"/opt/faber/faber-box","agent_socket_group":"0","state_dir":"/tmp/faber-state"}`))
+		`{"box_bin":"/opt/faber/faber-box","state_dir":"/tmp/faber-state"}`))
 	if err != nil {
 		t.Fatalf("valid config: %v", err)
 	}
-	if hc.BoxBin != "/opt/faber/faber-box" || hc.AgentSocketGroup != "0" || hc.StateDir != "/tmp/faber-state" {
+	if hc.BoxBin != "/opt/faber/faber-box" || hc.StateDir != "/tmp/faber-state" {
 		t.Fatalf("decoded %+v", hc)
+	}
+	// The retired knob is refused by name, so an upgraded host learns what to
+	// delete rather than reading "unknown key".
+	if _, err := LoadHostConfig(writeHostCfg(t, `{"agent_socket_group":"0"}`)); err == nil || !strings.Contains(err.Error(), "agent_socket_group is retired") {
+		t.Fatalf("retired key: err = %v", err)
 	}
 
 	for name, body := range map[string]string{
@@ -50,8 +55,8 @@ func TestHostConfigDescribe(t *testing.T) {
 	if got := (HostConfig{}).Describe("/p/host.json"); !strings.Contains(got, "absent or empty") {
 		t.Fatalf("empty describe = %q", got)
 	}
-	got := HostConfig{AgentSocketGroup: "0"}.Describe("/p/host.json")
-	if !strings.Contains(got, "agent_socket_group=0") || !strings.Contains(got, "/p/host.json") {
+	got := HostConfig{StateDir: "/s"}.Describe("/p/host.json")
+	if !strings.Contains(got, "state_dir=/s") || !strings.Contains(got, "/p/host.json") {
 		t.Fatalf("describe = %q", got)
 	}
 }

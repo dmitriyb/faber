@@ -14,7 +14,7 @@ import (
 // that answer (requirement 14a0498eb362). It contributes environment only:
 // the gateway clone URL (the configured prefix plus the step's resolved repo
 // input, suffixed ".git") and the host-key policy material. The actual clone
-// happens inside the box, over the identity binding's forwarded agent.
+// happens inside the box, over the identity binding's relayed agent.
 //
 // Host-key policy is exactly one of three modes, with no silent default:
 //

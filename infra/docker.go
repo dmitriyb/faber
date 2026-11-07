@@ -139,6 +139,24 @@ func execTerminalArgs(name string, argv []string, env map[string]string, user, w
 	return append(args, argv...)
 }
 
+// Running queries the container's inspect state. `docker inspect` on an
+// absent name says "No such object"; `container inspect` keeps the
+// container wording, so both markers are classified as absent.
+func (d *dockerCLI) Running(ctx context.Context, name string) (bool, error) {
+	out, err := d.cli.run(ctx, "container", "inspect", "--format", "{{json .State.Running}}", name)
+	if isNotFound(err, "No such container", "No such object") {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("infra: docker container inspect %s: %w", name, err)
+	}
+	running, perr := parseJSONBool(out)
+	if perr != nil {
+		return false, fmt.Errorf("infra: docker container inspect %s: parse: %w", name, perr)
+	}
+	return running, nil
+}
+
 func (d *dockerCLI) Kill(ctx context.Context, name string) error {
 	if _, err := d.cli.run(ctx, "kill", name); err != nil {
 		return fmt.Errorf("infra: docker kill %s: %w", name, err)
@@ -176,6 +194,16 @@ func isNotFound(err error, markers ...string) bool {
 // is already gone (--rm completed first).
 func isNoSuchContainer(err error) bool {
 	return isNotFound(err, "No such container")
+}
+
+// parseJSONBool decodes the single JSON boolean a pinned
+// --format '{{json .State.Running}}' emits.
+func parseJSONBool(out []byte) (bool, error) {
+	var b bool
+	if err := json.Unmarshal(bytes.TrimSpace(out), &b); err != nil {
+		return false, err
+	}
+	return b, nil
 }
 
 // parseJSONString decodes the single JSON string a pinned

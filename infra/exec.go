@@ -24,7 +24,8 @@ import (
 // "Loaded image:" result line; ContainerRun executes a pre-assembled argv
 // (only ContainerRunner ever constructs one); Exec runs an argv inside a
 // running container; ExecTerminal does the same with the operator's
-// terminal attached; Kill stops a container by its deterministic name.
+// terminal attached; Running asks the inspect state whether a container is
+// up; Kill stops a container by its deterministic name.
 //
 // The container's two output streams are never merged: stdout is the box's
 // frame channel, stderr (with docker's own messages, which the client prints
@@ -41,10 +42,22 @@ type DockerClient interface {
 	ContainerRun(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 	Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 	ExecTerminal(ctx context.Context, name string, argv []string, env map[string]string, user, workdir string) error
+	// Running reports whether a container by that name exists and is
+	// running (the inspect state's Running flag); an absent container is
+	// false, not an error.
+	Running(ctx context.Context, name string) (bool, error)
 	Kill(ctx context.Context, name string) error
 	// Remove force-removes a container by name (docker rm -f), running or
 	// stopped; an absent container is success, so eviction is idempotent.
 	Remove(ctx context.Context, name string) error
+}
+
+// Execer is the slice of DockerClient a companion of a running container
+// needs: see when it is up, then exec into it (ExecWhenRunning). The
+// security module's identity relay is the one such companion.
+type Execer interface {
+	Running(ctx context.Context, name string) (bool, error)
+	Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 }
 
 // GitClient is the typed git seam. Only plumbing verbs with byte-stable

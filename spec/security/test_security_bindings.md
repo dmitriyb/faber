@@ -15,31 +15,39 @@ skip otherwise.
   merge steps.
 - A fake resolver script emitting a fixed token; a failing variant (exit 1);
   a slow variant (context-cancellation tests).
-- Throwaway file keys per identity; agent sockets live in per-spawn
-  `MkdirTemp` dirs (short paths — the `sun_path` cap), never under scratch.
+- Throwaway file keys per identity; the role agents' sockets live in
+  per-spawn `MkdirTemp` dirs (short paths — the `sun_path` cap), never under
+  scratch.
+- A fake exec seam whose `relay` exec serves a unix socket in the test's
+  temp dir and pumps agent messages over the exec's stdin and stdout the way
+  `faber-box relay` does, so the attached proxy is dialled exactly as a
+  box's ssh would dial it; it reports not-running for a configurable number
+  of polls first.
 
 ## Scenarios
 
 1. **Golden fragment.** Assembling the implement step yields the exact
    ordered fragment — network flags, proxy env, NO_PROXY list, remote URL
    env with the repo param spliced (`.../sandbox.git`), pinned host-key
-   env, socket mount + SSH_AUTH_SOCK, service handle env, no runtime flag —
-   byte-identical across repeated assembly except the socket mount's host
-   path, which is attempt-unique by design. With `agent-api` in file mode
+   env, the agent tmpfs + SSH_AUTH_SOCK, service handle env, no runtime flag
+   — byte-identical across repeated assembly (nothing in it is
+   attempt-unique), with a non-nil `Attach`. With `agent-api` in file mode
    the fragment also carries exactly one `--tmpfs /run/secrets` and **no**
    token flag; `Assembled.SecretsStdin` decodes to `{"agent-api":
    "<base64(token)>"}`. Adding `runtime: runsc` appends exactly
    `--runtime=runsc` at the end and changes nothing else.
-2. **One key per box.** After Prepare, the step's agent socket answers
-   with exactly one fingerprint — the implement step's identity, not any
-   other configured identity. Two steps prepared concurrently under
-   different identities get distinct sockets, each seeing only its own
-   key. A resolver that loads two keys produces the >1-key warning with
-   both fingerprints; zero keys fails the step.
+2. **One key per box.** After Prepare and the attach, the box's agent
+   socket (the fake relay's) answers with exactly one fingerprint — the
+   implement step's identity, not any other configured identity. Two steps
+   prepared concurrently under different identities attach to distinct
+   relays, each seeing only its own key. A resolver that loads two keys
+   produces the >1-key warning with both fingerprints; zero keys fails the
+   step.
 3. **Teardown always runs.** For each of: container exit 0, container
    exit non-zero, context cancelled mid-run, and a later binding's
-   Prepare failing (failing resolver after the agent was spawned) — the
-   agent process is gone and the socket directory is removed. File mode
+   Prepare failing (failing resolver after the agent was spawned) — after
+   `Close` the role agent process is gone and its socket directory is
+   removed; the attempt itself created no host socket. File mode
    contributes no teardown and writes no host file, so there is nothing to
    shred; the test asserts no host path under the run's scratch area ever
    held the token and that `Assembled.Teardown` for a file-mode-only step
@@ -105,32 +113,42 @@ skip otherwise.
     file is opened by faber (only `.pub` reads and the path handed to
     `AddKey`).
 
-12. **Proxy lists and signs.** Through the contributed socket, dialled as a
-    box's ssh would (`agent.NewClient`), `List` exposes exactly the role's
-    key by comment and `Sign` yields a signature that verifies against it.
-    The fake controller serves a real in-process keyring over the socket
-    with `ServeAgent`, so the protocol path is exercised with no binaries.
+12. **Proxy lists and signs.** Through the attached relay's socket, dialled
+    as a box's ssh would (`agent.NewClient`), `List` exposes exactly the
+    role's key by comment and `Sign` yields a signature that verifies
+    against it. The fake controller serves a real in-process keyring over
+    the role agent's socket with `ServeAgent`, so the protocol path —
+    client, relay pump, proxy, upstream — is exercised with no binaries.
 13. **Sign queue serializes.** Eight attempts of one role, each signing
-    through its own proxy concurrently while the upstream holds every
-    signature for a few milliseconds: the upstream observes at most one
-    Sign in flight, and exactly one role agent was spawned.
+    through its own attached relay concurrently while the upstream holds
+    every signature for a few milliseconds: the upstream observes at most
+    one Sign in flight, and exactly one role agent was spawned.
 14. **Proxy is read-only.** `Add`, `RemoveAll`, `Lock` are refused; `Sign`
     with a key that is not the role's fails; `List` still shows the one
     key afterwards.
 15. **Role agents reused and closed.** Two attempts of one role plus one of
     another spawn exactly two agents; after the attempts' teardowns both
     are live; `Close` stops both (and is idempotent). The binding-set
-    teardown scenarios assert the attempt's proxy directory is gone after
-    teardown and the role agents are gone after `Close`; a retry reuses the
-    role agent but gets a distinct socket.
+    teardown scenarios assert the role agents are gone after `Close`; a
+    retry reuses the role agent and attaches a fresh relay.
+16. **Attach lifecycle.** The attach waits for the container: against the
+    fake exec seam reporting not-running for its first polls, the running
+    query is polled and `Exec` is called exactly once, after it, with the
+    argv `/faber/bin/faber-box relay` and a stdin attached; cancelling the
+    attach's context ends the exec and the attach returns; an exec that
+    fails while the container still runs surfaces its exit in the attach's
+    error, one that ends once the container is gone is no error; a binding
+    with no exec seam fails the attach naming it. `Assembled.Attach`
+    runs every contributed attach and joins their errors, and a set with no
+    attaching binding yields a nil `Attach`.
 
 ## Edge cases
 
 - Empty BindingSet (no remote, no services, no identity, no runtime):
   empty fragment, nil-safe teardown, step still runnable.
 - NO_PROXY list order preserved exactly as declared in YAML.
-- Retry: a second attempt after a failed run gets a different (proxy)
-  socket path on the same role agent and a fresh resolver invocation
-  (asserted via resolver call count).
+- Retry: a second attempt after a failed run attaches a fresh relay on the
+  same role agent and gets a fresh resolver invocation (asserted via
+  resolver call count).
 - Cancellation during teardown: the detached teardown context still kills
   the agent within its deadline.

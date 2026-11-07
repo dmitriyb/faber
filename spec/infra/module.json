@@ -7,7 +7,7 @@
       "preq_id": "d2d2116639cc",
       "type": "functional",
       "title": "Typed subprocess interfaces",
-      "description": "All external tool invocations (docker, git, nix, user-supplied resolver and data-source commands) go through typed Go interfaces backed by os/exec, using the tools' structured output modes (docker --format json, git plumbing, nix --json) — never free-text stdout scraping; docker exec, with and without the operator's terminal, is one of those verbs. Every interface accepts a context.Context and is fakeable in tests."
+      "description": "All external tool invocations (docker, git, nix, user-supplied resolver and data-source commands) go through typed Go interfaces backed by os/exec, using the tools' structured output modes (docker --format json, git plumbing, nix --json) — never free-text stdout scraping; docker exec, with and without the operator's terminal, and the inspect-based running query are among those verbs. Every interface accepts a context.Context and is fakeable in tests."
     },
     {
       "id": "0acac696dcf1",
@@ -28,7 +28,7 @@
       "preq_id": "299d74b42425",
       "type": "functional",
       "title": "Container run primitive",
-      "description": "Run one step container: assemble the docker run argv from the image, resource limits, the ordered binding contributions supplied by the security module, mounts (no host path: the entry binary, the hook scripts and the skills tree are image content, the result dir is a tmpfs), and environment; when the binding set carries a file-mode secrets payload, attach the container's stdin (-i) and stream that payload in; start, wait, and return exit code plus captured output, keeping the container's two streams apart — stderr (with docker's own messages) is the human log, tee'd into the caller's optional durable writer (ContainerSpec.Output), stdout is the box's frame stream, passed untouched to the caller's Stdout writer. Supports kill on context cancellation, and entering a held box for the operator (run detached, receive a stream over exec, attach the terminal over exec, kill). --rm by default; one container per step invocation, no reuse."
+      "description": "Run one step container: assemble the docker run argv from the image, resource limits, the ordered binding contributions supplied by the security module, mounts (no host path: the entry binary, the hook scripts and the skills tree are image content, the result dir is a tmpfs), and environment; when the binding set carries a file-mode secrets payload, attach the container's stdin (-i) and stream that payload in; start, wait, and return exit code plus captured output, keeping the container's two streams apart — stderr (with docker's own messages) is the human log, tee'd into the caller's optional durable writer (ContainerSpec.Output), stdout is the box's frame stream, passed untouched to the caller's Stdout writer. Supports kill on context cancellation, a caller-supplied attach started beside the container and cancelled when it ends (the identity relay over exec), and entering a held box for the operator (run detached, attach, receive a stream over exec, attach the terminal over exec, kill). --rm by default; one container per step invocation, no reuse."
     },
     {
       "id": "7b7ad52d9123",
@@ -42,7 +42,7 @@
     {
       "id": "136258cbf6a9",
       "name": "ExecAdapters",
-      "description": "The typed CLI adapters: DockerClient (run with two output writers, exec, exec with the terminal attached, kill, remove, the image and network queries), GitClient, NixClient, and CommandRunner (for opaque user commands). Each adapter maps a small set of verbs to argv, parses structured output into Go types, wraps errors with the invoked command context, and honors context deadlines.",
+      "description": "The typed CLI adapters: DockerClient (run with two output writers, exec, exec with the terminal attached, kill, remove, the image, network and running queries), GitClient, NixClient, and CommandRunner (for opaque user commands). Each adapter maps a small set of verbs to argv, parses structured output into Go types, wraps errors with the invoked command context, and honors context deadlines.",
       "content": "arch_exec_adapters.md",
       "implements": ["b8db21752444"]
     },

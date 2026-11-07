@@ -23,13 +23,6 @@ type HostConfig struct {
 	// absolute when set: a per-machine fact, never resolved against a cwd.
 	BoxBin string `json:"box_bin,omitempty"`
 
-	// AgentSocketGroup, when non-empty, is passed as --group-add on every box
-	// so the box's non-root user can reach the forwarded agent socket on
-	// platforms whose VM mislabels its ownership (macOS Docker Desktop;
-	// typically "0"). Use a numeric gid — a group name must exist inside the
-	// box image. Empty (every Linux host) emits nothing.
-	AgentSocketGroup string `json:"agent_socket_group,omitempty"`
-
 	// StateDir overrides where run journals and the image manifest live
 	// (default .faber beside the working directory).
 	StateDir string `json:"state_dir,omitempty"`
@@ -76,7 +69,11 @@ func LoadHostConfig(path string) (HostConfig, error) {
 	}
 	for key := range raw {
 		switch key {
-		case "box_bin", "agent_socket_group", "state_dir":
+		case "box_bin", "state_dir":
+		case "agent_socket_group":
+			// Retired with the agent relay: an upgraded host must learn what
+			// to delete, not read "unknown key".
+			return hc, fmt.Errorf("parse host config %s: agent_socket_group is retired (the box reaches its agent over docker exec, no socket is mounted); remove the key", path)
 		default:
 			return hc, fmt.Errorf("parse host config %s: unknown key %q (keys are byte-exact lowercase snake_case)", path, key)
 		}
@@ -101,9 +98,6 @@ func (hc HostConfig) Describe(path string) string {
 	var parts []string
 	if hc.BoxBin != "" {
 		parts = append(parts, "box_bin="+hc.BoxBin)
-	}
-	if hc.AgentSocketGroup != "" {
-		parts = append(parts, "agent_socket_group="+hc.AgentSocketGroup)
 	}
 	if hc.StateDir != "" {
 		parts = append(parts, "state_dir="+hc.StateDir)

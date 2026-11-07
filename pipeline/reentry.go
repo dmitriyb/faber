@@ -161,6 +161,7 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 	}
 	defer func() { _ = asm.Teardown(ctx) }()
 	spec.Bindings = asm.Args
+	spec.Attach = asm.Attach
 
 	// The operator's entry is the harness's own resumed session — the
 	// profile's resume_argv over the saved transcript — whenever the failed

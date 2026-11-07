@@ -26,16 +26,11 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    (the uid:gid the box runs as inside the container; nothing host-owned is
    shared with it, so the value is a container-namespace id and nothing
    more), then drops privileges —
-   `setgroups` to the run group **plus the forwarded-agent socket group when one
-   was granted**, `setgid`, `setuid` — so every phase below, and the untrusted
-   agent in particular, runs non-root. Keeping the socket group is load-bearing:
-   the identity binding's `--group-add <agent_socket_group>` (the macOS VM case,
-   where the forwarded agent socket is root-owned) admits the still-root box to
-   that group, but `setgroups` *replaces* the supplementary set — so dropping to
-   the run group alone would strip the grant and leave the dropped box unable to
-   open the agent socket (a `Permission denied (publickey)` clone failure). The
-   host names the gid to keep in `FABER_AGENT_SOCKET_GID`; unset ⇒ run group only.
-   The
+   `setgroups` to the run group alone, `setgid`, `setuid` — so every phase
+   below, and the untrusted agent in particular, runs non-root. No
+   supplementary group is needed for the agent: the box's agent socket is its
+   own, created inside the container by the relay (below) and chowned to the
+   run user, so there is no host-owned socket to be admitted to. The
    `/run/secrets` tmpfs (present only in file mode, mounted root-owned by the
    binding's `--tmpfs` flag) is a **gated add to the chown set**: chowned only
    when it exists, so the dropped run user can write its `0600` secret files in
@@ -106,7 +101,14 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    `FABER_REMOTE_URL`; the sequencer clones that URL as-is — it never
    assembles a URL — into `/workspace/<repo>`, the working directory for
    every later phase. When absent (a gateless step), later
-   phases run in a scratch directory and phases 5–6 are skipped.
+   phases run in a scratch directory and phases 5–6 are skipped. When the
+   host set `SSH_AUTH_SOCK`, the phase first — gateless or not, so no hook
+   runs before the relay has set up either — waits until that socket
+   accepts a connection from the run user: the host attaches the relay
+   beside the container a moment after it starts, and the relay gives the
+   socket to the run user before serving. Bounded (30 s); past the bound the
+   phase fails with the signing reason naming the missing relay, so a host
+   that never attached is a recorded failure and not a hang.
 
    *Shared object cache (the large-repo seam).* A cross-container git worktree
    is rejected: a shared `.git` is mutable state shared between untrusted
@@ -117,8 +119,9 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    `.git` and working tree but borrows objects (the bulk — history) from the
    shared cache via alternates, so N parallel boxes pay N× only for the working
    checkout, never N× for history. The cache is never written by the box.
-6. **Signing config.** The public key is read from the forwarded agent socket
-   (`ssh-add -L` over `SSH_AUTH_SOCK`); exactly one key must be listed — zero
+6. **Signing config.** The public key is read from the box's agent socket
+   (`ssh-add -L` over `SSH_AUTH_SOCK`, which the host's proxy serves through
+   the relay); exactly one key must be listed — zero
    or several is an identity-binding violation and aborts. Then:
    `git config gpg.format ssh`, `user.signingkey key::<pub>`,
    `commit.gpgsign true`; committer name from `FABER_GIT_NAME` or the default
@@ -242,10 +245,10 @@ and exits nonzero. The handoff is shipped with everything else precisely so
 that container removal cannot lose it; the interactive recovery mode
 reconstructs the box from it.
 
-## The two other entries
+## The three other entries
 
-The same binary has two small entries the interactive recovery mode uses,
-neither of which runs a phase. `faber-box hold` waits for a termination
+The same binary has three small entries, none of which runs a phase. Two
+belong to the interactive recovery mode. `faber-box hold` waits for a termination
 signal and exits: it is the entry of a reconstructed box that the operator
 enters through `docker exec`, so the container exists without a shell of its
 own. `faber-box receive` reads frames from its standard input and writes
@@ -258,6 +261,20 @@ together with the writable mounts a held box's missing preamble left
 root-owned (the workspace, `/tmp`, `HOME`, the path down to the sessions
 directory). It runs as root through `docker exec` before the operator's own
 exec drops to the run user.
+
+`faber-box relay` is the box's end of the identity binding: the host starts
+it through `docker exec -i` the moment the container runs (a sequenced box
+and a held box alike). It listens on `SSH_AUTH_SOCK` (`/faber/agent/agent.sock`,
+a tmpfs the binding mounts), chowns the directory and the socket to
+`FABER_RUN_UID:FABER_RUN_GID` from the container's own environment, drops to
+that user, and pumps: for every client connection it reads one agent message
+(4-byte big-endian length, at most 256 KiB, then the body), writes it to its
+stdout, reads one reply from its stdin, and writes it to the client — one
+exchange at a time across all connections, so the single stream to the host
+stays request–reply aligned for the host's agent server. A client sending a
+malformed length is disconnected alone; EOF on stdin ends the relay; the
+exec ends with the container. Nothing but length-checked bytes crosses it,
+so no key material enters the box through it either.
 
 ## What it never does
 

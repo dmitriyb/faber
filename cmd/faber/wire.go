@@ -170,7 +170,7 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 	}
 
 	identityBinding := security.NewIdentityBinding(security.NewAgentController(logger), logger)
-	identityBinding.SocketGroup = w.host.AgentSocketGroup
+	identityBinding.Exec = w.docker
 	var bindings, reentryBindings *security.BindingSet
 	reg := security.Registry{}
 	store := w.store

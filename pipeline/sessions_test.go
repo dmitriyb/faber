@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func shipSessions(mtime time.Time) func(w *contract.FrameWriter) {
 	return func(w *contract.FrameWriter) {
 		body := []byte("{}\n")
 		w.Frame(contract.FrameFile, "sessions/a.jsonl", mtime, bytes.NewReader(body), int64(len(body)))
-		rec := []byte(`{"status":"ok","contract":2,"payload":{"out":"d"},"attempt":1}`)
+		rec := []byte(`{"status":"ok","contract":` + strconv.Itoa(contract.ContractVersion) + `,"payload":{"out":"d"},"attempt":1}`)
 		w.Frame(contract.FrameFile, "result/"+contract.ResultFile, time.Time{}, bytes.NewReader(rec), int64(len(rec)))
 		w.End()
 	}

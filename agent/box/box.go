@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -161,10 +162,10 @@ func Main(ctx context.Context, b *Box) int {
 // enterRunUser is the privileged preamble (arch phase 0). The container starts
 // as root because the writable mounts arrive root-owned; this chowns exactly
 // those mounts (the result tmpfs among them) to the run user, exports HOME,
-// and drops privileges — setgroups
-// to the run group (plus the forwarded agent socket's group, when granted),
-// setgid, setuid — so every phase below, and the untrusted agent above all,
-// runs non-root. The toolset store paths stay root-owned and read-only. A box
+// and drops privileges — setgroups to the run group, setgid, setuid — so
+// every phase below, and the untrusted agent above all, runs non-root. (The
+// agent socket needs no group: the relay creates it inside the container
+// and chowns it to the run user.) The toolset store paths stay root-owned and read-only. A box
 // already running non-root, or with no run uid (a gateless local invocation
 // with no root to drop), is a no-op. It is the only moment faber-box holds
 // privilege.
@@ -190,33 +191,26 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 		}
 	}
 	b.setEnv("HOME", contract.ContainerHome)
-	if err := syscall.Setgroups(runUserGroups(b.Env.RunGID, b.Env.AgentSocketGID)); err != nil {
-		return fail("setgroups", err)
-	}
-	if err := syscall.Setgid(b.Env.RunGID); err != nil {
-		return fail("setgid", err)
-	}
-	if err := syscall.Setuid(b.Env.RunUID); err != nil {
-		return fail("setuid", err)
+	if err := dropTo(b.Env.RunUID, b.Env.RunGID); err != nil {
+		return fail("drop", err)
 	}
 	b.Log.InfoContext(ctx, "dropped to run user", "uid", b.Env.RunUID, "gid", b.Env.RunGID)
 	return nil
 }
 
-// runUserGroups builds the preamble's supplementary group list: the run gid,
-// plus the identity binding's forwarded-socket gid when one was granted
-// (agentSocketGID >= 0) and it names a distinct group. setgroups REPLACES the
-// calling process's supplementary set rather than appending to it, so a bare
-// {runGID} would silently strip the docker-level --group-add grant for the
-// forwarded, root-owned agent socket (the macOS VM case), leaving the dropped
-// box unable to open it. A pure function so the list-building logic is
-// unit-testable without a real (root-only) setgroups call.
-func runUserGroups(runGID, agentSocketGID int) []int {
-	groups := []int{runGID}
-	if agentSocketGID >= 0 && agentSocketGID != runGID {
-		groups = append(groups, agentSocketGID)
+// dropTo leaves root for uid:gid — setgroups to that one group, setgid,
+// setuid (all threads, since Go 1.16) — the preamble's drop and the relay's.
+func dropTo(uid, gid int) error {
+	if err := syscall.Setgroups([]int{gid}); err != nil {
+		return fmt.Errorf("setgroups: %w", err)
 	}
-	return groups
+	if err := syscall.Setgid(gid); err != nil {
+		return fmt.Errorf("setgid: %w", err)
+	}
+	if err := syscall.Setuid(uid); err != nil {
+		return fmt.Errorf("setuid: %w", err)
+	}
+	return nil
 }
 
 // boxError is a phase failure carrying the record fields the fail-stop funnel
@@ -643,6 +637,14 @@ func remoteHostPort(url string) (host, port string) {
 // spec. Absence of the remote env means a gateless step: later phases run in
 // a scratch directory and the signing phase is skipped.
 func (b *Box) clone(ctx context.Context) error {
+	if b.Env.AgentSocket != "" {
+		// Before anything that could use the agent — the clone, or on a
+		// gateless step the hooks — and before any untrusted code runs
+		// beside the relay's own setup.
+		if err := b.waitAgentSocket(ctx); err != nil {
+			return err
+		}
+	}
 	if b.Env.RemoteURL == "" {
 		dir, err := os.MkdirTemp("", "faber-box-work-*")
 		if err != nil {
@@ -681,6 +683,36 @@ func (b *Box) clone(ctx context.Context) error {
 	return nil
 }
 
+// agentSocketWait bounds the clone phase's wait for the relay's socket: the
+// host attaches the relay a moment after the container starts, so a socket
+// still missing after this long means it never will come. A variable so the
+// tests can lower it.
+var agentSocketWait = 30 * time.Second
+
+// waitAgentSocket waits until SSH_AUTH_SOCK accepts a connection from this
+// process — the run user, after the preamble — so a slow attach is a short
+// wait and a missing one a recorded signing failure rather than a hang or
+// an opaque clone error. A dial, not a stat: the socket exists for an
+// instant before the relay has given it to the run user.
+func (b *Box) waitAgentSocket(ctx context.Context) error {
+	deadline := time.Now().Add(agentSocketWait)
+	for {
+		if conn, err := net.Dial("unix", b.Env.AgentSocket); err == nil {
+			conn.Close()
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return &boxError{Reason: contract.ReasonSigning,
+				Detail: fmt.Sprintf("agent socket %s did not appear within %s: the host's agent relay never attached", b.Env.AgentSocket, agentSocketWait)}
+		}
+		select {
+		case <-ctx.Done():
+			return &boxError{Reason: contract.ReasonSigning, Detail: "waiting for the agent socket: " + ctx.Err().Error()}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 // repoDirName derives the checkout directory name from the clone URL.
 func repoDirName(url string) string {
 	name := strings.TrimSuffix(path.Base(strings.TrimSuffix(strings.ReplaceAll(url, "\\", "/"), "/")), ".git")
@@ -690,8 +722,8 @@ func repoDirName(url string) string {
 	return name
 }
 
-// configureSigning is phase 6: the public key is read from the forwarded
-// agent socket; exactly one key must be listed — zero or several is an
+// configureSigning is phase 6: the public key is read from the box's agent
+// socket (the host's proxy, through the relay); exactly one key must be listed — zero or several is an
 // identity-binding violation. The same key signs commits and authenticates
 // SSH: one fingerprint, one role. What that fingerprint may do is the user's
 // gate service's business, never the box's. Skipped on gateless steps.
@@ -711,7 +743,7 @@ func (b *Box) configureSigning(ctx context.Context) error {
 	if res.ExitCode != 0 {
 		return &boxError{
 			Reason:     contract.ReasonSigning,
-			Detail:     fmt.Sprintf("ssh-add -L exited %d (no forwarded agent?)", res.ExitCode),
+			Detail:     fmt.Sprintf("ssh-add -L exited %d (no agent behind the relay?)", res.ExitCode),
 			ExitCode:   res.ExitCode,
 			StderrTail: string(res.StderrTail),
 		}
@@ -720,12 +752,12 @@ func (b *Box) configureSigning(ctx context.Context) error {
 	if len(keys) != 1 {
 		return &boxError{
 			Reason: contract.ReasonSigning,
-			Detail: fmt.Sprintf("forwarded agent lists %d keys; exactly one key per box", len(keys)),
+			Detail: fmt.Sprintf("the agent lists %d keys; exactly one key per box", len(keys)),
 		}
 	}
 	fields := strings.Fields(keys[0])
 	if len(fields) < 2 {
-		return &boxError{Reason: contract.ReasonSigning, Detail: "forwarded agent listed a malformed public key line"}
+		return &boxError{Reason: contract.ReasonSigning, Detail: "the agent listed a malformed public key line"}
 	}
 	pub := fields[0] + " " + fields[1]
 

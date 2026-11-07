@@ -31,9 +31,15 @@ type Binding interface {
 // enter Args — the binding puts one "--tmpfs <ContainerSecretsDir>" in Args
 // (once) and the tokens leave the security module only as the encoded
 // Assembled.SecretsStdin payload streamed on the container's stdin.
+//
+// Attach, when set, is a host-side companion of the running container: the
+// container runner starts it beside the container with the container's name
+// and cancels its context when the container ends. Only the identity
+// binding sets it (the relay the signing proxy is served over).
 type Contribution struct {
 	Args     []string
 	Secrets  map[string]Secret
+	Attach   func(ctx context.Context, container string) error
 	Teardown func(ctx context.Context) error
 }
 

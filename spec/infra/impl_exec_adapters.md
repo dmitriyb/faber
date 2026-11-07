@@ -12,8 +12,15 @@ type DockerClient interface {
     ContainerRun(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
     Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
     ExecTerminal(ctx context.Context, name string, argv []string, env map[string]string, user, workdir string) error
+    Running(ctx context.Context, name string) (bool, error) // docker container inspect --format '{{json .State.Running}}'; absent = false
     Kill(ctx context.Context, name string) error
     Remove(ctx context.Context, name string) error
+}
+
+// Execer is the slice of DockerClient an attach needs (the identity relay).
+type Execer interface {
+    Running(ctx context.Context, name string) (bool, error)
+    Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 }
 
 type GitClient interface {
@@ -115,7 +122,11 @@ code as data like `ContainerRun`. `ExecTerminal` runs `docker exec -it [-u
 user] [-w workdir] [-e K=V…] <name> <argv…>` with the process's own standard
 streams attached — the one adapter verb that touches the operator's terminal,
 so it lives here beside the other docker verbs rather than in the wiring; it
-returns the exec's error verbatim. Neither verb logs its stdin.
+returns the exec's error verbatim. Neither verb logs its stdin. `Running`
+runs `docker container inspect --format '{{json .State.Running}}' <name>`
+and decodes the one JSON boolean (`parseJSONBool`); "No such container" and
+"No such object" are `false, nil`, like the other absent-object queries. `ExecWhenRunning` (run.go) polls it and then execs
+once — the attach's way of catching a container `Run` has just started.
 
 ## Fakes
 

@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -22,19 +23,21 @@ func proxyClient(t *testing.T, sock string) (agent.ExtendedAgent, func()) {
 	return agent.NewClient(conn), func() { conn.Close() }
 }
 
-// Verifies 1b0f6b9009af: through the box's socket, List exposes the role's
-// one key and Sign produces a signature that verifies against it — the
-// proxy speaks the agent protocol a real ssh client uses.
+// Verifies 1b0f6b9009af: through the box's socket — the attached relay's —
+// List exposes the role's one key and Sign produces a signature that
+// verifies against it: the whole path, client, relay pump, proxy, upstream,
+// speaks the agent protocol a real ssh client uses.
 func TestSignQueue_ProxyListsAndSigns(t *testing.T) {
 	fa := newFakeAgent()
-	b := identityBinding(fa, nil)
+	b, relay := identityBinding(t, fa, nil)
 	c, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	defer b.Close(context.Background())
-	defer c.Teardown(context.Background())
-	client, done := proxyClient(t, contributedSocket(t, c.Args))
+	sock, stop := attachRelay(t, relay, c.Attach, "box-1")
+	defer stop()
+	client, done := proxyClient(t, sock)
 	defer done()
 	keys, err := client.List()
 	if err != nil || len(keys) != 1 || keys[0].Comment != "implementer" {
@@ -56,24 +59,21 @@ func TestSignQueue_ProxyListsAndSigns(t *testing.T) {
 func TestSignQueue_SerializesConcurrentSigns(t *testing.T) {
 	fa := newFakeAgent()
 	fa.signDelay = 5 * time.Millisecond
-	b := identityBinding(fa, nil)
+	b, relay := identityBinding(t, fa, nil)
 	defer b.Close(context.Background())
 	const boxes = 8
-	var contribs []Contribution
+	var socks []string
 	for i := 0; i < boxes; i++ {
 		c, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
 		if err != nil {
 			t.Fatalf("Prepare %d: %v", i, err)
 		}
-		contribs = append(contribs, c)
+		sock, stop := attachRelay(t, relay, c.Attach, fmt.Sprintf("box-%d", i))
+		defer stop()
+		socks = append(socks, sock)
 	}
-	defer func() {
-		for _, c := range contribs {
-			c.Teardown(context.Background())
-		}
-	}()
 	var wg sync.WaitGroup
-	for _, c := range contribs {
+	for _, sock := range socks {
 		wg.Add(1)
 		go func(sock string) {
 			defer wg.Done()
@@ -87,7 +87,7 @@ func TestSignQueue_SerializesConcurrentSigns(t *testing.T) {
 			if _, err := client.Sign(keys[0], []byte("x")); err != nil {
 				t.Errorf("Sign: %v", err)
 			}
-		}(contributedSocket(t, c.Args))
+		}(sock)
 	}
 	wg.Wait()
 	if fa.maxInSign != 1 {
@@ -102,14 +102,15 @@ func TestSignQueue_SerializesConcurrentSigns(t *testing.T) {
 // cannot sign with a key that is not its identity.
 func TestSignQueue_ProxyIsReadOnly(t *testing.T) {
 	fa := newFakeAgent()
-	b := identityBinding(fa, nil)
+	b, relay := identityBinding(t, fa, nil)
 	c, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	defer b.Close(context.Background())
-	defer c.Teardown(context.Background())
-	client, done := proxyClient(t, contributedSocket(t, c.Args))
+	sock, stop := attachRelay(t, relay, c.Attach, "box-1")
+	defer stop()
+	client, done := proxyClient(t, sock)
 	defer done()
 	_, priv, err := ed25519GenerateKey()
 	if err != nil {
@@ -138,26 +139,18 @@ func TestSignQueue_ProxyIsReadOnly(t *testing.T) {
 }
 
 // Verifies 1b0f6b9009af: two roles get two run-scoped agents, attempts of
-// one role reuse theirs, and Close stops both and removes their dirs.
+// one role reuse theirs (each attaching its own relay), and Close stops
+// both and removes their dirs.
 func TestSignQueue_RoleAgentsReusedAndClosed(t *testing.T) {
 	fa := newFakeAgent()
-	b := identityBinding(fa, nil)
-	c1, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	c2, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	c3, err := b.Prepare(context.Background(), mergeStep(t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range []Contribution{c1, c2, c3} {
-		if err := c.Teardown(context.Background()); err != nil {
+	b, relay := identityBinding(t, fa, nil)
+	for i, step := range []StepSpec{implementStep(t.TempDir()), implementStep(t.TempDir()), mergeStep(t.TempDir())} {
+		c, err := b.Prepare(context.Background(), step)
+		if err != nil {
 			t.Fatal(err)
 		}
+		_, stop := attachRelay(t, relay, c.Attach, fmt.Sprintf("box-%d", i))
+		stop()
 	}
 	if len(fa.starts) != 2 {
 		t.Fatalf("want two role agents (implementer, merger), got spawns %q", fa.starts)

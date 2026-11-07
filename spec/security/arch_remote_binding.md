@@ -6,7 +6,7 @@ The component that tells the box where its repository lives and how to trust
 that answer. From the workflow-level `remote:` section it derives the clone
 URL the box will use and the host-key policy material that makes the SSH
 connection fail closed. It contributes environment only — the actual clone
-happens inside the box, over the identity binding's forwarded agent, across
+happens inside the box, over the identity binding's relayed agent, across
 the network binding's internal net.
 
 ## Contribution
@@ -39,7 +39,7 @@ to role mapping, per-role content rules, default-branch protection),
 holding the upstream forge credential, forwarding accepted refs, and
 mediating pull-request actions — all of it is server-side policy behind the
 git URL. Faber's whole contract with the gate is: the box can reach exactly
-one git remote, authenticated by exactly one forwarded key, and whatever the
+one git remote, authenticated by exactly one relayed key, and whatever the
 gate rejects surfaces in the box as an ordinary failed push with the gate's
 structured rejection text in the step's error detail. Faber never holds the
 forge credential and cannot: it only ever sees `ssh://git@…`.

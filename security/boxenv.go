@@ -20,19 +20,18 @@ const (
 	EnvHostKeyTOFU = "FABER_HOST_KEY_TOFU"
 
 	// EnvSSHAuthSock is the standard ssh-agent socket variable, pointed at
-	// the forwarded per-step agent socket.
+	// the box's own agent socket, which the relay serves.
 	EnvSSHAuthSock = "SSH_AUTH_SOCK"
 
-	// ContainerAgentSocket is where the identity binding mounts the step's
-	// ephemeral agent socket inside the box.
-	ContainerAgentSocket = "/ssh-agent"
+	// ContainerAgentDir is the tmpfs the identity binding mounts for the
+	// box's agent socket; ContainerAgentSocket is the socket `faber-box
+	// relay` listens on inside it. Both are under /faber, a reserved path.
+	ContainerAgentDir    = "/faber/agent"
+	ContainerAgentSocket = "/faber/agent/agent.sock"
 
-	// EnvAgentSocketGID carries the supplementary gid the box's privileged
-	// preamble must keep across its setgroups drop so the forwarded,
-	// root-owned agent socket stays reachable after the drop. Emitted only
-	// when the identity binding also emits "--group-add" (the macOS VM
-	// socket-ownership case); absent on platforms that need nothing.
-	EnvAgentSocketGID = "FABER_AGENT_SOCKET_GID"
+	// ContainerEntry is the baked box binary the relay is exec'd from; the
+	// agent module owns the path and restates it (it imports this package).
+	ContainerEntry = "/faber/bin/faber-box"
 
 	// ContainerSecretsDir is where file-mode credential mounts land; the
 	// box's secrets phase exports each file under it into the agent process

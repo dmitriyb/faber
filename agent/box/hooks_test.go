@@ -237,7 +237,7 @@ func TestFailStopSnapshotsBundle(t *testing.T) {
 
 // Verifies b880aa49b3b9 and ae434449cac9: bundle sidecar values merge into
 // the agent's environment last, so engine- and runner-owned names (the
-// FABER_ contract, the forwarded socket, ssh policy, PATH) are rejected at
+// FABER_ contract, the agent socket, ssh policy, PATH) are rejected at
 // the prelude postcondition — a prelude cannot redirect the result channel
 // or the agent's toolchain.
 func TestSidecarCannotOverrideEngineEnv(t *testing.T) {

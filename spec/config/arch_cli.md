@@ -179,9 +179,11 @@ invocation are unchanged.
 Faber reads no configuration from its process environment. Per-machine
 inputs live in `host.json` beside the role registry under faber's config
 home: `box_bin` (absolute-only path of the faber-box binary `faber build` bakes
-into every image; default next-to-faber), `agent_socket_group` (the identity binding's `--group-add`
-escape; typically "0" on macOS docker VMs, unset on Linux), `state_dir`
-(default `.faber`). The wiring loads it exactly once, before anything is
+into every image; default next-to-faber), `state_dir` (default `.faber`).
+`agent_socket_group` is retired: the box reaches its agent over a relay on
+`docker exec`, so no platform grant exists any more, and a file still naming
+the key is refused with a message saying so (not the generic unknown-key
+error), so an upgraded host learns what to delete. The wiring loads it exactly once, before anything is
 constructed: absent file = all defaults; a malformed file — bad JSON, an
 unknown or differently-cased key (byte-exact lowercase snake_case), a
 relative `box_bin`, trailing content — refuses the whole invocation through

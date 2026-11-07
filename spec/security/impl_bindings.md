@@ -19,6 +19,7 @@ type Binding interface {
 type Contribution struct {
     Args     []string          // docker run flags, internally ordered, consumed verbatim
     Secrets  map[string]Secret // file-mode tokens (name→Secret); nil except the credentials binding
+    Attach   func(ctx context.Context, container string) error // served beside the running container (the identity relay); nil = none
     Teardown func(ctx context.Context) error
 }
 
@@ -49,7 +50,7 @@ never enter `Args` — they leave the security module only as the encoded
 | network (proxy) | `--network <name>`, `-e HTTPS_PROXY=<proxy>`, `-e HTTP_PROXY=<proxy>`, `-e NO_PROXY=<list>` |
 | network (nftables) | `--network <name>`, `--cap-add NET_ADMIN` (no proxy env; root entrypoint loads rules, drops to agent user) |
 | remote | `-e FABER_REMOTE_URL=<prefix>/<repo>.git`, then one of `-e FABER_HOST_KEY=<key line>` (pinned) or `-e FABER_HOST_KEY_TOFU=1` |
-| identity | `-v <sock>:/ssh-agent`, `-e SSH_AUTH_SOCK=/ssh-agent`, optional `-e FABER_SIGNING_KEY=<pub line>`, platform group flag when needed |
+| identity | `--tmpfs /faber/agent`, `-e SSH_AUTH_SOCK=/faber/agent/agent.sock`, optional `-e FABER_SIGNING_KEY=<pub line>`; and the attach: the relay exec the proxy is served over |
 | runtime | `--runtime=<value>` |
 
 The `FABER_*` names are the box env contract shared with the agent module's
@@ -78,25 +79,27 @@ restated per binding.
   holds that fingerprint and fails closed otherwise — a mismatched
   pub/private pair is caught here, not at the gate — then dials the socket
   with `agent.NewClient` and keeps the exposed keys (`exposedKeys`: the one
-  key, or the pinned one among several). Per attempt it creates a second
-  private socket dir and `serveProxy`s a `signProxy{keys, upstream,
-  queue}` on it with `agent.ServeAgent` (socket chmod 0600): `List` → the
-  exposed keys, `Sign`/`SignWithFlags` → `queue.Lock` then the upstream
-  client, `Signers` → upstream under the queue, `Add`/`Remove`/`RemoveAll`/
-  `Lock`/`Unlock` → `errAgentReadOnly`, `Extension` →
-  `agent.ErrExtensionUnsupported`. Teardown closes the listener (waiting
-  for served connections) and removes the proxy directory, independent
-  errors joined with `errors.Join`; `Close(ctx)` stops every role agent
-  (connection, process, directory) and `BindingSet.Close` forwards to any
-  binding that implements it. Resolution runs before any spawn, so a role
-  that resolves to nothing fails without leaving an agent
-  behind. `SocketGroup`, when non-empty, contributes BOTH `--group-add
-  <SocketGroup>` AND `-e FABER_AGENT_SOCKET_GID=<SocketGroup>` — the box's
-  preamble re-adds that gid across its `setgroups` drop, which otherwise strips
-  the docker-granted group and breaks agent-socket access (see the phase
-  sequencer); the cmd wiring fills it from the host config file's
-  `agent_socket_group` (empty ⇒ field empty ⇒ neither emitted). `SocketGroup` is
-  a numeric gid so the preamble can pass it to `setgroups`.
+  key, or the pinned one among several). Per attempt it builds a
+  `signProxy{keys, upstream, queue}` — `List` → the exposed keys,
+  `Sign`/`SignWithFlags` → `queue.Lock` then the upstream client, `Signers`
+  → upstream under the queue, `Add`/`Remove`/`RemoveAll`/`Lock`/`Unlock` →
+  `errAgentReadOnly`, `Extension` → `agent.ErrExtensionUnsupported` — and
+  contributes it as `Attach`: `serveRelay` (signqueue.go) waits for the
+  container with `infra.ExecWhenRunning` over the binding's `Exec` seam (the
+  docker client, wired by cmd; nil fails the attach naming it), execs
+  `/faber/bin/faber-box relay` with an `os.Pipe` as the relay's stdin (an
+  `*os.File`, so the exec's wait never blocks on a copier that has nothing
+  to copy) and an `io.Pipe` as its stdout, serves `agent.ServeAgent(proxy,
+  rw)` over the pair until the exec returns, then closes both. An exec that
+  ends with an error or a non-zero code is a failure of the attach only
+  while the container is still running (`Running`, asked on a short
+  detached context): a relay killed with its container, or never exec'd
+  into a box that had already exited, is every run's ordinary end and
+  returns nil. The contribution has no teardown and creates no host socket; `Close(ctx)`
+  stops every role agent (connection, process, directory) and
+  `BindingSet.Close` forwards to any binding that implements it. Resolution
+  runs before any spawn, so a role that resolves to nothing fails without
+  leaving an agent behind.
 
 ## BindingSet (internal/security/set.go)
 
@@ -106,12 +109,14 @@ type BindingSet struct{ bindings []Binding } // fixed order, set at construction
 type Assembled struct {
     Args        []string
     SecretsStdin []byte // framed JSON payload for the container's stdin; nil = no file-mode secret
+    Attach      func(ctx context.Context, container string) error // every contributed attach, concurrently, errors joined; nil when none
     Teardown    func(ctx context.Context) error // reverse order, always all of them
 }
 
 func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, error) {
     var args []string
     var undo []func(context.Context) error
+    var attaches []func(context.Context, string) error
     secrets := map[string]Secret{}
     for _, b := range s.bindings {
         c, err := b.Prepare(ctx, step)
@@ -122,6 +127,9 @@ func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, err
         args = append(args, c.Args...)
         for name, tok := range c.Secrets { // only the credentials binding sets any
             secrets[name] = tok
+        }
+        if c.Attach != nil {
+            attaches = append(attaches, c.Attach)
         }
         if c.Teardown != nil {
             undo = append(undo, c.Teardown)
@@ -135,9 +143,13 @@ func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, err
             return Assembled{}, fmt.Errorf("binding credentials: %w", err)
         }
     }
-    return Assembled{Args: args, SecretsStdin: payload, Teardown: reverseJoin(undo)}, nil
+    return Assembled{Args: args, SecretsStdin: payload, Attach: joinAttach(attaches), Teardown: reverseJoin(undo)}, nil
 }
 ```
+
+`joinAttach` is nil for no contributors and otherwise runs every attach in
+its own goroutine against the same context and container name, waits for
+all, and joins their errors.
 
 `runReverse`/`reverseJoin` iterate the undo stack last-to-first, call every
 function even when earlier ones fail, and join errors. Teardown uses a
@@ -153,7 +165,9 @@ Binding emitting `--runtime=` or nothing. ContainerRunner receives
 `Assembled.Args` and splices the fragment unchanged between its own
 resource/mount flags and the image name; it never parses or reorders it.
 `Assembled.SecretsStdin` rides alongside into `ContainerSpec.StdinSecrets`, where
-infra streams it on the container's stdin.
+infra streams it on the container's stdin, and `Assembled.Attach` into
+`ContainerSpec.Attach`, which infra starts beside the container and cancels
+when the container ends.
 
 ## Check composition (security/check.go)
 
@@ -183,9 +197,7 @@ func NewCheckBindingSet(identity *IdentityBinding, remoteDir, sourceRepo, keyPat
 
 No maps are iterated anywhere in assembly: `no_proxy` is a YAML list,
 services are walked via sorted keys (broker side), and each binding's args
-are literal slices. The one attempt-unique value is the agent socket's HOST
-path (a fresh `MkdirTemp` dir per spawn — the `sun_path` cap forbids a
-deterministic scratch-derived path); its container side (`/ssh-agent`) and
-everything else in the fragment are byte-stable. Golden test: assembling
-the reference `implement` step twice yields fragments identical except for
-that one host path.
+are literal slices. Nothing in the fragment is attempt-unique: the role
+agent's host socket is faber's own and never in the argv, and the box's
+agent socket is a fixed container path. Golden test: assembling the
+reference `implement` step twice yields byte-identical fragments.
