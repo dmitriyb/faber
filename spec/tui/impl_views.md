@@ -11,7 +11,9 @@ func (u *UI) Run(ctx, config.UIOptions) error   // signal.NotifyContext(SIGINT, 
 
 type model struct {            // re-derived from the store at every tick/key
     screen string              // "home" | "run"
-    project *Project; runs []RunRow; runSel, wfSel int; focus string
+    project *Project; runs []RunRow; runSel, wfSel int; focus string   // wfSel runs over the workflows, then the preflight classes
+    pfDrill string; pfSel int                                           // the preflight class drilled into ("" = none) and its cursor
+    rfocus string; soff, ooff int                                       // Run: "list" | "step" | "output", and the STEP / OUTPUT scroll offsets
     cache *replayCache; irs *irCache; stats History; hscope string; statsVer int; loadErr string
     run *RunView; preview bool
     pfocus bool; psel int; popen, pauto map[string]bool; plines []pline   // the preview pane: focus, cursor over block heads, folds, one-time auto-open
@@ -35,6 +37,8 @@ image tagger and the docker client, and `<state>/logs` as the log dir.
 loadProject(ctx, path, images, keys) *Project     // Load → Validate → Desugar each workflow → probe per template → preflight; mtime kept
 preflight(ctx, cfg, irs, dir, keys) Preflight     // roles (used? resolves?), templates' hook slots (script exists?), resolver (exists?), services (named); Check{Name, State, Detail, Fix, Used}
 needsOf(project, ir) Preflight                    // the preflight narrowed to one workflow's templates
+classesOf(pf, templates, templateCount, withConfig) []PreflightClass   // the checklist: {Name, State, Detail, Items []PreflightItem{Who, What, Fix}} for config, images, keys, hooks, credentials
+preflightClasses(project) / needsClasses(project, ir)   // Home's five classes / the preview's four
 previewPane(st, m, w) []string                    // the preview's right pane as foldable blocks; sets m.plines for the pane cursor
 configMTime(path) time.Time
 irCache.get(path) (map[string]*config.IR, error)  // a run's IR by its header's config path, re-derived when the file moved
@@ -72,7 +76,9 @@ The flow cursor never rests on a frame edge.
 ```go
 renderHome(f, st, m); renderRun(f, st, m); renderWorkflow(f, st, m)
 projectPane / runsPane / footer                 // Home panes; runs fold to id/state/now under 100 columns
-nowStrip / treePane / stepPane / outputPane     // Run; stepH = 55% of the body; a header wider than the row is cut
+checklistLines(st, classes, w, budget)          // the header, a line per class, up to budget problem rows each, "+k more"; budget 2, or 1 under 30 rows
+drillPane(st, m, w, h)                          // PREFLIGHT > <class>: every item with its fix, cursor pfSel, window
+nowStrip / treePane / stepPane / outputPane     // Run; stepH = 55% of the body; a header wider than the row is cut; STEP and OUTPUT drop soff / ooff rows from their top (the tail keeps ooff lines back) and say how many lie above
 flowPane / timelinePane                         // the other two views; each owns its cursor
 ```
 

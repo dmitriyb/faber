@@ -1,9 +1,8 @@
 // Command faber-box is the in-container phase sequencer: the single
 // engine-owned process every step container runs. It is built statically
-// (CGO_ENABLED=0 GOOS=linux) from the same module as the host engine,
-// bind-mounted read-only into every container, and set as the container
-// command — deliberately not image content, so the image stays a pure
-// function of the toolset.
+// (CGO_ENABLED=0 GOOS=linux) from the same module as the host engine, baked
+// into every template image by `faber build` (its bytes fold into the image
+// tag), and set as the container command.
 //
 // Its whole world is the env contract in and the result contract out: it
 // reads FABER_* variables, drives the fixed phase order, and guarantees one

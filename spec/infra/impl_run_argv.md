@@ -10,7 +10,7 @@ type ContainerRunner struct {
     logger *slog.Logger
 }
 
-type RunSpec struct {
+type ContainerSpec struct {
     Name      string            // deterministic: faber-<run-id>-<slug(step-id)>-a<attempt>
     Image     string            // the tag ImageBuilder produced
     Resources config.ResourceDef
@@ -24,7 +24,7 @@ type RunSpec struct {
 // MountKind selects the docker flag. The container starts as root (image
 // default — no baked user); faber-box chowns the writable mounts to the run
 // uid:gid (carried in Env as FABER_RUN_UID/GID) and drops privileges before any
-// hook or agent. There is no --user flag and no RunSpec field for one.
+// hook or agent. There is no --user flag and no ContainerSpec field for one.
 type MountKind int
 const (
     KindBind   MountKind = iota // -v Host:Container[:ro]  — host bind
@@ -40,14 +40,14 @@ type Mount struct {
     ReadOnly        bool
 }
 
-type RunResult struct {
+type ContainerResult struct {
     ExitCode int
     Output   []byte        // bounded combined stdout+stderr tail
     Started  time.Time
     Duration time.Duration
 }
 
-func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, error)
+func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error)
 ```
 
 **`StdinSecrets` is half of an atomic pairing.** The assembler MUST set
@@ -58,14 +58,14 @@ lose the credential; the flag set with an empty payload leaves the box waiting
 on a stdin that never arrives. ContainerRunner is a pure argv builder: it only
 mechanically emits `-i` and streams the bytes when `StdinSecrets` is non-empty,
 and it never sets the flag. Enforcing the pairing therefore belongs to whoever
-assembles the `RunSpec` from `security.Assembled` and the engine env — the
+assembles the `ContainerSpec` from `security.Assembled` and the engine env — the
 step-runner seam in the pipeline scheduler (see spec/pipeline/impl_scheduling.md),
-which is the only host-side owner of `RunSpec.Env` assembly.
+which is the only host-side owner of `ContainerSpec.Env` assembly.
 
 ## Assembly
 
 ```go
-func buildArgs(spec RunSpec) []string {
+func buildArgs(spec ContainerSpec) []string {
     args := []string{"run", "--rm"}
     if len(spec.StdinSecrets) > 0 {
         args = append(args, "-i") // attach stdin for the secrets payload
@@ -106,23 +106,20 @@ binding fragment's internal order is BindingSet's contract, preserved
 byte-for-byte. The lone `-i` flag is emitted only when `StdinSecrets` is
 non-empty and sits right after `--rm`, so its presence is a pure function of the
 spec too. The engine mounts a spec carries are the result bind (rw), the
-read-only hook scripts and box entry binary, the read-only skills directory
-(`contract.ContainerSkillsDir` = `/faber/skills`, present only when the template
-declares a `skills` leg), the disk-backed `/workspace` volume, and the tmpfs
+disk-backed `/workspace` volume, and the tmpfs
 writables (`/faber/bundle`, `/tmp`, `HOME`); everything else — agent socket,
 the secrets tmpfs (`--tmpfs /run/secrets`), cache volume, `--network`,
 `--runtime` — arrives inside `Bindings`. The file-mode token is not a mount at
 all: it rides `StdinSecrets` on the container's stdin, and faber-box writes it
 into that tmpfs.
-`/faber/skills` is a sibling of `/faber/hooks`: per-template, read-only, static
-capabilities, deliberately not nested under the box-writable per-run bundle
-tmpfs. There is no code path that could emit a docker-socket
-mount, `--privileged`, or `--user`: no field of `RunSpec` maps to them, and the
+`/faber/bin/faber-box`, `/faber/hooks/<slot>` and `/faber/skills` are image
+content the image builder bakes, so no argv ever mounts them. There is no code path that could emit a docker-socket
+mount, `--privileged`, or `--user`: no field of `ContainerSpec` maps to them, and the
 non-root drop is the box's own job, driven by the `FABER_RUN_UID`/`FABER_RUN_GID`
 engine env, not a docker flag.
 
 Two guard layers protect the spec before any argv exists. The run-spec
-assembler (agent.BuildRunSpec) refuses template env claiming engine- or
+assembler (agent.BuildContainerSpec) refuses template env claiming engine- or
 security-owned names (only `FABER_AGENT_CLI` may be set) and template volumes
 overlapping the reserved container paths (`/faber`, `/run/secrets`,
 `/ssh-agent`, `/workspace`, `/home/box`, `/tmp` — docker's last-mount-wins
@@ -138,7 +135,7 @@ its orphaned attempt dir).
 ## Run lifecycle
 
 ```go
-func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
+func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
     out := newTailBuffer(256 << 10) // bounded capture
     writers := []io.Writer{out, slogWriter(r.logger, "step", spec.Name)}
     if spec.Output != nil { writers = append(writers, spec.Output) } // the attempt's durable output.log
@@ -149,7 +146,7 @@ func (r *ContainerRunner) Run(ctx context.Context, spec RunSpec) (RunResult, err
     }
     start := time.Now()
     code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, sink)
-    res := RunResult{ExitCode: code, Output: out.Bytes(),
+    res := ContainerResult{ExitCode: code, Output: out.Bytes(),
         Started: start, Duration: time.Since(start)}
     if ctx.Err() != nil {
         killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)

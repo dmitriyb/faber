@@ -24,7 +24,7 @@ import "github.com/dmitriyb/faber/config"
 const ContractVersion = 1
 
 // Environment variable names of the box env contract. The host side
-// (BuildRunSpec in the agent package) emits them; the sequencer's env phase
+// (BuildContainerSpec in the agent package) emits them; the sequencer's env phase
 // validates them. Absence of an optional name means the feature is off — no
 // value is ever defaulted to a vendor-specific string.
 const (
@@ -112,7 +112,7 @@ const (
 	EnvGitCache = "FABER_GIT_CACHE"
 
 	// EnvSkillsLink is the $HOME-relative path the skills phase symlinks to the
-	// read-only skills mount (ContainerSkillsDir). Opaque agent-specific config;
+	// baked skills tree (ContainerSkillsDir). Opaque agent-specific config;
 	// absent means the template declares no skills leg and the phase is a no-op.
 	EnvSkillsLink = "FABER_SKILLS_LINK"
 
@@ -135,10 +135,10 @@ const (
 	EnvCheck = "FABER_CHECK"
 
 	// EnvSecretsStdin signals that file-mode credential tokens ride the
-	// container's stdin: set to "1" by the host-side RunSpec assembler exactly
+	// container's stdin: set to "1" by the host-side ContainerSpec assembler exactly
 	// when a SecretsStdin payload is attached, and the secrets phase gates its
 	// stdin read on it. The signal and the payload are set together, never one
-	// without the other (see the pipeline scheduler's RunSpec assembly seam).
+	// without the other (see the pipeline scheduler's ContainerSpec assembly seam).
 	EnvSecretsStdin = "FABER_SECRETS_STDIN"
 
 	// EnvContractVersion carries the host's ContractVersion. The box refuses
@@ -165,18 +165,19 @@ const (
 	// on fail-stop its content is snapshotted into the result dir).
 	ContainerBundleDir = "/faber/bundle"
 
-	// ContainerHooksDir is where hook executables are bind-mounted
-	// read-only, one file per phase name (context, prelude, postlude).
+	// ContainerHooksDir is where the image builder bakes the hook executables,
+	// one file per phase name (context, prelude, postlude); root-owned image
+	// content, read-only like every store path.
 	ContainerHooksDir = "/faber/hooks"
 
-	// ContainerSkillsDir is the fixed neutral path the host bind-mounts the
-	// template's skill-definition directory read-only — a sibling of the hooks
-	// dir, and like it a per-template, static, read-only capability. The skills
-	// phase symlinks the agent-specific EnvSkillsLink to it.
+	// ContainerSkillsDir is the fixed neutral path the image builder bakes the
+	// template's skills tree at — a sibling of the hooks dir, and like it a
+	// per-template, static, read-only capability. The skills phase symlinks the
+	// agent-specific EnvSkillsLink to it.
 	ContainerSkillsDir = "/faber/skills"
 
-	// ContainerEntry is where the faber-box binary is bind-mounted read-only
-	// and set as the container command.
+	// ContainerEntry is where the image builder bakes the faber-box binary,
+	// set as the container command.
 	ContainerEntry = "/faber/bin/faber-box"
 
 	// ContainerWorkspace is the parent directory of the gateway clone, mounted

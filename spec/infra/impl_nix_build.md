@@ -9,7 +9,16 @@ type ImageBuilder struct {
     docker     DockerClient
     nix        NixClient
     defaultPin NixpkgsPin // compiled-in FALLBACK: used when a build declares no pin
+    boxBin     string     // the faber-box binary to bake (host.json box_bin, default next to faber)
     logger     *slog.Logger
+}
+
+// ImageInputs are the engine's static inputs baked beside the toolset: the
+// template's resolved hook paths (context, prelude and postlude are baked;
+// on_failure runs on the host) and its resolved skills leg (nil = none).
+type ImageInputs struct {
+    Hooks  config.HookSet
+    Skills *config.ResolvedSkills
 }
 
 type NixpkgsPin struct {
@@ -17,9 +26,9 @@ type NixpkgsPin struct {
     SHA256 string // fetchTarball hash
 }
 
-func (b *ImageBuilder) ImageTag(name string, build config.BuildDef) (string, error)
+func (b *ImageBuilder) ImageTag(name string, build config.BuildDef, inputs ImageInputs) (string, error)
 func (b *ImageBuilder) ProvePackages(ctx context.Context, tpl string, build config.BuildDef) error
-func (b *ImageBuilder) Build(ctx context.Context, tpl string, build config.BuildDef) (string, error)
+func (b *ImageBuilder) Build(ctx context.Context, tpl string, build config.BuildDef, inputs ImageInputs) (string, error)
 ```
 
 `NewImageBuilder` still takes the compiled-in default pin (bumped deliberately
@@ -58,20 +67,31 @@ and thread that value through; none of them read `b.defaultPin` directly.
 ## Toolset hash and tag
 
 ```go
-func (b *ImageBuilder) ImageTag(name string, build config.BuildDef) (string, error) {
+func (b *ImageBuilder) ImageTag(name string, build config.BuildDef, inputs ImageInputs) (string, error) {
+    in, err := b.readInputs(name, build, inputs) // overlay, faber-box, hooks, skills: each read ONCE
+    if err != nil { return "", err }
+    return b.imageTag(name, build, in), nil
+}
+
+func (b *ImageBuilder) imageTag(name string, build config.BuildDef, in stagedInputs) string {
     pin := b.resolvePin(build) // build's pin, else the compiled-in default
     h := sha256.New()
-    fmt.Fprintln(h, imageSchemaVersion) // image-expr schema version, folded FIRST
+    fmt.Fprintln(h, imageSchemaVersion) // "2": image-expr schema version, folded FIRST
     fmt.Fprintln(h, pin.Rev)            // then the RESOLVED rev string
     for _, p := range slices.Sorted(slices.Values(build.Packages)) {
         fmt.Fprintln(h, p)
     }
     if build.Overlay != "" {
-        data, err := os.ReadFile(build.Overlay)
-        if err != nil { return "", fmt.Errorf("infra: overlay %s: %w", build.Overlay, err) }
-        fmt.Fprintf(h, "%x\n", sha256.Sum256(data))
+        fmt.Fprintf(h, "%x\n", sha256.Sum256(in.overlay))
     }
-    return fmt.Sprintf("faber/%s:%x", name, h.Sum(nil)[:6]), nil
+    fmt.Fprintf(h, "box %x\n", sha256.Sum256(in.box))
+    for _, hk := range in.hooks {               // declared in-box slots, fixed order: context, prelude, postlude
+        fmt.Fprintf(h, "hook %s %x\n", hk.slot, sha256.Sum256(hk.data))
+    }
+    for _, f := range in.skills {               // every regular file, sorted by relative path
+        fmt.Fprintf(h, "skill %s %d %x\n", f.rel, exec01(f), sha256.Sum256(f.data)) // 1 when executable
+    }
+    return fmt.Sprintf("faber/%s:%x", name, h.Sum(nil)[:6])
 }
 ```
 
@@ -84,7 +104,11 @@ distinct tag — and what keeps a build with no pin resolving to the identical r
 hence the identical tag, hence byte-stable goldens (the resolved rev enters as an
 unchanged string, so nothing about the fold changes for a pin-less build). Twelve hex
 chars of tag suffice — a collision only risks skipping a rebuild, and the namespace
-is one user's templates.
+is one user's templates. After the overlay, the engine inputs fold in the same
+bytes-not-paths way: the faber-box binary, each declared in-box hook in slot
+order, and every regular file of the skills tree (relative path, executable bit,
+bytes) in sorted order — so the same inputs read from different paths yield the
+same tag, and one changed byte in a hook or a faber upgrade yields a new one.
 
 ### Run-time tag reconstruction (the `imageTagger` seam)
 
@@ -92,7 +116,12 @@ is one user's templates.
 re-entry recompute a step's tag from the node's `*config.ResolvedTemplate` — they
 never hold the original `BuildDef`. The `imageTagger` adapter (`cmd/faber/wire.go`)
 therefore reconstructs one:
-`config.BuildDef{Packages: template.Packages, Overlay: template.Overlay, Pin: template.Pin}`.
+`config.BuildDef{Packages: template.Packages, Overlay: template.Overlay, Pin: template.Pin}`,
+and passes `ImageInputs{Hooks: template.Hooks, Skills: template.Skills}` beside it
+— the resolved template carries both, so the run-time tag reads the same bytes
+`faber build` baked. The seam memoizes the tag per template for the lifetime of
+one run or resume: faber-box and the hooks are read once per run, not per node,
+and an edit mid-run cannot move a node's input hash.
 Carrying `template.Pin` here is load-bearing: it is what makes the run/resume tag
 equal the `faber build` tag for a pinned toolset. Drop it and `resolvePin` sees a
 nil pin, falls back to `defaultPin`, and the recomputed tag diverges from the built
@@ -112,10 +141,27 @@ let
 in pkgs.dockerTools.buildLayeredImage {
   name = "faber/${template}";
   tag  = "${toolsetHash}";
-  contents = [ pkgs.git pkgs.openssh ... ];  # one attr per declared package
+  contents = [ pkgs.git pkgs.openssh ...     # one attr per declared package
+    (pkgs.runCommand "faber-inputs" { } ''  # the engine inputs, one layer
+      mkdir -p $out/faber/bin $out/faber/hooks
+      install -m 0755 ${./faber-box} $out/faber/bin/faber-box
+      install -m 0755 ${./hooks/context} $out/faber/hooks/context   # one line per declared slot
+      cp -r ${./skills} $out/faber/skills                          # only when the template declares a skills leg
+    '')
+  ];
   config.Env = [ "PATH=/bin:/usr/bin" ];
 }
 ```
+
+The engine inputs are staged beside `expr.nix` the way the overlay is —
+`faber-box`, `hooks/<slot>` for each declared in-box slot, and `skills/` (named
+sources copied as `<name>/…` with real files, an inline root copied as is) — and
+imported as `./…` path literals, so no user path is spliced into Nix source and
+the bytes the tag hashed are the bytes the build imports. Before staging, `Build`
+refuses a faber-box that is not a linux ELF of the image's architecture (magic,
+class, `e_machine` against the Linux variant of the host arch the expression
+targets), a hook that fails `config.CheckHookFile`, and a skills source that is
+not a directory, each naming the template and the path.
 
 The `${rev}` and `${sha256}` splices are the resolved pin's fields
 (`b.resolvePin(build)`), so a per-image pin fetches its own nixpkgs snapshot and a

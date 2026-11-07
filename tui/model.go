@@ -33,9 +33,22 @@ type TemplateInfo struct {
 	Name    string
 	Tag     string
 	Built   bool
-	Checked bool // false when no probe is wired or the daemon was unreachable
+	Checked bool // false when no probe is wired, the daemon was unreachable, or a baked hook is missing
 	Err     string
+	// Unchecked is why the tag could not be computed when the reason is a
+	// hook the image bakes ("hooks.prelude not found"): the image is not
+	// checked, never a second FAIL — the hooks class has the slot.
+	Unchecked string
+	// Probe is the daemon's refusal when the existence check could not run
+	// (docker unreachable): the image is not checked, not failed.
+	Probe string
 }
+
+// ErrImageInputs is what an image probe wraps when the tag cannot be
+// computed because a hook the image bakes is missing or broken. The
+// preflight's templates row already names that slot, so the image shows as
+// not checked instead of a second FAIL repeating the path.
+var ErrImageInputs = errors.New("image inputs unavailable")
 
 // Check is one preflight fact about a configured thing: a role, a hook, an
 // image, the credential resolver. State is the status vocabulary (ok,
@@ -172,12 +185,14 @@ func loadProject(ctx context.Context, path string, probe ImageProbe, keys KeyPro
 				}
 			}
 			if tpl != nil {
-				if tag, err := probe.Tag(tpl); err != nil {
-					ti.Err = err.Error()
+				if tag, err := probe.Tag(tpl); errors.Is(err, ErrImageInputs) {
+					ti.Unchecked = strings.TrimPrefix(err.Error(), ErrImageInputs.Error()+": ")
+				} else if err != nil {
+					ti.Err = trimTemplatePrefix(name, err.Error())
 				} else {
 					ti.Tag = tag
 					if ok, err := probe.Exists(ctx, tag); err != nil {
-						ti.Err = err.Error()
+						ti.Probe = err.Error()
 					} else {
 						ti.Checked, ti.Built = true, ok
 					}
@@ -221,6 +236,12 @@ func templatesOf(ir *config.IR, irs map[string]*config.IR) []*config.ResolvedTem
 // hookPaths lists a template's four hooks in their fixed order, "" when unset.
 func hookPaths(t *config.ResolvedTemplate) [4][2]string {
 	return [4][2]string{{"context", t.Hooks.Context}, {"prelude", t.Hooks.Prelude}, {"postlude", t.Hooks.Postlude}, {"on_failure", t.Hooks.OnFailure}}
+}
+
+// trimTemplatePrefix drops a leading "templates.<name>: " from a message
+// shown on a row that already names the template.
+func trimTemplatePrefix(name, msg string) string {
+	return strings.TrimPrefix(msg, "templates."+name+": ")
 }
 
 // relPath shows a path the way the YAML spells it: an included file's
@@ -352,6 +373,8 @@ func needsOf(p *Project, ir *config.IR) Preflight {
 		switch {
 		case t.Err != "":
 			c.State, c.Detail = "FAIL", t.Err
+		case t.Unchecked != "":
+			c.State, c.Detail = "not checked", t.Unchecked
 		case t.Checked && t.Built:
 			c.State = "ok"
 		case t.Checked:
@@ -701,6 +724,25 @@ func outputTail(runDir, nodeID string, attempt, n int) []string {
 		lines = lines[len(lines)-n:]
 	}
 	return lines
+}
+
+// outputWindow is outputTail with the view scrolled back: n lines ending
+// off lines before the end of the file, off clamped so the window never
+// leaves the file; above is how many lines lie before the window.
+func outputWindow(runDir, nodeID string, attempt, n int, off *int) (lines []string, above int) {
+	if n <= 0 {
+		return nil, 0
+	}
+	raw, err := os.ReadFile(filepath.Join(pipeline.AttemptDir(runDir, nodeID, attempt), pipeline.OutputLogName))
+	if err != nil {
+		*off = 0
+		return nil, 0
+	}
+	all := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	*off = clamp(*off, 0, max(0, len(all)-n))
+	end := len(all) - *off
+	start := max(0, end-n)
+	return all[start:end], start
 }
 
 // lastAttempt is the attempt number of a step's newest start, or its

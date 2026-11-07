@@ -127,7 +127,7 @@ mounts, and the env contract is set directly.)
     code it would land under the process `HOME` and the test fails. With
     `FABER_SKILLS_LINK=.claude/skills`, the skills phase creates
     `$HOME/.claude/skills` (under the box `HOME`, parent `.claude` dir created) as
-    a symlink to the fixed read-only `/faber/skills` mount, and nothing appears
+    a symlink to the fixed read-only `/faber/skills` tree (image content), and nothing appears
     under the process `HOME`; unset, no `$HOME/.claude` is created and the phase
     is a no-op. The `link` value is honored verbatim — nothing asserts `.claude`
     beyond the fixture's own config.

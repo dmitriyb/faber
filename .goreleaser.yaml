@@ -36,12 +36,12 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
-    # faber-box is bind-mounted read-only into every box and runs as the
-    # container's own entrypoint (agent/contract.ContainerEntry) — it never
-    # runs on the host process directly, so it ships linux-only. A darwin
-    # operator host still needs a linux/<arch> faber-box (Docker Desktop
-    # shares the host path into its own Linux VM); there is no darwin build
-    # of this binary because it could never execute inside a linux box.
+    # faber-box is baked into every template image by `faber build` and runs
+    # as the container's own entrypoint (agent/contract.ContainerEntry) — it
+    # never runs on the host process directly, so it ships linux-only. A
+    # darwin operator host still needs a linux/<arch> faber-box (the image
+    # runs in Docker Desktop's Linux VM); there is no darwin build of this
+    # binary because it could never execute inside a linux box.
     goos:
       - linux
     goarch:

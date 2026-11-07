@@ -168,8 +168,9 @@ the field path is the contract, asserted by tests. Errors aggregate via
 
 ## What Validate deliberately does not check
 
-- Whether hook scripts, overlay files, skill dirs, or key files exist — run-machine
-  concerns, checked at run start, not config validity (the config may be authored
+- Whether hook scripts, overlay files, skill dirs, or key files exist — build- or
+  run-machine concerns, checked at `faber build` (the inputs it bakes) and at run
+  start, not config validity (the config may be authored
   on a different machine than it runs on). The hook check is the pipeline's run
   preflight, over `CheckHookFile` — the one predicate this module exports for
   it, which the live view's preflight shares. Note this is about *file existence*:

@@ -56,6 +56,16 @@ func renderRun(f *frame, st style, m *model) {
 	default:
 		left = treePane(st, m, leftW, bodyH)
 	}
+	// The scroll offsets belong to one selected step; a new selection
+	// starts both panes at their natural place.
+	id := ""
+	if r := m.selectedRow(); r != nil {
+		id = r.id
+	}
+	if m.scrolled != "" && id != m.scrolled {
+		m.soff, m.ooff = 0, 0
+	}
+	m.scrolled = id
 	// STEP takes the larger share when the hooks wrote about the attempt;
 	// OUTPUT keeps a quarter
 	stepH := bodyH * 55 / 100
@@ -271,7 +281,11 @@ func treePane(st style, m *model, w, h int) []string {
 
 // stepPane renders the selected step's facts.
 func stepPane(st style, m *model, w, h int) []string {
-	out := []string{st.chrome("STEP"), st.rule(w), ""}
+	title := st.chrome("STEP")
+	if m.rfocus == "step" {
+		title = st.rev(" STEP ")
+	}
+	out := []string{title, st.rule(w), ""}
 	r := m.selectedRow()
 	v := m.run
 	if r == nil || (r.kind != "step") {
@@ -331,8 +345,19 @@ func stepPane(st style, m *model, w, h int) []string {
 	if line != nil && line.Halt != nil {
 		tail = append(tail, "", st.chrome("halt"), "  "+trunc(line.Halt.Detail, w-2))
 	}
-	out = append(out, hooksBlock(st, m, r.id, h-len(out)-len(tail), w)...)
-	return padRows(append(out, tail...), h)
+	avail := h - len(out) - len(tail)
+	if m.rfocus == "step" || m.soff > 0 {
+		avail = 1 << 20 // every event row exists to scroll through
+	}
+	out = append(out, hooksBlock(st, m, r.id, avail, w)...)
+	rows := append(out, tail...)
+	// scroll: the title and rule stay, the body drops m.soff rows
+	body := rows[2:]
+	m.soff = clamp(m.soff, 0, max(0, len(body)-1))
+	if m.soff > 0 {
+		rows[0] += st.dim(fmt.Sprintf("   %d above", m.soff))
+	}
+	return padRows(append(rows[:2:2], body[m.soff:]...), h)
 }
 
 // hooksBlock is the attempt's hooks events file as the hooks wrote it:
@@ -426,14 +451,21 @@ func (m *model) haltNext(id string) string {
 func outputPane(st style, m *model, w, h int) []string {
 	r := m.selectedRow()
 	title := st.chrome("OUTPUT")
+	if m.rfocus == "output" {
+		title = st.rev(" OUTPUT ")
+	}
 	out := []string{}
 	if r == nil || r.kind != "step" {
 		out = append(out, title, st.rule(w))
 		return padRows(out, h)
 	}
 	attempt := lastAttempt(m.run.Replay, r.id)
-	out = append(out, title+fmt.Sprintf("   attempt %d   ", attempt)+st.dim("output.log"), st.rule(w))
-	lines := outputTail(m.run.RunDir, r.id, attempt, max(0, h-3))
+	lines, above := outputWindow(m.run.RunDir, r.id, attempt, max(0, h-3), &m.ooff)
+	head := title + fmt.Sprintf("   attempt %d   ", attempt) + st.dim("output.log")
+	if above > 0 {
+		head += st.dim(fmt.Sprintf("   %d above", above))
+	}
+	out = append(out, head, st.rule(w))
 	if len(lines) == 0 {
 		out = append(out, "  "+st.dim("no output captured"))
 	}
@@ -614,30 +646,7 @@ func previewPane(st style, m *model, w int) []string {
 		m.autoOpen("needs")
 	}
 	head("needs", "NEEDS", fmt.Sprintf("%s   %s   %s   %s   ", plural(len(needs.Images), "image"), plural(len(needs.Roles), "role"), plural(needs.Templates, "template"), plural(len(needs.Services), "service"))+state)
-	var nrows []string
-	for _, c := range needs.Images {
-		val := st.ident(c.Name) + "   " + st.status(c.State)
-		switch c.State {
-		case "MISSING":
-			val += "   " + c.Fix + "   " + st.dim(c.Detail)
-		case "FAIL":
-			val += "   " + trunc(c.Detail, w-40)
-		}
-		nrows = append(nrows, cols([]string{"    " + st.dim("image"), val}, []int{16, w - 16}))
-	}
-	for _, c := range needs.Roles {
-		nrows = append(nrows, checkLine(st, "identity", c, w))
-	}
-	for _, c := range needs.Slots { // a template is listed only by the slot that stops it
-		nrows = append(nrows, cols([]string{"    " + st.dim("template"), st.ident(c.Name) + "   " + st.dim(c.Detail) + "   " + c.Fix + "   " + st.wrap(sgrRed, "MISSING")}, []int{16, w - 16}))
-	}
-	if needs.Resolver.Name != "" {
-		nrows = append(nrows, checkLine(st, "resolver", needs.Resolver, w))
-	}
-	for _, c := range needs.Services {
-		nrows = append(nrows, cols([]string{"    " + st.dim("service"), st.ident(c.Name) + "   " + c.Detail + "   " + st.dim("not checked")}, []int{16, w - 16}))
-	}
-	body("needs", nrows...)
+	body("needs", checklistLines(st, needsClasses(m.project, v.IR), w, 2, -1)...)
 
 	// STEP: the selected step's schema facts, with sub-blocks
 	r := m.selectedRow()

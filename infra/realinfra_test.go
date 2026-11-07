@@ -34,6 +34,9 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -85,6 +88,20 @@ func minimalToolset() config.BuildDef {
 	return config.BuildDef{Packages: []string{"coreutils"}}
 }
 
+// realBox compiles the real faber-box for the image's architecture (the
+// Linux variant of the host arch, as the expression targets): the binary the
+// builder bakes into every image.
+func realBox(t *testing.T) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "faber-box")
+	cmd := exec.Command("go", "build", "-o", out, "github.com/dmitriyb/faber/cmd/faber-box")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build faber-box: %v\n%s", err, raw)
+	}
+	return out
+}
+
 // Verifies 0acac696dcf1 + 0c82c6478856 (scenario 8): build-load-run round
 // trip with the minimal toolset, immutability of store paths at runtime, and
 // no nix invocation on rebuild.
@@ -96,9 +113,9 @@ func TestRealinfra_BuildLoadRunRoundTrip(t *testing.T) {
 
 	docker := NewDockerCLI(logger)
 	nix := &countingNix{inner: NewNixCLI(logger)}
-	b := NewImageBuilder(docker, nix, DefaultNixpkgsPin(), t.TempDir(), logger)
+	b := NewImageBuilder(docker, nix, DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
 
-	tag, err := b.Build(ctx, "realinfra-min", minimalToolset())
+	tag, err := b.Build(ctx, "realinfra-min", minimalToolset(), ImageInputs{})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -109,7 +126,7 @@ func TestRealinfra_BuildLoadRunRoundTrip(t *testing.T) {
 
 	runner := NewContainerRunner(docker, logger)
 	name := fmt.Sprintf("faber-realinfra-%d", time.Now().UnixNano())
-	res, err := runner.Run(ctx, RunSpec{Name: name, Image: tag, Entry: []string{"ls", "/bin"}})
+	res, err := runner.Run(ctx, ContainerSpec{Name: name, Image: tag, Entry: []string{"ls", "/bin"}})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -118,7 +135,7 @@ func TestRealinfra_BuildLoadRunRoundTrip(t *testing.T) {
 	}
 
 	// Store paths are root-owned...
-	res, err = runner.Run(ctx, RunSpec{Name: name + "-stat", Image: tag,
+	res, err = runner.Run(ctx, ContainerSpec{Name: name + "-stat", Image: tag,
 		Entry: []string{"stat", "-L", "-c", "%u", "/bin/ls"}})
 	if err != nil {
 		t.Fatalf("stat: %v", err)
@@ -126,9 +143,24 @@ func TestRealinfra_BuildLoadRunRoundTrip(t *testing.T) {
 	if res.ExitCode != 0 || strings.TrimSpace(string(res.Output)) != "0" {
 		t.Fatalf("store path not root-owned: exit %d output %q", res.ExitCode, res.Output)
 	}
+	// The baked faber-box is image content: present, root-owned, executable,
+	// and it answers for itself.
+	res, err = runner.Run(ctx, ContainerSpec{Name: name + "-box", Image: tag,
+		Entry: []string{"stat", "-L", "-c", "%u %A", "/faber/bin/faber-box"}})
+	if err != nil {
+		t.Fatalf("stat faber-box: %v", err)
+	}
+	// Store paths are canonicalised to 0555, so the mode is r-x, never rwx.
+	if res.ExitCode != 0 || !regexp.MustCompile(`^0 -r.xr.xr.x`).MatchString(strings.TrimSpace(string(res.Output))) {
+		t.Fatalf("baked faber-box not root-owned and executable: exit %d output %q", res.ExitCode, res.Output)
+	}
+	res, err = runner.Run(ctx, ContainerSpec{Name: name + "-boxv", Image: tag, Entry: []string{"/faber/bin/faber-box", "version"}})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("baked faber-box does not run: exit %d err %v output %q", res.ExitCode, err, res.Output)
+	}
 	// ...and not writable by a non-root run user (bindings carry --user, the
 	// verbatim-splice seam the security module will use).
-	res, err = runner.Run(ctx, RunSpec{Name: name + "-write", Image: tag,
+	res, err = runner.Run(ctx, ContainerSpec{Name: name + "-write", Image: tag,
 		Bindings: []string{"--user", "65534:65534"},
 		Entry:    []string{"touch", "/bin/ls"}})
 	if err != nil {
@@ -140,7 +172,7 @@ func TestRealinfra_BuildLoadRunRoundTrip(t *testing.T) {
 
 	// Rebuild performs no nix invocation: the daemon is the cache.
 	before := nix.buildCalls()
-	tag2, err := b.Build(ctx, "realinfra-min", minimalToolset())
+	tag2, err := b.Build(ctx, "realinfra-min", minimalToolset(), ImageInputs{})
 	if err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
@@ -154,7 +186,7 @@ func TestRealinfra_BuildLoadRunRoundTrip(t *testing.T) {
 
 // Verifies 0c82c6478856 (scenario 9): kill on cancel — Run returns
 // context.Canceled within the grace window, the deterministic name is gone
-// from docker ps -a (--rm completed after kill), and the RunResult still
+// from docker ps -a (--rm completed after kill), and the ContainerResult still
 // carries partial output and timing.
 func TestRealinfra_KillOnCancel(t *testing.T) {
 	requireTools(t)
@@ -163,8 +195,8 @@ func TestRealinfra_KillOnCancel(t *testing.T) {
 	defer setupCancel()
 
 	docker := NewDockerCLI(logger)
-	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), logger)
-	tag, err := b.Build(setupCtx, "realinfra-min", minimalToolset())
+	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
+	tag, err := b.Build(setupCtx, "realinfra-min", minimalToolset(), ImageInputs{})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -178,7 +210,7 @@ func TestRealinfra_KillOnCancel(t *testing.T) {
 	}()
 	start := time.Now()
 	// yes provides continuous output so the partial-output capture is provable.
-	res, err := runner.Run(ctx, RunSpec{Name: name, Image: tag, Entry: []string{"yes", "partial-line"}})
+	res, err := runner.Run(ctx, ContainerSpec{Name: name, Image: tag, Entry: []string{"yes", "partial-line"}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error %v, want context.Canceled", err)
 	}
@@ -219,13 +251,13 @@ func TestRealinfra_NonZeroExitIsData(t *testing.T) {
 	defer cancel()
 
 	docker := NewDockerCLI(logger)
-	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), logger)
-	tag, err := b.Build(ctx, "realinfra-min", minimalToolset())
+	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
+	tag, err := b.Build(ctx, "realinfra-min", minimalToolset(), ImageInputs{})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	runner := NewContainerRunner(docker, logger)
-	res, err := runner.Run(ctx, RunSpec{
+	res, err := runner.Run(ctx, ContainerSpec{
 		Name:  fmt.Sprintf("faber-realinfra-false-%d", time.Now().UnixNano()),
 		Image: tag,
 		Entry: []string{"false"},
@@ -250,14 +282,14 @@ func TestRealinfra_StdinSecretsDelivery(t *testing.T) {
 	defer cancel()
 
 	docker := NewDockerCLI(logger)
-	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), logger)
-	tag, err := b.Build(ctx, "realinfra-min", minimalToolset())
+	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
+	tag, err := b.Build(ctx, "realinfra-min", minimalToolset(), ImageInputs{})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	runner := NewContainerRunner(docker, logger)
 	payload := []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
-	res, err := runner.Run(ctx, RunSpec{
+	res, err := runner.Run(ctx, ContainerSpec{
 		Name:         fmt.Sprintf("faber-realinfra-stdin-%d", time.Now().UnixNano()),
 		Image:        tag,
 		StdinSecrets: payload,
@@ -283,7 +315,7 @@ func TestRealinfra_PackageResolutionProof(t *testing.T) {
 	defer cancel()
 
 	nix := &countingNix{inner: NewNixCLI(logger)}
-	b := NewImageBuilder(NewDockerCLI(logger), nix, DefaultNixpkgsPin(), "", logger)
+	b := NewImageBuilder(NewDockerCLI(logger), nix, DefaultNixpkgsPin(), "", realBox(t), logger)
 
 	if err := b.ProvePackages(ctx, "ok", config.BuildDef{Packages: []string{"coreutils", "git"}}); err != nil {
 		t.Fatalf("stock packages failed the proof: %v", err)
@@ -320,5 +352,61 @@ func TestRealinfra_DockerStructuredQueries(t *testing.T) {
 	netExists, err = docker.NetworkExists(ctx, "bridge")
 	if err != nil || !netExists {
 		t.Fatalf("bridge network: exists=%v err=%v", netExists, err)
+	}
+}
+
+// Verifies 0acac696dcf1 on a real machine: an image built with a prelude
+// hook and a one-skill named leg carries them as root-owned image content at
+// the contract paths, next to the baked faber-box, and /faber stays a plain
+// directory the daemon can mount into.
+func TestRealinfra_BakedInputs(t *testing.T) {
+	requireTools(t)
+	logger := realLogger(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	hooks := t.TempDir()
+	prelude := filepath.Join(hooks, "prelude")
+	if err := os.WriteFile(prelude, []byte("#!/bin/bash\necho prelude-ran\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skill := t.TempDir()
+	if err := os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("skill a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := NewImageBuilder(NewDockerCLI(logger), NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
+	// coreutils has no shell; bash gives the hook its interpreter and the probe its -c.
+	tag, err := b.Build(ctx, "realinfra-inputs", config.BuildDef{Packages: []string{"coreutils", "bash"}}, ImageInputs{
+		Hooks:  config.HookSet{Prelude: prelude},
+		Skills: &config.ResolvedSkills{Sources: []config.SkillSource{{Name: "a", Dir: skill}}, Primary: "a", Link: ".x/skills"},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	runner := NewContainerRunner(NewDockerCLI(logger), logger)
+	name := fmt.Sprintf("faber-realinfra-inputs-%d", time.Now().UnixNano())
+	run := func(suffix string, spec ContainerSpec) string {
+		t.Helper()
+		spec.Name, spec.Image = name+suffix, tag
+		res, err := runner.Run(ctx, spec)
+		if err != nil || res.ExitCode != 0 {
+			t.Fatalf("%s: exit %d err %v output %q", suffix, res.ExitCode, err, res.Output)
+		}
+		return strings.TrimSpace(string(res.Output))
+	}
+	if out := run("-hook", ContainerSpec{Entry: []string{"stat", "-L", "-c", "%u %A", "/faber/hooks/prelude"}}); !regexp.MustCompile(`^0 -r.xr.xr.x`).MatchString(out) {
+		t.Fatalf("baked prelude: %q", out)
+	}
+	if out := run("-hookrun", ContainerSpec{Entry: []string{"/faber/hooks/prelude"}}); out != "prelude-ran" {
+		t.Fatalf("baked prelude does not run: %q", out)
+	}
+	if out := run("-skill", ContainerSpec{Entry: []string{"cat", "/faber/skills/a/SKILL.md"}}); out != "skill a" {
+		t.Fatalf("baked skill: %q", out)
+	}
+	// /faber is a real directory: the daemon mounts the engine tmpfs into it.
+	if out := run("-mount", ContainerSpec{
+		Mounts: []Mount{{Kind: KindTmpfs, Container: "/faber/bundle"}, {Kind: KindTmpfs, Container: "/faber/result"}},
+		Entry:  []string{"bash", "-c", "test -d /faber/bundle && test -d /faber/result && test -x /faber/bin/faber-box && echo ok"},
+	}); out != "ok" {
+		t.Fatalf("/faber mount points: %q", out)
 	}
 }

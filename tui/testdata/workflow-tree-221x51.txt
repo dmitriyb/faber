@@ -3,20 +3,18 @@ workflow   task   preview: the flow before any run                              
 STEPS                                                                                                                                | > PARAMS   2 params
 ------------------------------------------------------------------------------------------------------------------------------------ | > STRUCTURE   1 loop
   step                        status       duration                                                                                  | v NEEDS   4 images   3 roles   4 templates   1 service   9 MISSING
-  implement                                                                                                                          |     image       fix   not checked
-  review-cycle                                       up to 3 iterations                                                              |     image       implement   not checked
-    review                                                                                                                           |     image       merge   not checked
-    fix                                                                                                                              |     image       review   not checked
-  merge                                                                                                                              |     identity    implementer   ./keys/implementer   MISSING   key file not found
-                                                                                                                                     |     identity    merger   ./keys/merger   MISSING   key file not found
-                                                                                                                                     |     identity    reviewer   ./keys/reviewer   MISSING   key file not found
-                                                                                                                                     |     template    fix   context   ./hooks/fetch-change   MISSING
-                                                                                                                                     |     template    implement   context   ./hooks/gather-context   MISSING
-                                                                                                                                     |     template    implement   prelude   ./hooks/claim-item   MISSING
-                                                                                                                                     |     template    implement   on_failure   ./hooks/release-item   MISSING
-                                                                                                                                     |     template    review   context   ./hooks/fetch-change   MISSING
-                                                                                                                                     |     resolver    get-token   ./hooks/get-token   MISSING
-                                                                                                                                     |     service     agent-api   file   not checked
+  implement                                                                                                                          |   PREFLIGHT    status       detail
+  review-cycle                                       up to 3 iterations                                                              |   images       not checked  4 of 4
+    review                                                                                                                           |   keys         MISSING      3 of 3 roles
+    fix                                                                                                                              |                   implementer         key file not found
+  merge                                                                                                                              |                   merger              key file not found
+                                                                                                                                     |                   +1 more
+                                                                                                                                     |   hooks        MISSING      5 slots in 3 templates
+                                                                                                                                     |                   fix/context         ./hooks/fetch-change missing
+                                                                                                                                     |                   implement/context   ./hooks/gather-context missing
+                                                                                                                                     |                   +3 more
+                                                                                                                                     |   credentials  MISSING      resolver missing, 1 service
+                                                                                                                                     |                   resolver            ./hooks/get-token missing
                                                                                                                                      |
                                                                                                                                      | v STEP   implement   template implement   identity implementer
                                                                                                                                      |     template    implement
@@ -29,6 +27,8 @@ STEPS                                                                           
                                                                                                                                      |   > inputs/outputs   2 inputs   2 outputs
                                                                                                                                      |     agent       skill implement   model agent-model   effort high
                                                                                                                                      |   > history   2 attempts   p50 3m00s   all runs of task
+                                                                                                                                     |
+                                                                                                                                     |
                                                                                                                                      |
                                                                                                                                      |
                                                                                                                                      |

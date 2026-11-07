@@ -328,14 +328,14 @@ func (ri ResolvedInvoke) Violations() []FieldError {
 
 // ResolvedSkills is the resolved source side of a template's skills leg. Exactly
 // one of Sources / Root is populated: the named form yields Sources (an ordered,
-// name-deduped set of single-skill trees the pipeline run-prep stager farms
-// under <name>/); the inline {dir, link} form yields Root (a skills-root of
-// <name>/SKILL.md subtrees the stager mounts directly). The delivered contract
+// name-deduped set of single-skill trees the image builder farms under
+// <name>/); the inline {dir, link} form yields Root (a skills-root of
+// <name>/SKILL.md subtrees the builder bakes directly). The delivered contract
 // downstream is unchanged (one /faber/skills tree + one FABER_SKILLS_LINK); only
-// the source representation widens so run-prep can stage N dirs into that tree.
+// the source representation widens so the builder can bake N dirs into that tree.
 type ResolvedSkills struct {
 	Sources []SkillSource `json:"sources,omitempty"` // NAMED form: ordered, name-deduped {Name, Dir}
-	Root    string        `json:"root,omitempty"`    // INLINE form: a skills-ROOT, mounted DIRECTLY
+	Root    string        `json:"root,omitempty"`    // INLINE form: a skills-ROOT, baked DIRECTLY
 	Primary string        `json:"primary"`           // == template.skill
 	Link    string        `json:"link"`              // in-box $HOME-relative discovery path
 }

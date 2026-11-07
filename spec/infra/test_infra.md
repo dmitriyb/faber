@@ -16,9 +16,8 @@ acceptance environment only.
 
 ## Scenarios
 
-1. **Golden argv.** A fully populated RunSpec (limits, every engine mount kind —
-   a result bind rw, `:ro` hook + entry binds, a `:ro` `/faber/skills` bind, a
-   `/workspace` volume, a `/tmp` tmpfs — three env keys, a `StdinSecrets`
+1. **Golden argv.** A fully populated ContainerSpec (limits, every engine mount kind —
+   a result bind rw, a `/workspace` volume, a `/tmp` tmpfs — three env keys, a `StdinSecrets`
    payload, a representative binding fragment containing
    `--network`, an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a
    `--tmpfs /run/secrets`, and `--runtime`) assembles to the golden argv
@@ -27,22 +26,31 @@ acceptance environment only.
    `-v Container`, a tmpfs as `--tmpfs Container`, sorted env, the fragment
    contiguous and verbatim at its slot, image then entry argv last. The same
    spec with `StdinSecrets` empty assembles identically except no `-i` appears.
-2. **Argv discipline (property).** Over randomized RunSpecs (fuzzed env,
+2. **Argv discipline (property).** Over randomized ContainerSpecs (fuzzed env,
    mounts, fragments, `StdinSecrets`), the assembled argv never contains a
    docker-socket mount, `--privileged`, `--user`, `--network=host`, or any
    `-v`/`--tmpfs` not present in the spec's mounts or fragment; `--rm` and
    `--name` are always present; declared memory/cpus always surface as flags,
    absent resources emit none; `-i` appears exactly when `StdinSecrets` is
    non-empty and never otherwise, and the token bytes never appear anywhere in
-   the argv. A RunSpec with no skills mount emits no `/faber/skills` `-v`; one
-   with it emits the bind exactly once, always `:ro`.
+   the argv. No ContainerSpec emits a `/faber/skills`, `/faber/hooks` or `/faber/bin` `-v`:
+   those paths are image content.
 3. **Tag determinism and pin resolution.** Same packages shuffled → identical
    tag; one package added, one overlay byte changed, or the default pin bumped →
    different tag. Two builds identical except for a per-build `pin` produce
    **different** tags (the resolved pin folds into the hash); a build with **no**
    `pin` resolves to the compiled-in `defaultPin` and produces the **same** tag as
    today (goldens byte-stable), and its rendered expression fetches the default
-   snapshot. The tag is computed with zero adapter calls (pure, no nix).
+   snapshot. The tag is computed with zero adapter calls (pure, no nix). One
+   changed byte in a declared hook, one changed skill file, or a different
+   faber-box binary → different tag; the same hook and skill bytes read from
+   different paths → identical tag (bytes, not paths); a template with no skills
+   leg and no hooks still folds the faber-box bytes. `faber build` refuses,
+   before staging, a faber-box that is not a linux ELF of the image's
+   architecture, a hook failing the hook-file check, and a skills source that
+   is not a directory, naming the template and the path; the rendered
+   expression carries the `faber-inputs` derivation with one `install` line per
+   declared slot and the skills copy only when a leg is declared.
 3b. **Run-time tag equals build-time tag across the `imageTagger` seam.** For a
    **pinned** toolset, the tag `ImageBuilder.ImageTag` computes from the resolved
    `BuildDef` (the `faber build` path) equals the tag recomputed from the derived
@@ -78,7 +86,7 @@ acceptance environment only.
 9. **Kill on cancel** (integration). A container running `sleep 300` has its
    context cancelled: `Run` returns `context.Canceled` within the grace
    window, `docker ps -a` no longer lists the deterministic name (`--rm`
-   completed after kill), and the RunResult still carries partial output and
+   completed after kill), and the ContainerResult still carries partial output and
    timing.
 10. **Non-zero exit is data.** Entry `["false"]` (fake and integration):
     `Run` returns `err == nil`, `ExitCode == 1`, output attached — the
@@ -91,7 +99,7 @@ acceptance environment only.
     entry `["cat", "/dev/stdin"]` echoes the exact payload bytes back through
     captured output, proving the byte stream reached the container intact.)
 
-12. **Output writer tee.** With `RunSpec.Output` set, the writer receives the
+12. **Output writer tee.** With `ContainerSpec.Output` set, the writer receives the
     streamed output in full and byte-identical to the bounded tail for a
     small output.
 
@@ -101,7 +109,7 @@ acceptance environment only.
   `faber build` smoke-testing an image).
 - Empty entry argv: image default entrypoint runs; assembly appends nothing
   after the tag.
-- Output beyond the 256 KiB cap: RunResult holds the tail, head discarded,
+- Output beyond the 256 KiB cap: ContainerResult holds the tail, head discarded,
   no allocation blow-up on a log-spamming box.
 - Package name failing the `[A-Za-z0-9._-]+` charset check: rejected before
   any expression is rendered, error names the template and the offending name.

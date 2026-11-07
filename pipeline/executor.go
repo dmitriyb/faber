@@ -439,7 +439,7 @@ func (e *Executor) checkImageDrift(ir *config.IR, journaled map[string]string) e
 	}
 	if len(drifted) > 0 {
 		return fmt.Errorf(
-			"image inputs changed for template(s) %s — an engine or pin upgrade moved the image derivation, so journal keys cannot be trusted; finish the run on the faber that wrote it, or start over with --fresh",
+			"image inputs changed for template(s) %s — a faber upgrade, a pin change, or an edited hook or skill moved the image derivation, so journal keys cannot be trusted; finish the run on the faber that wrote it, or start over with --fresh",
 			strings.Join(drifted, "; "))
 	}
 	return nil

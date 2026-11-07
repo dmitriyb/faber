@@ -5,7 +5,7 @@
     {
       "type": "functional",
       "title": "Cross-architecture binary release, two independent target matrices",
-      "description": "`faber` (the host CLI) releases for linux and darwin, each amd64 and arm64 (four targets) — it drives docker/nix from an operator's own machine, which may be either OS. `faber-box` (the in-container phase sequencer, bind-mounted read-only into every box and set as its entrypoint) releases linux-only, amd64 and arm64 (two targets) — it never runs on the host process directly, only inside a Linux container, so a darwin build would be dead weight; a darwin operator host still needs the linux/<arch> faber-box archive (Docker Desktop shares the host path into its own Linux VM, whose arch mirrors the host's by default). `.goreleaser.yaml`'s two `builds` entries (`faber`, `faber-box`), each with its own `goos`/`goarch` list, are the sole definition of both target sets."
+      "description": "`faber` (the host CLI) releases for linux and darwin, each amd64 and arm64 (four targets) — it drives docker/nix from an operator's own machine, which may be either OS. `faber-box` (the in-container phase sequencer, baked into every template image by `faber build` and set as the box's entrypoint) releases linux-only, amd64 and arm64 (two targets) — it never runs on the host process directly, only inside a Linux container, so a darwin build would be dead weight; a darwin operator host still needs the linux/<arch> faber-box archive (the image its Docker Desktop VM runs is built for the VM's arch, which mirrors the host's by default). `.goreleaser.yaml`'s two `builds` entries (`faber`, `faber-box`), each with its own `goos`/`goarch` list, are the sole definition of both target sets."
     },
     {
       "type": "functional",
@@ -41,6 +41,11 @@
       "type": "non-functional",
       "title": "Locally provable before automation runs",
       "description": "The identical `.goreleaser.yaml` and `scripts/generate-manifest.sh` that the release workflow drives also run unmodified via `goreleaser release --snapshot --clean` on a developer machine (snapshot mode skips publish/tag requirements) — the full build → archive → sign → checksum → manifest chain is provable without pushing a tag, holding CI secrets, or touching GitHub Actions. `install.sh`'s network path (resolve → download → verify → install, including the fail-closed path on a tampered artifact) is provable the same way against a throwaway local HTTP server serving the snapshot archives with the GitHub URLs swapped for `127.0.0.1` and a throwaway signing key substituted for `SIGNING_PUBKEY` — `sh -n install.sh` alone proves only syntax, nothing about the verify logic."
+    },
+    {
+      "type": "functional",
+      "title": "Spec-first pull requests with independent review",
+      "description": "Every change to this repository lands through a pull request that follows one sequence: a proposal under spec/proposals, the spec leaves and module nodes edited before any code, then code and tests, then an independent review of the whole diff — tests included — by a fresh context with no stake in the change, ranked findings fixed before anything is committed; where a real daemon is needed the realinfra suite and probes run on the operator's machines and their output is seen before the implementation commit; one signed commit per pause, pushed on the operator's word, and the PR opened by the operator with a short title and one paragraph. The sequence is recorded in arch_pr_workflow.md; the tooling that drives it lives outside the repository."
     }
   ],
   "components": [
@@ -72,6 +77,12 @@
       "name": "InstallScript",
       "description": "`install.sh`: version-agnostic (`VERSION` env override), detects host OS/arch, resolves and downloads the matching `faber` archive and the linux/<arch> `faber-box` archive (always linux, regardless of host OS — never silently skipped) plus both `.sig` files, verifies each against the embedded `SIGNING_PUBKEY` constant (byte-identical to the README's verify-block key — the two copies must be kept in sync by hand), and installs both binaries side by side so faber's default box-binary resolution (next to its own executable) finds `faber-box` without configuration. Fails closed: any download or verification failure exits non-zero with nothing installed. It also carries an upgrade mode (the `--upgrade` flag) reusing the identical verify path to self-replace both installed binaries in place (move-aside + rename, ETXTBSY-safe; both verified before either is touched; both rolled back on failure; forward-only latest guard — a resolved latest older than the installed `--current` is hard-refused as a rollback anomaly, non-overridable, while an explicit `VERSION` installs any release in any direction; `--rollback`, `--dry-run`, RequireRoot) — this is what the config module's `faber upgrade` runs, embedded byte-for-byte into the signed binary (`config/install.sh`, kept identical by `go generate` and a build-failing identity test).",
       "content": "arch_release.md",
+      "implements": []
+    },
+    {
+      "name": "PRWorkflow",
+      "description": "The one way a change reaches main: spec first, code and tests, an independent fresh-context review of the whole diff before any commit, real-machine verification where a daemon is needed, one commit per pause, the PR opened by the operator.",
+      "content": "arch_pr_workflow.md",
       "implements": []
     }
   ]

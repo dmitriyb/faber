@@ -152,7 +152,7 @@ credentials, runtime — and the runtime "binding" is a trivial inline
 Binding emitting `--runtime=` or nothing. ContainerRunner receives
 `Assembled.Args` and splices the fragment unchanged between its own
 resource/mount flags and the image name; it never parses or reorders it.
-`Assembled.SecretsStdin` rides alongside into `RunSpec.StdinSecrets`, where
+`Assembled.SecretsStdin` rides alongside into `ContainerSpec.StdinSecrets`, where
 infra streams it on the container's stdin.
 
 ## Check composition (security/check.go)

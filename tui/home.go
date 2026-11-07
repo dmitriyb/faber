@@ -21,11 +21,11 @@ func renderHome(f *frame, st style, m *model) {
 		leftW = 66
 	}
 	rightW := w - leftW - 3
-	left := projectPane(st, m, leftW)
 	bodyH := h - 2 - 1 - 5 - 1 // header+rule, rule, selected block, footer
 	if bodyH < 4 {
 		bodyH = 4
 	}
+	left := projectPane(st, m, leftW, bodyH)
 	right := runsPane(st, m, rightW, bodyH)
 	for i, row := range panes(st, [][]string{left, right}, []int{leftW, rightW}, bodyH) {
 		f.put(2+i, row)
@@ -47,8 +47,13 @@ func renderHome(f *frame, st style, m *model) {
 	putFooter(f, st, m, m.homeKeys(), "= faber runs")
 }
 
-func projectPane(st style, m *model, w int) []string {
+func projectPane(st style, m *model, w, h int) []string {
 	p := m.project
+	if p.Err == nil && m.pfDrill != "" {
+		if c, ok := classByName(preflightClasses(p), m.pfDrill); ok {
+			return drillPane(st, m, c, w, h)
+		}
+	}
 	out := []string{st.chrome("PROJECT"), st.rule(w), ""}
 	if p.Err != nil {
 		out = append(out, "  config  "+st.status("FAIL"))
@@ -77,108 +82,18 @@ func projectPane(st style, m *model, w int) []string {
 		}
 		out = append(out, line)
 	}
-	out = append(out, "", "  "+st.dim("preflight"))
-	out = append(out, preflightLines(st, p, w)...)
+	// the checklist: two problem rows per class, one on a short pane
+	budget := 2
+	if h < 30 {
+		budget = 1
+	}
+	sel := -1
+	if m.focus == "workflows" && m.wfSel >= len(p.Workflows) {
+		sel = m.wfSel - len(p.Workflows)
+	}
+	out = append(out, "")
+	out = append(out, checklistLines(st, preflightClasses(p), w, budget, sel)...)
 	return out
-}
-
-// preflightLines is the config's health as counts, with a row for every
-// problem and its fix. Fifty healthy roles are one line; a missing one is
-// a row the eye lands on.
-func preflightLines(st style, p *Project, w int) []string {
-	pw := []int{14, 5, w - 19}
-	rw := []int{38, w - 38}
-	var out []string
-	out = append(out, cols([]string{"  " + st.dim("config"), "", st.status("ok") + "   valid"}, pw))
-	var rows []string
-	missing, checked := 0, 0
-	for _, t := range p.Templates {
-		switch {
-		case t.Err != "":
-			missing++
-			rows = append(rows, cols([]string{"                     " + st.ident(t.Name), st.status("FAIL") + "  " + trunc(t.Err, w-32)}, rw))
-		case t.Checked && !t.Built:
-			missing++
-			rows = append(rows, cols([]string{"                     " + st.ident(t.Name), "faber build   " + st.dim(tagHash(t.Tag))}, rw))
-		}
-		if t.Checked {
-			checked++
-		}
-	}
-	state := st.status("ok")
-	if missing > 0 {
-		state = st.wrap(sgrRed, fmt.Sprintf("%d MISSING", missing))
-	}
-	if checked == 0 && len(p.Templates) > 0 {
-		state = st.dim("not checked")
-	}
-	out = append(out, cols([]string{"  " + st.dim("images"), fmt.Sprintf("%d", len(p.Templates)), state}, pw))
-	out = append(out, rows...)
-	out = append(out, checkSummary(st, "identities", p.Preflight.Roles, w)...)
-	out = append(out, slotSummary(st, p.Preflight, w)...)
-	cred := st.dim("none")
-	if r := p.Preflight.Resolver; r.Name != "" {
-		cred = "resolver " + st.status(r.State)
-		if r.State == "MISSING" {
-			cred += "  " + r.Detail
-		}
-	}
-	cred += fmt.Sprintf("   %s   ", plural(len(p.Preflight.Services), "service")) + st.dim("not checked")
-	out = append(out, cols([]string{"  " + st.dim("credentials"), "", cred}, pw))
-	return out
-}
-
-// slotSummary is the templates class: how many were checked, and a row per
-// hook slot whose script is not there — the template, the slot, the path.
-func slotSummary(st style, pf Preflight, w int) []string {
-	pw := []int{14, 5, w - 19}
-	broken := map[string]bool{}
-	for _, c := range pf.Slots {
-		broken[c.Name] = true
-	}
-	state := st.status("ok")
-	if len(broken) > 0 {
-		state = st.wrap(sgrRed, fmt.Sprintf("%d MISSING", len(broken)))
-	}
-	out := []string{cols([]string{"  " + st.dim("templates"), fmt.Sprintf("%d", pf.Templates), state}, pw)}
-	for _, c := range pf.Slots {
-		out = append(out, cols([]string{"                     " + st.ident(c.Name), st.dim(c.Detail), c.Fix}, []int{33, 11, w - 44}))
-	}
-	return out
-}
-
-// checkSummary is one preflight class: the count, a row per MISSING with
-// its fix, the unused ones dim, the "not checked" count when no probe is
-// wired.
-func checkSummary(st style, label string, checks []Check, w int) []string {
-	pw := []int{14, 5, w - 19}
-	rw := []int{38, w - 38}
-	var rows []string
-	missing, unchecked := 0, 0
-	for _, c := range checks {
-		switch c.State {
-		case "MISSING":
-			missing++
-			fix := c.Fix
-			if fix == "" {
-				fix = c.Detail
-			}
-			rows = append(rows, cols([]string{"                     " + st.ident(c.Name), fix}, rw))
-		case "unused":
-			rows = append(rows, cols([]string{"                     " + st.ident(c.Name), st.dim("unused")}, rw))
-		case "not checked":
-			unchecked++
-		}
-	}
-	state := st.status("ok")
-	if missing > 0 {
-		state = st.wrap(sgrRed, fmt.Sprintf("%d MISSING", missing))
-	}
-	if unchecked > 0 {
-		state += "   " + st.dim(fmt.Sprintf("%d not checked", unchecked))
-	}
-	out := []string{cols([]string{"  " + st.dim(label), fmt.Sprintf("%d", len(checks)), state}, pw)}
-	return append(out, rows...)
 }
 
 func runsPane(st style, m *model, w, h int) []string {

@@ -368,36 +368,36 @@ directory levels**:
 - **inline `skills.dir`** is a **skills-root** — a directory whose children are the
   `<name>/SKILL.md` subtrees. It is already the exact shape `/faber/skills` expects.
 
-Both resolve to the single read-only `/faber/skills` mount, but they get there
-differently:
+Both resolve to the single read-only `/faber/skills` tree the image builder
+bakes, but they get there differently:
 
 - **Named form** (`skills: [implement, go-expert]`): each name resolves via the
   `Skills` library to a single-skill `Dir`. Desugar records the ordered,
   name-deduped source set `[(name → Dir), …]` on `ResolvedSkills.Sources`, plus the
-  primary `Skill` and `SkillsLink`. The **pipeline run-prep stager** (see
-  `spec/pipeline/impl_scheduling.md`, "Skills staging") then composes those N
-  single-skill dirs into one mountable tree by **copying** each source into
-  `<stage>/<name>` as real, world-readable files (not a symlink farm — a symlink
-  target would dangle across the read-only bind into the container) and passes
-  `<stage>` as the single `/faber/skills` bind.
+  primary `Skill` and `SkillsLink`. The **image builder** (see
+  `spec/infra/impl_nix_build.md`, "Engine inputs") then composes those N
+  single-skill dirs into one tree by **copying** each source into `<stage>/<name>`
+  as real files beside the rendered expression and bakes `<stage>` as
+  `/faber/skills`.
 - **Inline form** (`skills: {dir, link}`): Desugar records the dir **directly** on
   `ResolvedSkills.Root` (NOT a wrapped one-entry `Sources`), because `dir` already
-  is a `<name>/SKILL.md` root. The stager mounts that root at `/faber/skills` with
-  **no `<name>` wrapper** — byte-identical to today's single-dir mount. Wrapping it
+  is a `<name>/SKILL.md` root. The builder bakes that root as `/faber/skills` with
+  **no `<name>` wrapper**. Wrapping it
   as `<stage>/<name> → dir` would introduce a spurious extra level
   (`/faber/skills/summarize/summarize/SKILL.md`) and is explicitly *not* done.
 
 In both cases the box sees one `/faber/skills` tree of `<name>/SKILL.md` entries,
-bind-mounted read-only at the fixed neutral path (`contract.ContainerSkillsDir`),
+read-only image content at the fixed neutral path (`contract.ContainerSkillsDir`),
 and still symlinks `$HOME/<SkillsLink> → /faber/skills` from `FABER_SKILLS_LINK`.
-The mount path, the read-only property, and the agent's symlink phase are all
-**unchanged**; only the *host-side staging* is new, and only for the named form.
+The path, the read-only property, and the agent's symlink phase are all
+**unchanged**; the staging happens at build time in the image builder, and the
+tree's bytes fold into the image tag.
 
 The only IR shape delta versus today is on the *source side* of the skills leg (a
 single `{dir, link}` widens to `{sources | root, primary, link}`, exactly one of
-`sources`/`root` populated). The mounted contract, infra's argv builder, and the
-agent box are all byte-stable; the pipeline run-prep seam is the one thing that
-changes. See the reviewer note in `arch_desugarer.md` and the unified
+`sources`/`root` populated). The in-box contract and the agent box are
+byte-stable; the image builder, which bakes the tree, is the one consumer that
+reads the two shapes. See the reviewer note in `arch_desugarer.md` and the unified
 `SkillsRef{Names, Inline}` struct in `impl_schema_structs.md` — this section's
 two-variant view (named `Sources` vs inline `Root`) is the *resolved* projection of
 that single unmarshal-time `SkillsRef`.

@@ -3,10 +3,10 @@
 ## What it is
 
 The single engine-owned process a box runs: `faber-box`, a statically linked
-binary built from the same Go module as the host engine, bind-mounted read-only
-into every container and set as the container command by infra's runner. It is
-deliberately not image content — the image stays a pure function of the toolset —
-and it is deliberately not configurable: every agent step, whatever its
+binary built from the same Go module as the host engine, baked into every
+template image at `/faber/bin/faber-box` by the image builder (its bytes fold into
+the image tag, so a faber upgrade means `faber build`) and set as the container
+command by infra's runner. It is deliberately not configurable: every agent step, whatever its
 template, executes the same fixed internal sequence. There is no in-container
 DAG. Anything that needs ordering across a signing identity is a separate
 host-side step by design; everything below is what happens *within* one
@@ -163,16 +163,17 @@ completes or the box fail-stops — no phase ever runs after a failed one.
 ## The skills leg
 
 A template names a `skill` (the leading `/<skill>` of the agent prompt), but the
-skill *definition* — a claude `SKILL.md` tree, for instance — is neither baked
-into the image (the image is a pure function of the toolset) nor carried by the
-hooks (those deliver the per-run context bundle). The skills leg fills that gap
-with two engine-owned pieces and nothing agent-specific baked into faber:
+skill *definition* — a claude `SKILL.md` tree, for instance — is not carried by
+the hooks (those deliver the per-run context bundle). The skills leg fills that
+gap with two engine-owned pieces and nothing agent-specific baked into faber:
 
-- **A read-only mount.** When the template declares `skills: {dir, link}`, faber
-  bind-mounts the host `dir` read-only at the fixed neutral path
+- **A read-only tree in the image.** When the template declares a skills leg,
+  the image builder bakes the resolved tree at the fixed neutral path
   `/faber/skills` (`contract.ContainerSkillsDir`) — a sibling of `/faber/hooks`,
-  and like it a per-template, static, read-only capability, deliberately *not*
-  nested under the box-writable per-run `/faber/bundle` tmpfs.
+  and like it a per-template, static, read-only capability: root-owned image
+  content, deliberately *not* under the box-writable per-run `/faber/bundle`
+  tmpfs. Its files' bytes fold into the image tag, so a skill edit means
+  `faber build`.
 - **A single symlink.** The host passes the config `link` to the box as
   `FABER_SKILLS_LINK`; the skills-link phase creates `$HOME/<link> → /faber/skills`.
   This is the whole agent-specific translation, and it is driven entirely by

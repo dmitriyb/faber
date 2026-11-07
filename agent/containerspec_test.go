@@ -3,7 +3,6 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 
@@ -31,25 +30,22 @@ func testTemplate() *config.ResolvedTemplate {
 
 func validSpec() BoxSpec {
 	return BoxSpec{
-		RunID:       "run1",
-		NodeID:      "task/implement",
-		Attempt:     2,
-		Template:    testTemplate(),
-		Image:       "faber/tpl-a:abc",
-		Inputs:      map[string]string{"alpha": "v1"},
-		ResultDir:   "/host/results/task-implement",
-		EntryBinary: "/host/bin/faber-box",
-		ContextHook: "/host/hooks/ctx",
-		PreludeHook: "/host/hooks/pre",
-		AgentCLI:    "agent-cli",
+		RunID:     "run1",
+		NodeID:    "task/implement",
+		Attempt:   2,
+		Template:  testTemplate(),
+		Image:     "faber/tpl-a:abc",
+		Inputs:    map[string]string{"alpha": "v1"},
+		ResultDir: "/host/results/task-implement",
+		AgentCLI:  "agent-cli",
 	}
 }
 
 // Verifies 93ba0858d75f: the host half emits the full box env contract —
 // skill, identity, dirs, output schema, required inputs, attempt, and one
 // FABER_INPUT_* per bound slot — plus the engine mounts and the fixed entry.
-func TestBuildRunSpecContract(t *testing.T) {
-	rs, err := BuildRunSpec(validSpec())
+func TestBuildContainerSpecContract(t *testing.T) {
+	rs, err := BuildContainerSpec(validSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,9 +91,6 @@ func TestBuildRunSpecContract(t *testing.T) {
 	}
 	want := []string{
 		"/host/results/task-implement:" + contract.ContainerResultDir,
-		"/host/bin/faber-box:" + contract.ContainerEntry + ":ro",
-		"/host/hooks/ctx:" + contract.ContainerHooksDir + "/" + contract.HookContext + ":ro",
-		"/host/hooks/pre:" + contract.ContainerHooksDir + "/" + contract.HookPrelude + ":ro",
 		"vol:" + contract.ContainerWorkspace,
 		"tmpfs:" + contract.ContainerBundleDir,
 		"tmpfs:/tmp",
@@ -125,11 +118,11 @@ func TestBuildRunSpecContract(t *testing.T) {
 // Verifies ae434449cac9: the model/effort pass-throughs land in the box env
 // under their contract names when set — the engine half of the mandatory
 // per-template model/effort pair.
-func TestBuildRunSpecModelEffortPassThrough(t *testing.T) {
+func TestBuildContainerSpecModelEffortPassThrough(t *testing.T) {
 	spec := validSpec()
 	spec.Model = "agent-model"
 	spec.Effort = "high"
-	rs, err := BuildRunSpec(spec)
+	rs, err := BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,9 +138,9 @@ func TestBuildRunSpecModelEffortPassThrough(t *testing.T) {
 // as its exact JSON (a decode round-trips to the same value), and a template
 // without one emits no variable at all — the box's built-in default is the
 // only fallback, so pre-profile templates produce byte-identical run specs.
-func TestBuildRunSpecInvokeProfile(t *testing.T) {
+func TestBuildContainerSpecInvokeProfile(t *testing.T) {
 	spec := validSpec()
-	rs, err := BuildRunSpec(spec)
+	rs, err := BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +153,7 @@ func TestBuildRunSpecInvokeProfile(t *testing.T) {
 	ri.Subcommand = []string{"run"}
 	ri.EffortFlag = ""
 	spec.Template.Invoke = &ri
-	rs, err = BuildRunSpec(spec)
+	rs, err = BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +171,7 @@ func TestBuildRunSpecInvokeProfile(t *testing.T) {
 // variable together, read-write, inside HOME; absent SessionsDir emits
 // neither; a SessionsDir against a profile without session_dir, or with an
 // escaping session_dir, is a refusal.
-func TestBuildRunSpecSessionsBind(t *testing.T) {
+func TestBuildContainerSpecSessionsBind(t *testing.T) {
 	sessionDir := func(dir string) *config.ResolvedInvoke {
 		ri := config.DefaultInvoke()
 		ri.SessionDir = dir
@@ -188,7 +181,7 @@ func TestBuildRunSpecSessionsBind(t *testing.T) {
 	spec := validSpec()
 	spec.Template.Invoke = sessionDir(".h/sessions")
 	spec.SessionsDir = "/host/run/boxes/x/attempt-1/sessions"
-	rs, err := BuildRunSpec(spec)
+	rs, err := BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +205,7 @@ func TestBuildRunSpecSessionsBind(t *testing.T) {
 	// No SessionsDir: no mount, no variable — even with a session_dir profile.
 	spec = validSpec()
 	spec.Template.Invoke = sessionDir(".h/sessions")
-	rs, err = BuildRunSpec(spec)
+	rs, err = BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +221,7 @@ func TestBuildRunSpecSessionsBind(t *testing.T) {
 	// A SessionsDir with nowhere to land refuses.
 	spec = validSpec()
 	spec.SessionsDir = "/host/sessions"
-	if _, err := BuildRunSpec(spec); err == nil || !strings.Contains(err.Error(), "session_dir") {
+	if _, err := BuildContainerSpec(spec); err == nil || !strings.Contains(err.Error(), "session_dir") {
 		t.Fatalf("want a refusal naming the missing profile session_dir, got %v", err)
 	}
 
@@ -237,7 +230,7 @@ func TestBuildRunSpecSessionsBind(t *testing.T) {
 	spec = validSpec()
 	spec.Template.Invoke = sessionDir("../../etc")
 	spec.SessionsDir = "/host/sessions"
-	if _, err := BuildRunSpec(spec); err == nil || !strings.Contains(err.Error(), "proper subpath") {
+	if _, err := BuildContainerSpec(spec); err == nil || !strings.Contains(err.Error(), "proper subpath") {
 		t.Fatalf("want a refusal for the escaping session_dir, got %v", err)
 	}
 }
@@ -245,9 +238,9 @@ func TestBuildRunSpecSessionsBind(t *testing.T) {
 // Verifies 93ba0858d75f: the agent-skippable opt-in reaches the box env as
 // the exact contract value, and only when the template declares it — no
 // opt-in, no variable, so a stray value can never read as a silent opt-in.
-func TestBuildRunSpecAgentOptionalOptIn(t *testing.T) {
+func TestBuildContainerSpecAgentOptionalOptIn(t *testing.T) {
 	spec := validSpec()
-	rs, err := BuildRunSpec(spec)
+	rs, err := BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +250,7 @@ func TestBuildRunSpecAgentOptionalOptIn(t *testing.T) {
 
 	spec = validSpec()
 	spec.Template.AgentOptional = true
-	rs, err = BuildRunSpec(spec)
+	rs, err = BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,118 +259,41 @@ func TestBuildRunSpecAgentOptionalOptIn(t *testing.T) {
 	}
 }
 
-// Verifies 93ba0858d75f: a template with a skills leg adds the read-only
-// /faber/skills bind (a sibling of the hook binds, before the writable engine
-// mounts) and emits FABER_SKILLS_LINK; the mount is present exactly once and
-// always :ro.
-func TestBuildRunSpecSkillsLeg(t *testing.T) {
+// Verifies 93ba0858d75f: a declared skills leg emits FABER_SKILLS_LINK and
+// nothing else — the tree, like the entry binary and the hook scripts, is
+// image content, so the run spec carries no /faber/skills, /faber/hooks or
+// /faber/bin mount under any shape, and the entry stays the baked binary.
+func TestBuildContainerSpecSkillsLeg(t *testing.T) {
 	spec := validSpec()
-	spec.SkillsDir = "/host/skills"
 	spec.SkillsLink = ".claude/skills"
-	rs, err := BuildRunSpec(spec)
+	rs, err := BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rs.Env[contract.EnvSkillsLink] != ".claude/skills" {
 		t.Errorf("env[%s] = %q, want the link verbatim", contract.EnvSkillsLink, rs.Env[contract.EnvSkillsLink])
 	}
-	var skills []infra.Mount
 	for _, m := range rs.Mounts {
-		if m.Container == contract.ContainerSkillsDir {
-			skills = append(skills, m)
+		if m.Container == contract.ContainerSkillsDir || strings.HasPrefix(m.Container, contract.ContainerHooksDir) || m.Container == contract.ContainerEntry {
+			t.Errorf("image content mounted: %+v", m)
 		}
 	}
-	if len(skills) != 1 {
-		t.Fatalf("skills mounts = %v, want exactly one", skills)
-	}
-	m := skills[0]
-	if m.Kind != infra.KindBind || m.Host != "/host/skills" || !m.ReadOnly {
-		t.Fatalf("skills mount = %+v, want a read-only bind of /host/skills", m)
-	}
-	// It sits after the hook binds and before the writable workspace volume.
-	idxSkills := slices.IndexFunc(rs.Mounts, func(x infra.Mount) bool { return x.Container == contract.ContainerSkillsDir })
-	idxWorkspace := slices.IndexFunc(rs.Mounts, func(x infra.Mount) bool { return x.Container == contract.ContainerWorkspace })
-	idxPrelude := slices.IndexFunc(rs.Mounts, func(x infra.Mount) bool {
-		return x.Container == contract.ContainerHooksDir+"/"+contract.HookPrelude
-	})
-	if !(idxPrelude < idxSkills && idxSkills < idxWorkspace) {
-		t.Fatalf("skills mount order wrong: prelude=%d skills=%d workspace=%d", idxPrelude, idxSkills, idxWorkspace)
-	}
-}
-
-// Verifies 93ba0858d75f: the skills leg is an all-or-nothing pair — a
-// BoxSpec with exactly one of SkillsDir/SkillsLink set is a broken run (a mount
-// with no link, or a link to a missing mount) and BuildRunSpec rejects it.
-func TestBuildRunSpecSkillsLegOneSided(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		mut  func(*BoxSpec)
-	}{
-		{"dir without link", func(s *BoxSpec) { s.SkillsDir = "/host/skills" }},
-		{"link without dir", func(s *BoxSpec) { s.SkillsLink = ".claude/skills" }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			spec := validSpec()
-			tc.mut(&spec)
-			_, err := BuildRunSpec(spec)
-			if err == nil {
-				t.Fatal("want an error for a one-sided skills leg, got nil")
-			}
-			if !strings.Contains(err.Error(), "skills: dir and link must be set together") {
-				t.Fatalf("error = %v, want the pairing violation", err)
-			}
-		})
-	}
-}
-
-// Verifies spec/proposals/2026-08-04-postlude-phase.md: a declared postlude
-// hook mounts read-only at ContainerHooksDir/postlude, mirroring the prelude
-// mount exactly; absent (as in validSpec) it stays unmounted — hook-only
-// templates that predate the phase are unaffected.
-func TestBuildRunSpecPostludeHookMount(t *testing.T) {
-	spec := validSpec()
-	spec.PostludeHook = "/host/hooks/post"
-	rs, err := BuildRunSpec(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "/host/hooks/post:" + contract.ContainerHooksDir + "/" + contract.HookPostlude + ":ro"
-	found := false
-	for _, m := range rs.Mounts {
-		if m.Host == "/host/hooks/post" {
-			found = true
-			if m.Container != contract.ContainerHooksDir+"/"+contract.HookPostlude || !m.ReadOnly {
-				t.Fatalf("postlude mount = %+v, want %q", m, want)
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("postlude mount missing from %+v", rs.Mounts)
-	}
-
-	// Absent, no postlude mount is emitted (validSpec sets no PostludeHook).
-	rs2, err := BuildRunSpec(validSpec())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range rs2.Mounts {
-		if m.Container == contract.ContainerHooksDir+"/"+contract.HookPostlude {
-			t.Fatalf("mounts unexpectedly carry the postlude bind %+v", m)
-		}
+	if fmt.Sprint(rs.Entry) != fmt.Sprintf("[%s]", contract.ContainerEntry) {
+		t.Errorf("entry = %v, want the baked %s", rs.Entry, contract.ContainerEntry)
 	}
 }
 
 // Verifies ae434449cac9: the agent CLI is opaque user config with no vendor
 // default — absent everywhere it is a build error, and the template env is
 // an accepted source.
-func TestBuildRunSpecAgentCLIRequired(t *testing.T) {
+func TestBuildContainerSpecAgentCLIRequired(t *testing.T) {
 	spec := validSpec()
 	spec.AgentCLI = ""
-	if _, err := BuildRunSpec(spec); err == nil || !strings.Contains(err.Error(), "no vendor default") {
+	if _, err := BuildContainerSpec(spec); err == nil || !strings.Contains(err.Error(), "no vendor default") {
 		t.Fatalf("err = %v, want missing agent cli", err)
 	}
 	spec.Template.Env[contract.EnvAgentCLI] = "cli-from-template"
-	rs, err := BuildRunSpec(spec)
+	rs, err := BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,10 +304,10 @@ func TestBuildRunSpecAgentCLIRequired(t *testing.T) {
 
 // Verifies 93ba0858d75f: violations are collected — an undeclared input and
 // a missing required input surface together, before any container exists.
-func TestBuildRunSpecCollectsViolations(t *testing.T) {
+func TestBuildContainerSpecCollectsViolations(t *testing.T) {
 	spec := validSpec()
 	spec.Inputs = map[string]string{"gamma": "x"} // undeclared; alpha missing
-	_, err := BuildRunSpec(spec)
+	_, err := BuildContainerSpec(spec)
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -431,7 +347,7 @@ func TestContainerNameDeterministicAndInjective(t *testing.T) {
 // names — FABER_AGENT_CLI is the one documented exception — or user config
 // could redirect hooks, enable TOFU, or point the box at an arbitrary
 // remote. All offenders are collected.
-func TestBuildRunSpecRejectsReservedTemplateEnv(t *testing.T) {
+func TestBuildContainerSpecRejectsReservedTemplateEnv(t *testing.T) {
 	spec := validSpec()
 	spec.Template.Env = map[string]string{
 		"TOOL_HOME":           "/opt/tool", // legitimate user env
@@ -444,7 +360,7 @@ func TestBuildRunSpecRejectsReservedTemplateEnv(t *testing.T) {
 		contract.EnvResultDir: "/elsewhere",
 		contract.EnvAttempt:   "9",
 	}
-	_, err := BuildRunSpec(spec)
+	_, err := BuildContainerSpec(spec)
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -463,7 +379,7 @@ func TestBuildRunSpecRejectsReservedTemplateEnv(t *testing.T) {
 // Verifies 93ba0858d75f: template volumes may not shadow (or be shadowed
 // through) the engine and binding mounts — last-mount-wins would sever the
 // result channel or substitute hooks, secrets, or the forwarded socket.
-func TestBuildRunSpecRejectsShadowingVolumes(t *testing.T) {
+func TestBuildContainerSpecRejectsShadowingVolumes(t *testing.T) {
 	bad := []string{
 		"/faber/result",
 		"/faber",
@@ -480,14 +396,14 @@ func TestBuildRunSpecRejectsShadowingVolumes(t *testing.T) {
 		t.Run(container, func(t *testing.T) {
 			spec := validSpec()
 			spec.Template.Volumes = map[string]string{"/host/x": container}
-			if _, err := BuildRunSpec(spec); err == nil || !strings.Contains(err.Error(), "reserved container path") {
+			if _, err := BuildContainerSpec(spec); err == nil || !strings.Contains(err.Error(), "reserved container path") {
 				t.Fatalf("volume %q: err = %v, want reserved-path violation", container, err)
 			}
 		})
 	}
 	spec := validSpec()
 	spec.Template.Volumes = map[string]string{"/host/cache": "/cache"}
-	if _, err := BuildRunSpec(spec); err != nil {
+	if _, err := BuildContainerSpec(spec); err != nil {
 		t.Fatalf("a non-reserved volume must pass: %v", err)
 	}
 }
@@ -495,8 +411,8 @@ func TestBuildRunSpecRejectsShadowingVolumes(t *testing.T) {
 // Verifies 93ba0858d75f (§1 contract handshake): the host stamps its
 // contract version and the declared slot list into the box env, so the box
 // can refuse a mismatched binary and record slot-keyed handoffs.
-func TestBuildRunSpecStampsContractAndSlots(t *testing.T) {
-	rs, err := BuildRunSpec(validSpec())
+func TestBuildContainerSpecStampsContractAndSlots(t *testing.T) {
+	rs, err := BuildContainerSpec(validSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,9 +454,9 @@ func TestReservedPathListsAgree(t *testing.T) {
 // Verifies c563d2055eb9: a check run reaches the box as FABER_CHECK=1 and
 // a real run emits no such variable — pre-check run specs stay
 // byte-identical.
-func TestBuildRunSpecCheck(t *testing.T) {
+func TestBuildContainerSpecCheck(t *testing.T) {
 	spec := validSpec()
-	rs, err := BuildRunSpec(spec)
+	rs, err := BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +464,7 @@ func TestBuildRunSpecCheck(t *testing.T) {
 		t.Fatalf("a real run must not emit %s", contract.EnvCheck)
 	}
 	spec.Check = true
-	rs, err = BuildRunSpec(spec)
+	rs, err = BuildContainerSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}

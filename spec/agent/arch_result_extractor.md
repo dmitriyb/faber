@@ -88,8 +88,9 @@ field:
   sidecar's advisory-only contract above).
 - **The contract stamp is asserted.** A record whose `contract` version is
   not this host's (including the absent stamp of a foreign writer) fails
-  with reason `contract-version` — a box-binary (host-config `box_bin`) misconfiguration
-  detector, never interpreted on guessed semantics.
+  with reason `contract-version` — a stale-image detector (the baked faber-box
+  predates or postdates this host: run `faber build`), never interpreted on
+  guessed semantics.
 - **The payload is re-validated** against the declared output schema and the
   unthreaded set recomputed host-side; mis-shaped data becomes a failed
   record and never threads.

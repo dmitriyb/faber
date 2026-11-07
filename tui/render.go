@@ -83,13 +83,13 @@ func (st style) status(word string) string {
 	switch word {
 	case "ok":
 		return st.wrap(sgrGreen, word)
-	case "FAIL", "HALT", "FAILED":
+	case "FAIL", "HALT", "FAILED", "MISSING":
 		return st.wrap(sgrRed, word)
 	case "running", "LIVE", "start":
 		return st.wrap(sgrCyan, word)
 	case "ready", "WAIT", "PAUSE", "paused", "slow":
 		return st.wrap(sgrYellow, word)
-	case "not needed", "not reached", "absent", "waiting", "incomplete", "aborted":
+	case "not needed", "not reached", "absent", "waiting", "incomplete", "aborted", "not checked":
 		return st.wrap(sgrDim, word)
 	}
 	return word

@@ -99,22 +99,30 @@ docker. The screens are rendered into frames and compared colour-stripped.
     and backspace twice returns to the top with the cursor on row 21.
 
 18. **Preflight.** Against the reference config, whose hooks and keys are
-    not beside it, Home reads `identities 3   3 MISSING` with `key file
-    not found` rows, `templates 4   3 MISSING` with a row per slot
-    (`implement   prelude   ./hooks/claim-item`), and `resolver MISSING`. A copy with the files present, run from its own
-    directory, two roles by registry (a fake key probe knows one) and one
-    declared role no template uses, reads: the registry role with a key
-    `ok   registry …`, the path role `ok`, the unknown registry role
-    `MISSING   faber add-key --role merger`, the unused role `unused`,
-    `templates 4   ok` with no rows, the resolver `ok`.
+    not beside it, Home reads the checklist: `keys          MISSING
+    3 of 3 roles` with `implementer   key file not found` and `merger` as
+    its two rows and `+1 more`, `hooks         MISSING       5 slots in 3
+    templates` with `fix/context   ./hooks/fetch-change missing` first,
+    `credentials   MISSING       resolver missing, 1 service` with
+    `resolver   ./hooks/get-token missing` beneath it. A copy with
+    the files present, run from its own directory, two roles by registry
+    (a fake key probe knows one) and one declared role no template uses,
+    reads `keys          MISSING       1 of 4 roles, 1 unused` with
+    `merger        not in the registry   faber add-key --role merger`,
+    `hooks         ok            4 templates`, `credentials   ok
+    resolver ./hooks/get-token, 1 service`. Enter on the `keys` line
+    drills in: the crumb `PREFLIGHT > keys`, every role with its state and
+    fix, `j` moves, `esc` comes back with the cursor on `keys`.
 19. **Preview folds.** The task preview opens with `> PARAMS   2 params`,
-    `> STRUCTURE   1 loop`, NEEDS opened by its own MISSING count, STEP
-    open on `implement` with `v hooks   3 of 4 set   3 MISSING` listing
-    all four (`postlude   none`), `> inputs/outputs   2 inputs   2
-    outputs`, `> history   2 attempts   p50 3m00s`; PARAMS' rows are not
-    on screen. `tab` focuses the pane and the footer says `tab back to the
-    flow`; enter opens PARAMS; `j` twice and enter fold NEEDS despite its
-    problem; `tab` returns the cursor to the flow, where `j` moves again.
+    `> STRUCTURE   1 loop`, NEEDS opened by its own MISSING count showing
+    the checklist narrowed to the task (`images   not checked   4 of 4`,
+    `keys     MISSING   3 of 3 roles` with two rows), STEP open on
+    `implement` with `v hooks   3 of 4 set   3 MISSING` listing all four
+    (`postlude   none`), `> inputs/outputs   2 inputs   2 outputs`,
+    `> history   2 attempts   p50 3m00s`; PARAMS' rows are not on screen.
+    `tab` focuses the pane and the footer says `tab back to the flow`;
+    enter opens PARAMS; `j` twice and enter fold NEEDS despite its problem;
+    `tab` returns the cursor to the flow, where `j` moves again.
 
 20. **One key vocabulary.** Left on Home focuses the project pane and
     right the runs; page keys clamp. On the preview, right focuses the
@@ -132,9 +140,9 @@ docker. The screens are rendered into frames and compared colour-stripped.
     the filter, a second esc quits.
 
 22. **NEEDS lists the workflow's images.** With a probe that reports every
-    image absent, the task preview's NEEDS reads `4 images` with
-    `implement   MISSING   faber build   20be39bb9bb7` and `review`; the
-    epic preview lists its own templates' images.
+    image absent, the task preview's NEEDS reads `images   MISSING   4 of 4
+    faber build` with `implement   faber build   20be39bb9bb7` and
+    `review` beneath it; the epic preview lists its own templates' images.
 
 23. **STEP shows the hooks' events.** The failed review's attempt carries
     an events file with a verified push, a failed checks read and one line
@@ -145,10 +153,33 @@ docker. The screens are rendered into frames and compared colour-stripped.
     resume`. A `halt` event appended with a `next` sentence puts that
     sentence after `next:`. The live run's implement, which no hook wrote
     about, has no hooks block.
+24. **Preflight states.** With a probe that answers every tag with
+    `ErrImageInputs: hooks.prelude not found`, Home's images line reads
+    `not checked   4 of 4, a hook is missing or broken` and no FAIL appears; with a
+    probe whose tags fail for another reason (`no faber-box binary to
+    bake`) it reads `FAIL   4 of 4` with the reason on the rows, the
+    template prefix dropped.
+25. **STEP and OUTPUT scroll.** On the failed run with the failed review
+    selected, `tab` focuses STEP (its title in reverse), `j` three times
+    drops three rows from its top and the title reads `3 above`; `tab`
+    again focuses OUTPUT, `k` walks back from the tail and the title says
+    how many lines lie above; `esc` returns the focus to the list; moving
+    the list's cursor resets both offsets; at 24 rows the footer still
+    ends in `q back`.
+
 ## Edge cases
 
-- Hooks are four fixed slots per template; Home never lists hooks as a
-  class of their own, only a template's slot whose script is missing.
+- Hooks are four fixed slots per template; the `hooks` class lists only
+  a template's slot whose script is missing or broken, never the slots
+  that are fine.
+- A missing hook is one problem, not two: the hooks class names the slot
+  and path, and the images line reads `not checked` with `a hook is
+  missing` as its fact, never a second `FAIL` repeating the path; a tag
+  failure of another kind (no faber-box to bake) is `FAIL` with its reason
+  minus the template prefix.
+- The checklist never scrolls: five classes, at most two problem rows
+  each (one under 30 rows) and a `+k more`; everything beyond is the
+  drill-down, which windows around its cursor like the runs table.
 - Paths: a root config's hook, key and resolver paths are CWD-relative,
   so the preflight checks them against the working directory the view
   (and a run it spawns) has; an included file's are declarer-absolute and

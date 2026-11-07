@@ -19,7 +19,7 @@ import (
 func TestBoxRunCheckEnv(t *testing.T) {
 	run := func(check bool) map[string]string {
 		containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "done"}, Attempt: 1}}
-		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box", Check: check}
+		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, Check: check}
 		if _, err := boxes.RunAttempt(context.Background(), boxAttempt(t)); err != nil {
 			t.Fatalf("run attempt: %v", err)
 		}

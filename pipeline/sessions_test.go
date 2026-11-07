@@ -27,7 +27,7 @@ func sessionProfile() *config.ResolvedInvoke {
 // own, and earlier attempts' transcripts survive later attempts' scrubs.
 func TestBoxRun_SessionsCapture(t *testing.T) {
 	containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1}}
-	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+	boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 
 	box := boxAttempt(t)
 	box.Sessions = true
@@ -100,7 +100,7 @@ func TestBoxRun_SessionsOffGates(t *testing.T) {
 	run := func(t *testing.T, mutate func(*BoxAttempt)) {
 		t.Helper()
 		containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}, Attempt: 1}}
-		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}, EntryBinary: "/usr/local/bin/faber-box"}
+		boxes := &AgentBoxes{Containers: containers, Bindings: &fakeBindings{}}
 		box := boxAttempt(t)
 		mutate(&box)
 		if _, err := boxes.RunAttempt(context.Background(), box); err != nil {
@@ -186,7 +186,6 @@ func TestBoxRun_ReentrySessionResume(t *testing.T) {
 			Images:      fakeTags{},
 			Bindings:    &fakeBindings{},
 			Interactive: interactive,
-			EntryBinary: "/usr/local/bin/faber-box",
 		}
 		return store, interactive, re, savedDir
 	}

@@ -33,13 +33,14 @@ func ExtractResult(dir string, schema OutputSchema) (Result, error) {
 	if rec.Contract != contract.ContractVersion {
 		// The record's stamped vintage disagrees with this host (0 = a writer
 		// that predates stamping). faber-box ships from the host as the same
-		// build, so this detects a stale or foreign box binary (host-config box_bin) — the record
-		// must not be interpreted as if it spoke this contract.
+		// build and is baked into the image, so this detects a stale image (a
+		// faber upgrade without faber build) — the record must not be
+		// interpreted as if it spoke this contract.
 		return Result{
 			Status: StatusFailed,
 			Error: &ResultError{
 				Reason: contract.ReasonContractVersion,
-				Detail: fmt.Sprintf("result record carries contract v%d, host speaks v%d — check the host config's box_bin (a mismatched faber-box binary)", rec.Contract, contract.ContractVersion),
+				Detail: fmt.Sprintf("result record carries contract v%d, host speaks v%d — a stale image bakes a mismatched faber-box: run faber build", rec.Contract, contract.ContractVersion),
 			},
 			AgentSkipped: rec.AgentSkipped,
 			Check:        rec.Check,

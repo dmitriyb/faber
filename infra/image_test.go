@@ -34,17 +34,17 @@ func writeOverlay(t *testing.T, content string) string {
 // to every real input, computed with zero adapter calls.
 func TestTagDeterminism(t *testing.T) {
 	docker, nix := &fakeDocker{}, &fakeNix{}
-	b := NewImageBuilder(docker, nix, testPin(), "", testLogger())
+	b := NewImageBuilder(docker, nix, testPin(), "", testBox(t), testLogger())
 	overlay := writeOverlay(t, "final: prev: { }\n")
 
 	base := config.BuildDef{Packages: []string{"git", "openssh", "go"}, Overlay: overlay}
 	shuffled := config.BuildDef{Packages: []string{"go", "git", "openssh"}, Overlay: overlay}
 
-	tag1, err := b.ImageTag("review", base)
+	tag1, err := b.ImageTag("review", base, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tag2, err := b.ImageTag("review", shuffled)
+	tag2, err := b.ImageTag("review", shuffled, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,17 +55,17 @@ func TestTagDeterminism(t *testing.T) {
 		t.Fatalf("tag shape %q, want %s<%d hex>", tag1, want, tagHexLen)
 	}
 
-	added, _ := b.ImageTag("review", config.BuildDef{Packages: []string{"git", "openssh", "go", "gopls"}, Overlay: overlay})
+	added, _ := b.ImageTag("review", config.BuildDef{Packages: []string{"git", "openssh", "go", "gopls"}, Overlay: overlay}, ImageInputs{})
 	if added == tag1 {
 		t.Fatal("added package did not change the tag")
 	}
 	overlay2 := writeOverlay(t, "final: prev: { changed = true; }\n")
-	changedOverlay, _ := b.ImageTag("review", config.BuildDef{Packages: base.Packages, Overlay: overlay2})
+	changedOverlay, _ := b.ImageTag("review", config.BuildDef{Packages: base.Packages, Overlay: overlay2}, ImageInputs{})
 	if changedOverlay == tag1 {
 		t.Fatal("overlay byte change did not change the tag")
 	}
-	bumped := NewImageBuilder(docker, nix, NixpkgsPin{Rev: "24.11", SHA256: testPin().SHA256}, "", testLogger())
-	bumpedTag, _ := bumped.ImageTag("review", base)
+	bumped := NewImageBuilder(docker, nix, NixpkgsPin{Rev: "24.11", SHA256: testPin().SHA256}, "", testBox(t), testLogger())
+	bumpedTag, _ := bumped.ImageTag("review", base, ImageInputs{})
 	if bumpedTag == tag1 {
 		t.Fatal("pin bump did not change the tag")
 	}
@@ -83,14 +83,14 @@ func TestBuildSkipAndSingleFlight(t *testing.T) {
 
 	t.Run("skip when image exists", func(t *testing.T) {
 		nix := &fakeNix{}
-		b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
-		tag, err := b.ImageTag("merge", build)
+		b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
+		tag, err := b.ImageTag("merge", build, ImageInputs{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		docker := &fakeDocker{exists: map[string]bool{tag: true}}
-		b = NewImageBuilder(docker, nix, testPin(), "", testLogger())
-		got, err := b.Build(context.Background(), "merge", build)
+		b = NewImageBuilder(docker, nix, testPin(), "", testBox(t), testLogger())
+		got, err := b.Build(context.Background(), "merge", build, ImageInputs{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,13 +104,13 @@ func TestBuildSkipAndSingleFlight(t *testing.T) {
 
 	t.Run("single flight", func(t *testing.T) {
 		nix := &fakeNix{buildOut: []string{"/nix/store/aaa-image.tar.gz"}, buildDelay: 30 * time.Millisecond}
-		probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
-		tag, err := probe.ImageTag("merge", build)
+		probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
+		tag, err := probe.ImageTag("merge", build, ImageInputs{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		docker := &fakeDocker{loadTag: tag, markLoaded: true}
-		b := NewImageBuilder(docker, nix, testPin(), "", testLogger())
+		b := NewImageBuilder(docker, nix, testPin(), "", testBox(t), testLogger())
 
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
@@ -119,7 +119,7 @@ func TestBuildSkipAndSingleFlight(t *testing.T) {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				tags[i], errs[i] = b.Build(context.Background(), "merge", build)
+				tags[i], errs[i] = b.Build(context.Background(), "merge", build, ImageInputs{})
 			}(i)
 		}
 		wg.Wait()
@@ -151,7 +151,7 @@ func TestProofFailureShape(t *testing.T) {
 		nix := &fakeNix{evalResults: []json.RawMessage{
 			json.RawMessage(`{"git":true,"custom-cli-a":false,"custom-cli-b":false}`),
 		}}
-		b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
+		b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
 		err := b.ProvePackages(context.Background(), "review", build)
 		if err == nil {
 			t.Fatal("missing packages accepted")
@@ -178,7 +178,7 @@ func TestProofFailureShape(t *testing.T) {
 		nix := &fakeNix{evalErr: fmt.Errorf("infra: nix eval: %w", &ExecError{
 			Cmd: "nix", ExitCode: 1, Stderr: "syntax error at line 3",
 		})}
-		b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
+		b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
 		err := b.ProvePackages(context.Background(), "review", build)
 		if err == nil {
 			t.Fatal("eval crash accepted")
@@ -193,7 +193,7 @@ func TestProofFailureShape(t *testing.T) {
 
 	t.Run("empty package list proves trivially", func(t *testing.T) {
 		nix := &fakeNix{}
-		b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
+		b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
 		if err := b.ProvePackages(context.Background(), "empty", config.BuildDef{}); err != nil {
 			t.Fatalf("empty package list rejected: %v", err)
 		}
@@ -208,12 +208,12 @@ func TestProofFailureShape(t *testing.T) {
 // naming the template and the offending name.
 func TestPackageNameCharsetRejected(t *testing.T) {
 	nix := &fakeNix{}
-	b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
+	b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
 	offending := `x"; rm -rf /`
 	bad := config.BuildDef{Packages: []string{"git", offending}}
 
 	perr := b.ProvePackages(context.Background(), "review", bad)
-	_, berr := b.Build(context.Background(), "review", bad)
+	_, berr := b.Build(context.Background(), "review", bad, ImageInputs{})
 	for _, err := range []error{perr, berr} {
 		if err == nil {
 			t.Fatal("injection-shaped package name accepted")
@@ -237,18 +237,18 @@ func TestRenderedExpressions(t *testing.T) {
 		evalResults: []json.RawMessage{json.RawMessage(`{"git":true,"openssh":true}`)},
 		buildOut:    []string{"/nix/store/bbb-image.tar.gz"},
 	}
-	probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
-	tag, err := probe.ImageTag("review", build)
+	probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
+	tag, err := probe.ImageTag("review", build, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	docker := &fakeDocker{loadTag: tag}
-	b := NewImageBuilder(docker, nix, testPin(), "", testLogger())
+	b := NewImageBuilder(docker, nix, testPin(), "", testBox(t), testLogger())
 
 	if err := b.ProvePackages(context.Background(), "review", build); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Build(context.Background(), "review", build); err != nil {
+	if _, err := b.Build(context.Background(), "review", build, ImageInputs{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -286,7 +286,7 @@ func TestRenderedExpressions(t *testing.T) {
 
 	// No overlay declared -> no overlay import anywhere.
 	nix2 := &fakeNix{evalResults: []json.RawMessage{json.RawMessage(`{"git":true}`)}}
-	b2 := NewImageBuilder(&fakeDocker{}, nix2, testPin(), "", testLogger())
+	b2 := NewImageBuilder(&fakeDocker{}, nix2, testPin(), "", testBox(t), testLogger())
 	if err := b2.ProvePackages(context.Background(), "merge", config.BuildDef{Packages: []string{"git"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -311,20 +311,20 @@ func TestRenderedPackageAttrParity(t *testing.T) {
 		},
 		buildOut: []string{"/nix/store/ggg-image.tar.gz"},
 	}
-	probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
-	tag, err := probe.ImageTag("edgecase", build)
+	probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
+	tag, err := probe.ImageTag("edgecase", build, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	docker := &fakeDocker{loadTag: tag}
-	b := NewImageBuilder(docker, nix, testPin(), "", testLogger())
+	b := NewImageBuilder(docker, nix, testPin(), "", testBox(t), testLogger())
 
 	// The proof accepts the digit-leading and dotted names...
 	if err := b.ProvePackages(context.Background(), "edgecase", build); err != nil {
 		t.Fatalf("proof rejected names the charset admits: %v", err)
 	}
 	// ...so the image expression must access them with identical semantics.
-	if _, err := b.Build(context.Background(), "edgecase", build); err != nil {
+	if _, err := b.Build(context.Background(), "edgecase", build, ImageInputs{}); err != nil {
 		t.Fatal(err)
 	}
 	image := nix.buildExprs[0]
@@ -357,13 +357,13 @@ func TestRenderedPackageAttrParity(t *testing.T) {
 func TestLoadedTagMismatchFailsLoudly(t *testing.T) {
 	nix := &fakeNix{buildOut: []string{"/nix/store/ccc-image.tar.gz"}}
 	docker := &fakeDocker{loadTag: "faber/review:d00dd00dd00d"}
-	b := NewImageBuilder(docker, nix, testPin(), "", testLogger())
+	b := NewImageBuilder(docker, nix, testPin(), "", testBox(t), testLogger())
 	build := config.BuildDef{Packages: []string{"git"}}
-	tag, err := b.ImageTag("review", build)
+	tag, err := b.ImageTag("review", build, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = b.Build(context.Background(), "review", build)
+	_, err = b.Build(context.Background(), "review", build, ImageInputs{})
 	if err == nil {
 		t.Fatal("tag mismatch accepted")
 	}
@@ -381,14 +381,14 @@ func TestManifestSeam(t *testing.T) {
 	t.Run("append on load", func(t *testing.T) {
 		stateDir := filepath.Join(t.TempDir(), "state")
 		nix := &fakeNix{buildOut: []string{"/nix/store/ddd-image.tar.gz"}}
-		probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
-		tag, err := probe.ImageTag("merge", build)
+		probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
+		tag, err := probe.ImageTag("merge", build, ImageInputs{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		docker := &fakeDocker{loadTag: tag}
-		b := NewImageBuilder(docker, nix, testPin(), stateDir, testLogger())
-		if _, err := b.Build(context.Background(), "merge", build); err != nil {
+		b := NewImageBuilder(docker, nix, testPin(), stateDir, testBox(t), testLogger())
+		if _, err := b.Build(context.Background(), "merge", build, ImageInputs{}); err != nil {
 			t.Fatal(err)
 		}
 		data, err := os.ReadFile(filepath.Join(stateDir, "images.jsonl"))
@@ -416,14 +416,14 @@ func TestManifestSeam(t *testing.T) {
 			t.Fatal(err)
 		}
 		nix := &fakeNix{buildOut: []string{"/nix/store/eee-image.tar.gz"}}
-		probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
-		tag, err := probe.ImageTag("merge", build)
+		probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
+		tag, err := probe.ImageTag("merge", build, ImageInputs{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		docker := &fakeDocker{loadTag: tag}
-		b := NewImageBuilder(docker, nix, testPin(), blocker, testLogger())
-		if _, err := b.Build(context.Background(), "merge", build); err != nil {
+		b := NewImageBuilder(docker, nix, testPin(), blocker, testBox(t), testLogger())
+		if _, err := b.Build(context.Background(), "merge", build, ImageInputs{}); err != nil {
 			t.Fatalf("manifest failure failed the build: %v", err)
 		}
 	})
@@ -440,7 +440,7 @@ func TestPackageProverSeam(t *testing.T) {
 		json.RawMessage(`{"git":true,"custom-cli-b":false}`), // implement (sorted first)
 		json.RawMessage(`{"git":true,"custom-cli-a":false}`),
 	}}
-	b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
+	b := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
 	var prover config.PackageProver = b.PackageProver()
 	err := prover.ProvePackages(context.Background(), cfg, testLogger())
 	if err == nil {
@@ -462,13 +462,13 @@ func TestConfigBuilderSeam(t *testing.T) {
 	build := config.BuildDef{Packages: []string{"git"}}
 	cfg := &config.Config{Templates: map[string]config.TemplateDef{"merge": {Build: &build}}}
 	nix := &fakeNix{buildOut: []string{"/nix/store/fff-image.tar.gz"}}
-	probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testLogger())
-	tag, err := probe.ImageTag("merge", build)
+	probe := NewImageBuilder(&fakeDocker{}, nix, testPin(), "", testBox(t), testLogger())
+	tag, err := probe.ImageTag("merge", build, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	docker := &fakeDocker{loadTag: tag}
-	var seam config.ImageBuilder = NewImageBuilder(docker, nix, testPin(), "", testLogger()).ConfigBuilder()
+	var seam config.ImageBuilder = NewImageBuilder(docker, nix, testPin(), "", testBox(t), testLogger()).ConfigBuilder()
 
 	if err := seam.BuildImage(context.Background(), cfg, "merge", testLogger()); err != nil {
 		t.Fatal(err)
@@ -484,8 +484,8 @@ func TestConfigBuilderSeam(t *testing.T) {
 // Verifies 0acac696dcf1: a missing overlay file surfaces as a wrapped error
 // from tag computation (the overlay's bytes are a hash input).
 func TestMissingOverlayFails(t *testing.T) {
-	b := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testLogger())
-	_, err := b.ImageTag("review", config.BuildDef{Packages: []string{"git"}, Overlay: "/nope/overlay.nix"})
+	b := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testBox(t), testLogger())
+	_, err := b.ImageTag("review", config.BuildDef{Packages: []string{"git"}, Overlay: "/nope/overlay.nix"}, ImageInputs{})
 	if err == nil || !strings.Contains(err.Error(), "/nope/overlay.nix") {
 		t.Fatalf("missing overlay error %v", err)
 	}
@@ -508,8 +508,8 @@ func TestBuildOverlaySingleRead(t *testing.T) {
 	}
 	build := config.BuildDef{Packages: []string{"git"}, Overlay: overlayPath}
 
-	probe := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testLogger())
-	tag, err := probe.ImageTag("merge", build) // the ORIGINAL bytes' tag
+	probe := NewImageBuilder(&fakeDocker{}, &fakeNix{}, testPin(), "", testBox(t), testLogger())
+	tag, err := probe.ImageTag("merge", build, ImageInputs{}) // the ORIGINAL bytes' tag
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,8 +522,8 @@ func TestBuildOverlaySingleRead(t *testing.T) {
 			t.Error(err)
 		}
 	}}
-	b := NewImageBuilder(docker, nix, testPin(), "", testLogger())
-	got, err := b.Build(context.Background(), "merge", build)
+	b := NewImageBuilder(docker, nix, testPin(), "", testBox(t), testLogger())
+	got, err := b.Build(context.Background(), "merge", build, ImageInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}

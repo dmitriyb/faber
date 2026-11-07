@@ -30,7 +30,7 @@ orchestrator.yaml ──validate──▶ JSON IR (acyclic, byte-deterministic)
 ## What it does
 
 - **One YAML, one IR.** `faber validate` checks wiring, types, reference cycles and package resolution, with field paths; the same YAML always yields byte-identical JSON, so the plan is diffable and reviewable before anything runs.
-- **Immutable images.** Every template's image is a function of its package list, overlay and nixpkgs pin — no Dockerfile, no repo content baked in.
+- **Immutable images.** Every template's image is a function of its package list, overlay and nixpkgs pin plus faber's own inputs (the box sequencer, the hook scripts, the skills tree) — no Dockerfile, no repo content baked in, nothing shared with the box through a host path.
 - **One box per step, fixed phase order.** context → prelude → agent → postlude → result, driven by an engine-owned sequencer; the typed output is enforced at the container boundary. Egress proxy, one pinned git remote, one role key in an ephemeral ssh-agent and credentials as handles are all bound from outside.
 - **A host-side DAG.** Topological and parallel, CEL conditions on edges, bounded loops unrolled at compile time, `generate` fan-out over a data-source command at run time, and an append-only journal that `faber resume` picks up from.
 - **No domain words.** Trackers, review gates, spec tools and agent vendors are user configuration: opaque scripts, typed params, data-source commands and companion services on a docker network faber treats as opaque. A change that teaches faber one of them is wrong by construction.

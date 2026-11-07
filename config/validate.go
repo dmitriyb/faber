@@ -338,7 +338,7 @@ func (v *validator) checkTemplates() {
 }
 
 // checkRunContract mirrors the run-spec assembler's statically checkable
-// refusals (agent.BuildRunSpec) at validate altitude, so a template that
+// refusals (agent.BuildContainerSpec) at validate altitude, so a template that
 // cannot launch any box fails `faber validate`, not each step at run time:
 // the agent CLI must be named, template env may not claim engine- or
 // security-owned variables, and template volumes may not overlap the

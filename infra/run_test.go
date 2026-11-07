@@ -27,8 +27,8 @@ var goldenStdinSecrets = []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
 // volume, a /tmp tmpfs), three env keys, a StdinSecrets payload, and a
 // representative binding fragment (--network, agent-socket -v, SSH_AUTH_SOCK,
 // proxy env, --tmpfs /run/secrets, --runtime).
-func fullRunSpec() RunSpec {
-	return RunSpec{
+func fullRunSpec() ContainerSpec {
+	return ContainerSpec{
 		Name:      "faber-r1-impl-a1",
 		Image:     "faber/impl:0a1b2c3d4e5f",
 		Resources: config.ResourceDef{Memory: "8g", CPUs: 4},
@@ -57,7 +57,7 @@ func fullRunSpec() RunSpec {
 	}
 }
 
-// Verifies 0c82c6478856: a fully populated RunSpec assembles to the golden
+// Verifies 0c82c6478856: a fully populated ContainerSpec assembles to the golden
 // argv byte-for-byte — fixed section order, -i immediately after --rm (because
 // StdinSecrets is set), sorted env, the binding fragment contiguous and
 // verbatim at its slot, image then entry argv last. The same spec with
@@ -209,8 +209,8 @@ func TestArgvDiscipline(t *testing.T) {
 	}
 }
 
-func randomRunSpec(rng *rand.Rand, i int) RunSpec {
-	spec := RunSpec{
+func randomRunSpec(rng *rand.Rand, i int) ContainerSpec {
+	spec := ContainerSpec{
 		Name:  fmt.Sprintf("faber-r%d-step-a%d", i, rng.Intn(3)+1),
 		Image: fmt.Sprintf("faber/t%d:%012x", i, rng.Int63()),
 	}
@@ -265,7 +265,7 @@ func randomRunSpec(rng *rand.Rand, i int) RunSpec {
 // argv still assemble a valid engine-only run — assembly appends nothing
 // after the image tag.
 func TestArgvEmptyBindingsAndEntry(t *testing.T) {
-	spec := RunSpec{Name: "faber-smoke", Image: "faber/t:abc"}
+	spec := ContainerSpec{Name: "faber-smoke", Image: "faber/t:abc"}
 	got := buildArgs(spec)
 	want := []string{"run", "--rm", "--name", "faber-smoke", "faber/t:abc"}
 	if !slices.Equal(got, want) {
@@ -284,7 +284,7 @@ func TestNonZeroExitIsData(t *testing.T) {
 		},
 	}
 	r := NewContainerRunner(docker, testLogger())
-	res, err := r.Run(context.Background(), RunSpec{Name: "faber-x", Image: "faber/t:abc"})
+	res, err := r.Run(context.Background(), ContainerSpec{Name: "faber-x", Image: "faber/t:abc"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestStdinSecretsDelivery(t *testing.T) {
 	payload := []byte(`{"agent-api":"dG9rLXNlY3JldA=="}`)
 	docker := &fakeDocker{}
 	r := NewContainerRunner(docker, testLogger())
-	if _, err := r.Run(context.Background(), RunSpec{
+	if _, err := r.Run(context.Background(), ContainerSpec{
 		Name: "faber-s", Image: "faber/t:abc", StdinSecrets: payload,
 	}); err != nil {
 		t.Fatalf("run: %v", err)
@@ -330,7 +330,7 @@ func TestStdinSecretsDelivery(t *testing.T) {
 	// Empty payload: stdin unattached, no -i.
 	docker2 := &fakeDocker{}
 	r2 := NewContainerRunner(docker2, testLogger())
-	if _, err := r2.Run(context.Background(), RunSpec{Name: "faber-s2", Image: "faber/t:abc"}); err != nil {
+	if _, err := r2.Run(context.Background(), ContainerSpec{Name: "faber-s2", Image: "faber/t:abc"}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if len(docker2.runStdins) != 1 || docker2.runStdins[0] != nil {
@@ -343,7 +343,7 @@ func TestStdinSecretsDelivery(t *testing.T) {
 
 // Verifies 0c82c6478856: on context cancellation Run kills the container by
 // its deterministic name, returns the context error within the grace window,
-// and the RunResult still carries partial output and timing.
+// and the ContainerResult still carries partial output and timing.
 func TestKillOnCancel(t *testing.T) {
 	docker := &fakeDocker{
 		runFn: func(ctx context.Context, args []string, stdin io.Reader, output io.Writer) (int, error) {
@@ -358,7 +358,7 @@ func TestKillOnCancel(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
 	}()
-	res, err := r.Run(ctx, RunSpec{Name: "faber-cancelme", Image: "faber/t:abc"})
+	res, err := r.Run(ctx, ContainerSpec{Name: "faber-cancelme", Image: "faber/t:abc"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error %v, want context.Canceled", err)
 	}
@@ -378,10 +378,10 @@ func TestKillOnCancel(t *testing.T) {
 func TestRunSpecRequiresNameAndImage(t *testing.T) {
 	docker := &fakeDocker{}
 	r := NewContainerRunner(docker, testLogger())
-	if _, err := r.Run(context.Background(), RunSpec{Image: "faber/t:abc"}); err == nil {
+	if _, err := r.Run(context.Background(), ContainerSpec{Image: "faber/t:abc"}); err == nil {
 		t.Fatal("missing name accepted")
 	}
-	if _, err := r.Run(context.Background(), RunSpec{Name: "faber-x"}); err == nil {
+	if _, err := r.Run(context.Background(), ContainerSpec{Name: "faber-x"}); err == nil {
 		t.Fatal("missing image accepted")
 	}
 	if got := len(docker.calls); got != 0 {
@@ -418,7 +418,7 @@ func TestTailBufferKeepsTail(t *testing.T) {
 func TestRunEvictsStaleNameHolder(t *testing.T) {
 	docker := &fakeDocker{}
 	r := NewContainerRunner(docker, testLogger())
-	if _, err := r.Run(context.Background(), RunSpec{Name: "faber-e", Image: "faber/t:abc"}); err != nil {
+	if _, err := r.Run(context.Background(), ContainerSpec{Name: "faber-e", Image: "faber/t:abc"}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	removes := docker.callsFor("remove")
@@ -442,7 +442,7 @@ func TestRunEvictsStaleNameHolder(t *testing.T) {
 // result channel.
 func TestRunRejectsRelativeBindHost(t *testing.T) {
 	r := NewContainerRunner(&fakeDocker{}, testLogger())
-	_, err := r.Run(context.Background(), RunSpec{
+	_, err := r.Run(context.Background(), ContainerSpec{
 		Name: "faber-rel", Image: "faber/t:abc",
 		Mounts: []Mount{{Host: ".faber/runs/r1/result", Container: "/faber/result"}},
 	})
@@ -451,7 +451,7 @@ func TestRunRejectsRelativeBindHost(t *testing.T) {
 	}
 }
 
-// Verifies 0c82c6478856: a RunSpec.Output writer receives the streamed
+// Verifies 0c82c6478856: a ContainerSpec.Output writer receives the streamed
 // output in full, beside the bounded tail the result carries.
 func TestRunOutputWriterTee(t *testing.T) {
 	docker := &fakeDocker{
@@ -463,7 +463,7 @@ func TestRunOutputWriterTee(t *testing.T) {
 	}
 	var durable bytes.Buffer
 	r := NewContainerRunner(docker, testLogger())
-	res, err := r.Run(context.Background(), RunSpec{Name: "faber-x", Image: "faber/t:abc", Output: &durable})
+	res, err := r.Run(context.Background(), ContainerSpec{Name: "faber-x", Image: "faber/t:abc", Output: &durable})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

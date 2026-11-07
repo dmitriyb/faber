@@ -73,16 +73,16 @@ code; these are the module-level behaviors that must hold.)
     is the deliberate exception: the named and inline forms resolve to *different*
     `ResolvedSkills` shapes (`Sources` vs `Root`) by design (scenario 14), because
     `SkillDef.dir` and inline `skills.dir` are different directory levels — but both
-    deliver the same mounted `/faber/skills` tree after run-prep staging.
+    deliver the same baked `/faber/skills` tree once the image builder stages them.
 14. **Skills assembly — named vs inline shapes.** A template `skill: implement`,
     `skills: [implement, go-expert]`, `skills_link: .claude/skills` desugars to a
     `ResolvedSkills` with `Sources` = `[(implement,→dir), (go-expert,→dir)]`
     (declared order, deduped), empty `Root`, `Primary: implement`,
     `Link: .claude/skills`. The inline `skills: {dir, link}` form instead yields
-    `Root: <dir>` with **empty `Sources`** (a direct mount, no `<name>` wrapper) —
-    proving single-skill delivery is byte-identical to today and does not
-    double-nest. Run-prep staging (per-attempt copy of real files for `Sources`,
-    direct mount for `Root`) is exercised in the pipeline module's tests.
+    `Root: <dir>` with **empty `Sources`** (baked directly, no `<name>` wrapper) —
+    proving single-skill delivery does not double-nest. The build-time staging
+    (a copy of real files under `<name>/` for `Sources`, the root as is for
+    `Root`) is exercised in the infra module's tests.
 
 15. **Per-image pin — validation and carry-through.** An `images.go-box.pin:
     {rev: "25.11", sha256: "…"}` desugars onto the resolved flat

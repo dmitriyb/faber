@@ -2,8 +2,9 @@
 
 Two binaries are published on the [GitHub Releases page][releases]: `faber`,
 the host CLI (linux/darwin, amd64/arm64), and `faber-box`, the in-container
-phase sequencer (linux only, amd64/arm64). `faber-box` is bind-mounted into
-every box and never runs on the host directly, see [`deploy.md`](deploy.md);
+phase sequencer (linux only, amd64/arm64). `faber-box` is baked into every
+template image by `faber build` and never runs on the host directly, see
+[`deploy.md`](deploy.md);
 the two are installed side by side and upgraded as a pair. Every release
 archive is signed with SSHSIG (`ssh-keygen -Y sign`), verifiable with the
 `ssh-keygen` that ships with OpenSSH — no extra tool to install just to verify.

@@ -9,7 +9,7 @@ Everything downstream of "the six archives exist in `dist/`" — per-artifact ch
 `.goreleaser.yaml` declares two `builds` entries, each with its own target matrix:
 
 - `faber` (`./cmd/faber`): `linux`/`darwin` × `amd64`/`arm64` (4 targets) — the host CLI, which may run on either OS.
-- `faber-box` (`./cmd/faber-box`): `linux` × `amd64`/`arm64` (2 targets) — bind-mounted read-only into every box and set as its entrypoint; it never runs on the host process directly, so it ships linux-only.
+- `faber-box` (`./cmd/faber-box`): `linux` × `amd64`/`arm64` (2 targets) — baked into every template image by `faber build` and set as the box's entrypoint; it never runs on the host process directly, so it ships linux-only (a darwin host bakes the linux binary of its arch into images its Docker VM runs).
 
 Both builds share:
 
@@ -50,7 +50,7 @@ The same `install.sh` carries an upgrade mode (the `--upgrade` flag) reusing its
 It is what the config module's `faber upgrade` command runs (`spec/config/arch_cli.md`): the script is embedded byte-for-byte into the faber binary via `//go:embed` and executed from there — so for a given release the embedded copy is identical to the standalone `install.sh` a user verifies and runs by hand, and because it rides inside the already-trusted signed binary rather than being fetched, there is nothing to substitute and no fetch-and-verify-the-script step.
 The embedded copy lives at `config/install.sh`, kept byte-identical to this canonical repo-root `install.sh` by `go generate ./config` (a `//go:generate cp ../install.sh install.sh` directive) and enforced by a build-failing identity test — that identity is the whole security argument.
 
-Upgrade mode replaces **both** binaries as a unit, because a mismatched `faber`/`faber-box` pair is a broken state (they share a contract version — `agent/extract.go` `ReasonContractVersion`).
+Upgrade mode replaces **both** binaries as a unit, because a mismatched `faber`/`faber-box` pair is a broken state (they share a contract version — `agent/extract.go` `ReasonContractVersion`); since `faber build` bakes faber-box into every image, an upgrade moves every image tag and the run preflight asks for `faber build` before the next run.
 Each verified binary is staged as a sibling `<target>.new` so the swap is a same-filesystem `rename(2)` (safe over a running binary; a `cp`/`install` over the running file would hit `ETXTBSY` on Linux, and a cross-filesystem `mv` from the temp workdir would fall back to the same in-place write), then `mv target → target.bak; mv target.new → target`.
 Both signatures are verified before either binary is touched, and on any mid-swap failure both roll back from their `.bak` — so the pair is never left mismatched (either both old or both new), which the config-side active-runs guard ("faber is not upgraded mid-run") makes safe by guaranteeing no live run spans the brief window between the two renames.
 Upgrade mode is **forward-only**: on the latest path (`VERSION` unset) it resolves GitHub's latest release and orders it against `--current` — equal → already up to date, exit 0; newer → proceed; older → HARD-REFUSE and exit non-zero, non-overridable, because a "latest" that moved backward is a rollback anomaly (a compromised origin serving an old but validly-signed release as latest). A `--check`/`--dry-run` on that older-latest reports the anomaly as a warning but still exits 0 (its job is to report, not to gate); a `dev`/unstamped `--current` cannot be ordered, so the latest path warns and proceeds rather than blocks.

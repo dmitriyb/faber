@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -68,7 +67,7 @@ type ImageTagger interface {
 // ContainerRunner is the slice of infra's container-run primitive the box
 // composition needs. *infra.ContainerRunner satisfies it.
 type ContainerRunner interface {
-	Run(ctx context.Context, spec infra.RunSpec) (infra.RunResult, error)
+	Run(ctx context.Context, spec infra.ContainerSpec) (infra.ContainerResult, error)
 }
 
 // BindingPreparer is the slice of the security module's binding assembly the
@@ -77,7 +76,7 @@ type BindingPreparer interface {
 	Prepare(ctx context.Context, step security.StepSpec) (security.Assembled, error)
 }
 
-// AgentBoxes is the production BoxRunner: agent.BuildRunSpec assembles the
+// AgentBoxes is the production BoxRunner: agent.BuildContainerSpec assembles the
 // engine half of the run contract, the security bindings are spliced into the
 // spec verbatim, the container runs, bindings tear down, and
 // agent.ExtractResult re-validates the record host-side. The container exit
@@ -85,9 +84,8 @@ type BindingPreparer interface {
 // box-vanished failure. Construction happens at cmd wiring; unit tests fake
 // BoxRunner instead.
 type AgentBoxes struct {
-	Containers  ContainerRunner
-	Bindings    BindingPreparer
-	EntryBinary string // host path of the faber-box binary
+	Containers ContainerRunner
+	Bindings   BindingPreparer
 
 	// Security configuration, resolved from the orchestrator config by the
 	// wiring (the executor itself never reads Config).
@@ -155,14 +153,6 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	if err != nil {
 		return BoxResult{}, fmt.Errorf("pipeline: box %s: %w", box.NodeID, err)
 	}
-	// Run-prep stages the resolved skills leg into the single /faber/skills mount:
-	// a named Sources set is copied into a per-attempt tree of real files, an
-	// inline Root is mounted directly. The staging tree is torn down on the way out.
-	skillsHost, skillsCleanup, err := stageSkills(box.Template.Skills, attemptDir)
-	if err != nil {
-		return BoxResult{}, fmt.Errorf("pipeline: box %s: stage skills: %w", box.NodeID, err)
-	}
-	defer skillsCleanup()
 	// The live sessions bind: a fresh empty per-attempt dir (the scrub above
 	// cleared only THIS attempt's dir, so earlier attempts' transcripts
 	// persist), host-owned by the run user like the result dir, mounted by
@@ -175,26 +165,21 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 			return BoxResult{}, fmt.Errorf("pipeline: box %s: %w", box.NodeID, err)
 		}
 	}
-	spec, err := agent.BuildRunSpec(agent.BoxSpec{
-		RunID:        box.RunID,
-		NodeID:       box.NodeID,
-		Attempt:      box.Attempt,
-		Template:     box.Template,
-		Image:        box.Image,
-		Inputs:       inputs,
-		ResultDir:    resultDir,
-		EntryBinary:  b.EntryBinary,
-		ContextHook:  box.Template.Hooks.Context,
-		PreludeHook:  box.Template.Hooks.Prelude,
-		PostludeHook: box.Template.Hooks.Postlude,
-		SkillsDir:    skillsHost,
-		SkillsLink:   skillsLink(box.Template),
-		Model:        box.Template.Model,
-		Effort:       box.Template.Effort,
-		GitName:      b.GitIdentities[box.Template.Identity].Name,
-		GitEmail:     b.GitIdentities[box.Template.Identity].Email,
-		SessionsDir:  sessionsDir,
-		Check:        b.Check,
+	spec, err := agent.BuildContainerSpec(agent.BoxSpec{
+		RunID:       box.RunID,
+		NodeID:      box.NodeID,
+		Attempt:     box.Attempt,
+		Template:    box.Template,
+		Image:       box.Image,
+		Inputs:      inputs,
+		ResultDir:   resultDir,
+		SkillsLink:  skillsLink(box.Template),
+		Model:       box.Template.Model,
+		Effort:      box.Template.Effort,
+		GitName:     b.GitIdentities[box.Template.Identity].Name,
+		GitEmail:    b.GitIdentities[box.Template.Identity].Email,
+		SessionsDir: sessionsDir,
+		Check:       b.Check,
 	})
 	if err != nil {
 		return BoxResult{}, err
@@ -232,10 +217,10 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 	defer outFile.Close()
 	spec.Output = outFile
 	// The credentials pairing is atomic: a non-empty file-mode secrets payload
-	// is copied into RunSpec.StdinSecrets and the box's stdin signal is set in
+	// is copied into ContainerSpec.StdinSecrets and the box's stdin signal is set in
 	// the same step, never one without the other (see spec/infra/impl_run_argv.md
 	// and spec/pipeline/impl_scheduling.md). This is the only host-side owner of
-	// RunSpec.Env assembly at the step-runner seam.
+	// ContainerSpec.Env assembly at the step-runner seam.
 	if len(asm.SecretsStdin) > 0 {
 		spec.StdinSecrets = asm.SecretsStdin
 		spec.Env[contract.EnvSecretsStdin] = "1"
@@ -280,9 +265,9 @@ func outputTail(out []byte, max int) string {
 // pointer is re-rooted under the run directory so the interactive mode can
 // resolve it — and, because the pointer is box-authored bytes, it must
 // resolve strictly under the attempt's result dir (the same discipline the
-// skill stager applies to names): a traversal like "../../.." would otherwise
+// image builder applies to skill names): a traversal like "../../.." would otherwise
 // bind an arbitrary host directory into the operator's re-entry container.
-func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.RunResult, log *slog.Logger) failure.Result {
+func adaptResult(rec agent.Result, box BoxAttempt, runRes infra.ContainerResult, log *slog.Logger) failure.Result {
 	out := failure.Result{
 		Attempt:      box.Attempt,
 		AgentSkipped: rec.AgentSkipped,
@@ -436,115 +421,6 @@ func stringifyInputs(inputs map[string]any) (map[string]string, error) {
 		out[slot] = s
 	}
 	return out, nil
-}
-
-// stageSkills collapses a resolved skills leg into the single host path bound
-// read-only at /faber/skills. An inline Root is bound directly (byte-identical
-// to today's single-dir mount — the root already has the <name>/SKILL.md shape);
-// a named Sources set is COPIED into a per-attempt tree <stage>/<name> of real
-// files under attemptDir. The copy (rather than a symlink farm) is load-bearing:
-// <stage> is bind-mounted read-only into the container, and a symlink's target
-// would be a host path that is not mounted — it would dangle inside the box and
-// /faber/skills/<name>/SKILL.md would silently vanish. A nil leg yields "" — no
-// /faber/skills mount, today's no-skills behavior. Whatever it returns is set as
-// the one Mount{Host} for /faber/skills, so infra's argv builder still sees
-// exactly one read-only bind. The returned cleanup removes any staging tree on
-// teardown.
-func stageSkills(rs *config.ResolvedSkills, attemptDir string) (hostPath string, cleanup func(), err error) {
-	noop := func() {}
-	if rs == nil {
-		return "", noop, nil
-	}
-	if rs.Root != "" {
-		return rs.Root, noop, nil // inline: mount the skills-root directly, no <name> wrapper
-	}
-	stage := filepath.Join(attemptDir, "skills")
-	// Crash-safe: a reused session dir (interactive re-entry) can carry a leftover
-	// stage tree from a hard crash; clear it before restaging.
-	if err := os.RemoveAll(stage); err != nil {
-		return "", noop, err
-	}
-	if err := os.MkdirAll(stage, 0o755); err != nil {
-		return "", noop, err
-	}
-	for _, src := range rs.Sources {
-		// Belt-and-suspenders: config.Validate already rejects unsafe skill names,
-		// but staging joins src.Name onto stage as a path component, so re-check
-		// here — a bypassed or hand-built ResolvedSkills must never write outside
-		// the per-attempt tree.
-		if !safeSegment(src.Name) {
-			_ = os.RemoveAll(stage)
-			return "", noop, fmt.Errorf("stage skill %q: unsafe name (must be a single path segment)", src.Name)
-		}
-		if err := copyTree(filepath.Join(stage, src.Name), src.Dir); err != nil {
-			_ = os.RemoveAll(stage)
-			return "", noop, fmt.Errorf("stage skill %q: %w", src.Name, err)
-		}
-	}
-	return stage, func() { _ = os.RemoveAll(stage) }, nil
-}
-
-// safeSegment reports whether name is a single filesystem path component safe to
-// join onto the stage dir: no separator, not "." / ".." / absolute, no leading
-// dot. Mirrors config.safeName (the validate-time gate) so staging enforces the
-// same discipline even if validation is ever bypassed.
-func safeSegment(name string) bool {
-	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) {
-		return false
-	}
-	if name[0] == '.' || name[0] == '~' {
-		return false
-	}
-	return !strings.ContainsAny(name, `/\`)
-}
-
-// copyTree recursively copies the source tree at src into dst as REAL files, so
-// the result survives the read-only bind into the container (a symlink would
-// point at an unmounted host path and dangle inside the box). The box's run user
-// is non-root and a :ro mount cannot be chowned by the box preamble, so every
-// node is made world-readable: directories 0o755, files 0o644. Non-regular
-// entries (nested symlinks, devices) are skipped — only real files travel.
-func copyTree(dst, src string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return copyFile(target, path)
-	})
-}
-
-// copyFile streams src into a fresh world-readable dst (0o644) rather than
-// slurping it whole, so a large skill file never spikes host memory. No size
-// ceiling is imposed: the skills tree is operator-authored.
-func copyFile(dst, src string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 // skillsLink reads the template's optional skills-discovery path, returning ""

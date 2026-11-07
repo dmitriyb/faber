@@ -55,7 +55,10 @@ func (s builderSeam) BuildImage(ctx context.Context, cfg *config.Config, templat
 		return fmt.Errorf("infra: unknown template %q", template)
 	}
 	build, _ := config.ResolveBuild(cfg, tpl)
-	tag, err := s.b.BuildWith(ctx, template, build, logger)
+	// The engine inputs resolve exactly as the desugarer resolves them, so the
+	// build-time tag equals the run-time tag by construction.
+	inputs := ImageInputs{Hooks: config.ResolveHooks(cfg, tpl.Hooks), Skills: config.ResolveSkills(cfg, tpl)}
+	tag, err := s.b.BuildWith(ctx, template, build, inputs, logger)
 	if err != nil {
 		return err
 	}

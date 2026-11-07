@@ -659,7 +659,7 @@ func TestLifecycle_SecretsReachHooksNeverHandoff(t *testing.T) {
 		f := newFixture(t)
 		f.env[contract.EnvSecretsStdin] = "1"
 		f.stdin = []byte(`{"service_token":"` + base64.StdEncoding.EncodeToString([]byte(secret)) + `"}`)
-		f.writeHook(contract.HookContext, "#!/bin/sh\nenv > \"$STUB_DIR/hook-env\"\nstat -c '%a' \"$FABER_SECRETS_DIR/service_token\" > \"$STUB_DIR/secret-mode\"\nprintf 'body\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
+		f.writeHook(contract.HookContext, "#!/bin/sh\nenv > \"$STUB_DIR/hook-env\"\n{ stat -c '%a' \"$FABER_SECRETS_DIR/service_token\" 2>/dev/null || stat -f '%Lp' \"$FABER_SECRETS_DIR/service_token\"; } > \"$STUB_DIR/secret-mode\"\nprintf 'body\\n' > \"$FABER_BUNDLE_DIR/CONTEXT.md\"\n")
 		f.env["FABER_INPUT_ALPHA"] = "v1"
 		f.env["STUB_EXIT"] = "17" // force a later failure
 

@@ -33,64 +33,27 @@ All graph mutation happens on the loop goroutine; workers communicate only via
 `events`. No mutex guards the DAG — the splice, the decrements, and the ready
 queue are single-threaded by construction, and `go test -race` stays quiet.
 
-The `steps` closure is the host-side `infra.RunSpec` assembly seam: it bridges
+The `steps` closure is the host-side `infra.ContainerSpec` assembly seam: it bridges
 the security module's `Assembled` (verbatim argv fragment + `SecretsStdin`) and
 the engine mounts/env into one run spec before handing it to
-`infra.ContainerRunner`, so it is the single place that owns `RunSpec.Env`
+`infra.ContainerRunner`, so it is the single place that owns `ContainerSpec.Env`
 assembly and therefore enforces the credentials pairing — a non-empty
-`Assembled.SecretsStdin` is copied into `RunSpec.StdinSecrets` and
-`RunSpec.Env[contract.EnvSecretsStdin]="1"` is set in the same step, never one
+`Assembled.SecretsStdin` is copied into `ContainerSpec.StdinSecrets` and
+`ContainerSpec.Env[contract.EnvSecretsStdin]="1"` is set in the same step, never one
 without the other (see spec/infra/impl_run_argv.md).
 
-## Skills staging (the run-prep seam owns the staged copy)
+## Skills staging (image content, not a run-prep mount)
 
 The config module's desugarer resolves each template's skills leg into
-`config.ResolvedSkills` (see spec/config/impl_desugaring.md): a named-skills
-template carries `Sources` — an ordered, name-deduped `[(name, dir)…]` of *single*
-skill trees — while an inline `{dir,link}` template carries `Root`, a pre-composed
-skills-root of `<name>/SKILL.md` subtrees. `ResolvedSkills` is pure data; it is NOT
-a mount. Collapsing it to the single `/faber/skills` bind is impure (it reads and
-writes host files), so it is done **here**, in the `steps` run-prep seam, exactly
-once per box attempt — never in the pure desugarer.
-
-`stageSkills(rs *config.ResolvedSkills, attemptDir string) (hostPath string)`:
-
-- **No skills leg** (`rs == nil`): no `/faber/skills` mount is added — today's
-  no-skills behavior, unchanged.
-- **Inline `Root`**: return `rs.Root` directly. No staging, no copy — the
-  root already has the `<name>/SKILL.md` shape `/faber/skills` expects, so it is
-  bind-mounted verbatim. Byte-identical to the single-dir mount faber emits today.
-- **Named `Sources`**: build a fresh per-attempt staging directory
-  `<attemptDir>/skills` (clearing any leftover tree first, so a crashed re-entry's
-  reused session dir cannot fail restaging) and, for each `(name, dir)` in order,
-  **copy** the source tree `dir` into `<stage>/<name>` as real files. Return
-  `<stage>`. The staged tree must NOT be a symlink farm: `<stage>` is bind-mounted
-  read-only into the container, and a symlink's target is a *host* path that is
-  not mounted — it would dangle inside the box and `/faber/skills/<name>/SKILL.md`
-  would silently vanish, so the source files must be copied through for real.
-  Because the mount is `:ro` the box preamble cannot chown it and the non-root run
-  user must still read it, so every staged node is world-readable: directories
-  `0o755`, files `0o644`. Duplicate names cannot occur (the slice is deduped
-  upstream); the copy is deterministic in declared order. The per-file copy is
-  **streamed** (`os.Open` + `io.Copy`, not a whole-file `ReadFile`/`WriteFile`) so
-  a large skill file never spikes host memory; no size ceiling is imposed because
-  the tree is operator-authored. Before joining `name` onto `<stage>`, staging
-  re-validates it as a **safe single path segment** (no separator, `..`, absolute
-  root, or leading `.` / `~`) and errors out otherwise — belt-and-suspenders with
-  config.Validate's name discipline (spec/config/arch_loader.md), so even a
-  bypassed validation can never write outside the per-attempt tree.
-
-Whatever `stageSkills` returns is set as the **single** `Mount{Host: hostPath,
-Container: contract.ContainerSkillsDir /* /faber/skills */, ReadOnly: true}` on the
-`RunSpec` — one mount regardless of how many sources fed it. infra's argv builder
-therefore still emits exactly one read-only `/faber/skills` bind and is untouched
-(spec/infra/impl_run_argv.md); the agent box still sees one `<name>/SKILL.md` tree
-and symlinks `$HOME/<SkillsLink> -> /faber/skills` from `FABER_SKILLS_LINK`,
-unchanged. The staging tree is per-attempt and read-only to the container; it is
-disposable and lives under the attempt's scratch dir. This is the settled option
-(a) from spec/config/arch_desugarer.md — a single staged mount that preserves the
-mount contract; the rejected option (b) of one `/faber/skills/<name>` mount per
-source does not exist anywhere in the design.
+`config.ResolvedSkills` (see spec/config/impl_desugaring.md). Collapsing it into
+the single `/faber/skills` tree is impure (it reads host files), and it is done
+once per image, at `faber build`, by the image builder — never in the pure
+desugarer and no longer per attempt: the tree is baked into the template's image
+(`spec/infra/impl_nix_build.md`, "Engine inputs") and its bytes fold into the
+image tag. Run-prep stages nothing for it, and the `ContainerSpec` carries no
+`/faber/skills`, `/faber/hooks` or `/faber/bin` mount; the box still sees one
+`<name>/SKILL.md` tree and symlinks `$HOME/<SkillsLink> -> /faber/skills` from
+`FABER_SKILLS_LINK`, unchanged.
 
 ## Session capture (the run-prep seam owns the live bind)
 
@@ -322,7 +285,7 @@ re-dispatch starts as attempt 1 again, exactly as its result records it.
 
 The run-prep seam (`AgentBoxes.RunAttempt`) opens
 `<attemptDir>/output.log` (`O_CREATE|O_TRUNC`, after the pre-attempt scrub)
-and sets `RunSpec.Output` to it; the container runner tees the streamed
+and sets `ContainerSpec.Output` to it; the container runner tees the streamed
 combined output into it beside the bounded tail and the debug forwarding.
 The executor emits `run-started` (run id, workflow, every loop cap off the
 IR via `loopBounds`) before scheduling; `applyExpansion` adds the spliced
