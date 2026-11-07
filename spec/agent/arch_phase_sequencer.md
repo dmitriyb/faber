@@ -26,11 +26,19 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    (the uid:gid the box runs as inside the container; nothing host-owned is
    shared with it, so the value is a container-namespace id and nothing
    more), then drops privileges —
-   `setgroups` to the run group alone, `setgid`, `setuid` — so every phase
-   below, and the untrusted agent in particular, runs non-root. No
-   supplementary group is needed for the agent: the box's agent socket is its
-   own, created inside the container by the relay (below) and chowned to the
-   run user, so there is no host-owned socket to be admitted to. The
+   gives the run user a passwd and a group entry (`/etc/passwd`,
+   `/etc/group`, appended or created; a present uid or gid is left alone) —
+   a toolset image carries no users, the uid is a run-time value, and
+   OpenSSH refuses to act for a uid it cannot look up ("No user exists for
+   uid"), which would fail the clone and the signing phase; the write needs
+   a writable `/etc`, which every image has today, and a read-only rootfs
+   would have to mount a tmpfs there or the preamble fail-stops naming it —
+   and drops
+   privileges: `setgroups` to the run group alone, `setgid`, `setuid` — so
+   every phase below, and the untrusted agent in particular, runs non-root.
+   No supplementary group is needed for the agent: the box's agent socket is
+   its own, created inside the container by the relay (below) and chowned to
+   the run user, so there is no host-owned socket to be admitted to. The
    `/run/secrets` tmpfs (present only in file mode, mounted root-owned by the
    binding's `--tmpfs` flag) is a **gated add to the chown set**: chowned only
    when it exists, so the dropped run user can write its `0600` secret files in
@@ -255,9 +263,9 @@ own. `faber-box receive` reads frames from its standard input and writes
 them into the container: `handoff/<rel>` under `/faber/handoff` (a tmpfs of
 the reconstructed box) and `sessions/<rel>` under `FABER_SESSIONS_DIR`,
 refusing any other first segment and any link outside `sessions/`, and
-resolving every write inside the tree it belongs to, then chowns both trees
-to `FABER_RUN_UID:FABER_RUN_GID`
-together with the writable mounts a held box's missing preamble left
+resolving every write inside the tree it belongs to, then does for the run
+user what a held box's missing preamble would have: its passwd and group
+entry, and the chown of both trees and of the writable mounts left
 root-owned (the workspace, `/tmp`, `HOME`, the path down to the sessions
 directory). It runs as root through `docker exec` before the operator's own
 exec drops to the run user.

@@ -213,6 +213,13 @@ never the binary's own result directory.)
     lowered, the phase fails with reason `signing` naming the relay, before
     any git command runs — on a gateless step too. Without `SSH_AUTH_SOCK`
     nothing is waited for.
+25. **The run user exists.** `ensureRunUser` against a scratch `etc`
+    creates `passwd` and `group` with the run user's entries (home
+    `/home/box`), appends nothing on a second call, appends after an image's
+    own entries on a line of their own, and leaves a uid or gid already
+    present alone. (That OpenSSH is satisfied by it is the realinfra relay
+    round trip's business: `ssh-add -L` as the run user in a held box after
+    `receive`.)
 
 ## Edge cases
 

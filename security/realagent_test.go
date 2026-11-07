@@ -16,7 +16,9 @@ package security
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -26,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dmitriyb/faber/agent/contract"
 	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/infra"
 )
@@ -110,7 +113,9 @@ func realBox(t *testing.T) string {
 // identity binding, attached to a real container through docker exec and
 // `faber-box relay`, gives the box's run user an agent that lists exactly
 // the role's key and signs with it — no host path shared, the socket owned
-// by the run user inside the box.
+// by the run user inside the box. The box is a held one, set up for its run
+// user by `faber-box receive` as a re-entry is (the passwd entry OpenSSH
+// needs, the chowns), so the whole mount-free path is the real one.
 func TestRealinfra_AgentRelay(t *testing.T) {
 	requireBinaries(t, "ssh-agent", "ssh-add", "ssh-keygen", "docker", "nix")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -145,10 +150,42 @@ func TestRealinfra_AgentRelay(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 
-	// The box waits for its socket as the clone phase does, then — as the
-	// run user, which the relay chowned the socket to — lists the agent,
-	// signs a message through it and checks the signature against the
-	// listed key; the key line is the stdout the test reads.
+	// A held box, as a re-entry starts one: the binding's fragment and the
+	// run user's ids on the argv, `faber-box hold` as the entry.
+	name := fmt.Sprintf("faber-realinfra-relay-%d", time.Now().UnixNano())
+	args := []string{"run", "--rm", "-d", "--name", name, "--tmpfs", "/tmp", "--tmpfs", "/home/box",
+		"-e", "FABER_RUN_UID=1000", "-e", "FABER_RUN_GID=1000"}
+	args = append(args, c.Args...)
+	args = append(args, tag, "/faber/bin/faber-box", "hold")
+	if code, err := docker.ContainerRun(ctx, args, nil, io.Discard, os.Stderr); err != nil || code != 0 {
+		t.Fatalf("start held box: exit %d err %v", code, err)
+	}
+	defer docker.Kill(context.WithoutCancel(ctx), name)
+	actx, stopAttach := context.WithCancel(ctx)
+	attached := make(chan error, 1)
+	go func() { attached <- c.Attach(actx, name) }()
+	defer func() {
+		stopAttach()
+		if err := <-attached; err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("attach: %v", err)
+		}
+	}()
+
+	// receive with an empty stream sets the box up for its run user: the
+	// passwd and group entry OpenSSH needs, and the chowns.
+	var stream bytes.Buffer
+	contract.NewFrameWriter(&stream).End()
+	var stderr bytes.Buffer
+	if code, err := docker.Exec(ctx, name, []string{"/faber/bin/faber-box", "receive"}, &stream, io.Discard, &stderr); err != nil || code != 0 {
+		t.Fatalf("receive: exit %d err %v stderr %q", code, err, stderr.String())
+	}
+
+	// As the run user, which the relay chowned the socket to: wait for the
+	// socket as the clone phase does, list the agent, sign a message through
+	// it and check the signature against the listed key; the key line is
+	// the stdout the test reads. The exec runs as root (no --user); setpriv
+	// drops the same way the preamble does. Exec takes an argv, so the
+	// script needs no shell quoting.
 	script := `set -e
 for i in $(seq 200); do [ -S "$SSH_AUTH_SOCK" ] && break; sleep 0.1; done
 stat -c '%u:%g %a' "$SSH_AUTH_SOCK" >&2
@@ -159,27 +196,15 @@ ssh-keygen -Y sign -q -n faber -f /tmp/keys /tmp/m
 ssh-keygen -Y check-novalidate -n faber -s /tmp/m.sig < /tmp/m >&2
 cut -d' ' -f1,2 /tmp/keys`
 	var stdout bytes.Buffer
-	spec := infra.ContainerSpec{
-		Name:     fmt.Sprintf("faber-realinfra-relay-%d", time.Now().UnixNano()),
-		Image:    tag,
-		Mounts:   []infra.Mount{{Kind: infra.KindTmpfs, Container: "/tmp"}},
-		Env:      map[string]string{"FABER_RUN_UID": "1000", "FABER_RUN_GID": "1000", "HOME": "/tmp"},
-		Bindings: c.Args,
-		Attach:   c.Attach,
-		Stdout:   &stdout,
-		// The entry runs as root (no --user); the dropped user is what the
-		// relay gives the socket to, so the script drops the same way. Entry
-		// is an argv, so the script needs no shell quoting.
-		Entry: []string{"setpriv", "--reuid=1000", "--regid=1000", "--clear-groups", "bash", "-c", script},
-	}
-	res, err := infra.NewContainerRunner(docker, logger).Run(ctx, spec)
-	if err != nil || res.ExitCode != 0 {
-		t.Fatalf("box: exit %d err %v stderr %q stdout %q", res.ExitCode, err, res.Output, stdout.String())
+	stderr.Reset()
+	code, err := docker.Exec(ctx, name, []string{"setpriv", "--reuid=1000", "--regid=1000", "--clear-groups", "env", "HOME=/home/box", "bash", "-c", script}, nil, &stdout, &stderr)
+	if err != nil || code != 0 {
+		t.Fatalf("box: exit %d err %v stderr %q stdout %q", code, err, stderr.String(), stdout.String())
 	}
 	if got := strings.TrimSpace(stdout.String()); got != wantKey {
 		t.Fatalf("the box's agent lists %q, want the role key %q", got, wantKey)
 	}
-	if !strings.Contains(string(res.Output), "1000:1000 600") {
-		t.Fatalf("the socket is not the run user's 0600: %q", res.Output)
+	if !strings.Contains(stderr.String(), "1000:1000 600") {
+		t.Fatalf("the socket is not the run user's 0600: %q", stderr.String())
 	}
 }

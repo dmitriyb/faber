@@ -30,10 +30,10 @@ func Hold(ctx context.Context) int {
 // the frames' mtimes, links are recreated, every write goes through an
 // os.Root of its tree, and both trees are then chowned to the run user, so
 // the operator's exec — which drops to that user — owns what it finds. A
-// held box ran no preamble, so what the preamble would have chowned is
-// chowned here too: the workspace, /tmp, HOME, and the path from HOME down
-// to the sessions directory. It runs as root through docker exec, before
-// that exec.
+// held box ran no preamble, so what the preamble would have done for the
+// run user is done here too: its passwd and group entry, and the chown of
+// the workspace, /tmp, HOME, and the path from HOME down to the sessions
+// directory. It runs as root through docker exec, before that exec.
 func Receive(ctx context.Context, env *BoxEnv, in io.Reader, log *slog.Logger) error {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -45,6 +45,9 @@ func Receive(ctx context.Context, env *BoxEnv, in io.Reader, log *slog.Logger) e
 	}
 	if os.Getuid() != 0 || env.RunUID == 0 {
 		return nil
+	}
+	if err := ensureRunUser(etcDir, env.RunUID, env.RunGID); err != nil {
+		return fmt.Errorf("receive: run user: %w", err)
 	}
 	for _, dir := range r.touched() {
 		if err := chownTree(dir, env.RunUID, env.RunGID); err != nil {

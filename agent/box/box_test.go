@@ -1076,3 +1076,54 @@ func TestSecretsReservedNameRefused(t *testing.T) {
 		t.Fatal("the shadowing value must never enter the child environment")
 	}
 }
+
+// Verifies 93ba0858d75f (test scenario 25): the run user gets a passwd and
+// a group entry — what OpenSSH needs before it will talk to any agent and
+// what a toolset image never carries — appended to files that may not
+// exist, once: a second call adds nothing, and a uid or gid already present
+// is left alone.
+func TestEnsureRunUser(t *testing.T) {
+	etc := filepath.Join(t.TempDir(), "etc")
+	if err := ensureRunUser(etc, 1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) string {
+		raw, err := os.ReadFile(filepath.Join(etc, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if got := read("passwd"); got != "box:x:1000:1000:faber box:/home/box:/bin/sh\n" {
+		t.Fatalf("passwd = %q", got)
+	}
+	if got := read("group"); got != "box:x:1000:\n" {
+		t.Fatalf("group = %q", got)
+	}
+	if err := ensureRunUser(etc, 1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if got := read("passwd"); strings.Count(got, "\n") != 1 {
+		t.Fatalf("second call appended: %q", got)
+	}
+
+	// An image with users of its own: the entries are appended after them,
+	// on their own line, and an existing uid is respected.
+	etc2 := filepath.Join(t.TempDir(), "etc")
+	if err := os.MkdirAll(etc2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(etc2, "passwd"), []byte("root:x:0:0:root:/root:/bin/sh"), 0o644)
+	os.WriteFile(filepath.Join(etc2, "group"), []byte("root:x:0:\nusers:x:100:\n"), 0o644)
+	if err := ensureRunUser(etc2, 501, 100); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(etc2, "passwd"))
+	if got := string(raw); got != "root:x:0:0:root:/root:/bin/sh\nbox:x:501:100:faber box:/home/box:/bin/sh\n" {
+		t.Fatalf("passwd = %q", got)
+	}
+	raw, _ = os.ReadFile(filepath.Join(etc2, "group"))
+	if got := string(raw); got != "root:x:0:\nusers:x:100:\n" {
+		t.Fatalf("group with the gid present must be untouched, got %q", got)
+	}
+}

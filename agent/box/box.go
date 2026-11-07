@@ -20,11 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -190,12 +192,64 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 			return fail("chown "+b.Env.SecretsDir, err)
 		}
 	}
+	if err := ensureRunUser(etcDir, b.Env.RunUID, b.Env.RunGID); err != nil {
+		return fail("run user", err)
+	}
 	b.setEnv("HOME", contract.ContainerHome)
 	if err := dropTo(b.Env.RunUID, b.Env.RunGID); err != nil {
 		return fail("drop", err)
 	}
 	b.Log.InfoContext(ctx, "dropped to run user", "uid", b.Env.RunUID, "gid", b.Env.RunGID)
 	return nil
+}
+
+// etcDir is where the run user's passwd and group entries go; a variable so
+// the tests can point it at a scratch directory.
+var etcDir = "/etc"
+
+// ensureRunUser gives the run user a passwd and a group entry. A toolset
+// image carries no users (the uid is a run-time value and the image stays
+// generic), but OpenSSH looks the calling uid up before it does anything —
+// "No user exists for uid" — so the clone and the signing phase need the
+// entry. Appends to the files, creating them when absent; a uid or gid
+// already present is left alone (OpenSSH then takes `~` from that entry's
+// home: pinned mode names its known-hosts file explicitly, TOFU mode warns
+// and goes on). The shell field is unused by anything faber runs. Needs a
+// writable /etc, which every image has today. Root only, like its callers.
+func ensureRunUser(etc string, uid, gid int) error {
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		return err
+	}
+	group := fmt.Sprintf("box:x:%d:\n", gid)
+	if err := appendUnlessID(filepath.Join(etc, "group"), 2, strconv.Itoa(gid), group); err != nil {
+		return err
+	}
+	passwd := fmt.Sprintf("box:x:%d:%d:faber box:%s:/bin/sh\n", uid, gid, contract.ContainerHome)
+	return appendUnlessID(filepath.Join(etc, "passwd"), 2, strconv.Itoa(uid), passwd)
+}
+
+// appendUnlessID appends line to the colon-separated file at path unless a
+// line already carries id in the given field.
+func appendUnlessID(path string, field int, id, line string) error {
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, l := range strings.Split(string(existing), "\n") {
+		if f := strings.Split(l, ":"); len(f) > field && f[field] == id {
+			return nil
+		}
+	}
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		line = "\n" + line
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(line)
+	return err
 }
 
 // dropTo leaves root for uid:gid — setgroups to that one group, setgid,

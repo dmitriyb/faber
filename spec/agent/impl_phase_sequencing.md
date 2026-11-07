@@ -149,6 +149,7 @@ func (b *Box) enterRunUser() error {
             return fmt.Errorf("preamble: chown %s: %w", contract.ContainerSecretsDir, err)
         }
     }
+    if err := ensureRunUser(etcDir, b.Env.RunUID, b.Env.RunGID); err != nil { return err } // passwd + group entry: OpenSSH looks the uid up first
     b.setEnv("HOME", home) // b.Environ only — never os.Setenv (no-global-state policy)
     return dropTo(b.Env.RunUID, b.Env.RunGID) // setgroups {gid}, setgid, setuid (all-thread since Go 1.16); shared with the relay
 }
@@ -327,11 +328,13 @@ the usual plain-process override) and `sessions/` at `env.SessionsDir`
 (refusing `sessions/` when it is unset, and any other first segment), each
 tree behind an `os.Root` opened on first use so no frame can resolve outside
 it, writes each file through a temporary name, applies the frame's mtime,
-recreates links, and then — as root — chowns both trees to
+recreates links, and then — as root — gives the run user its passwd and
+group entry (`ensureRunUser`, as the preamble does) and chowns both trees to
 `env.RunUID:env.RunGID` plus what the preamble would have chowned and a held
 box lacks: the workspace, `/tmp`, `HOME`, and the components between `HOME`
 and the sessions directory (`holdChownPaths`), so the operator's exec, which
-drops to that user, owns what it finds and can write beside it. Foreign
+drops to that user, owns what it finds, can write beside it, and can use
+ssh. Foreign
 bytes on its stdin are a stream error: nothing but faber feeds it.
 
 `Relay` listens on `env.AgentSocket` (`SSH_AUTH_SOCK`; refused when empty),
