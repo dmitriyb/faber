@@ -59,11 +59,14 @@ walls), so hardening it is a preference, not a pillar.
 nothing. It is the same set in the same order with three members
 substituted and the fourth absent (`NewCheckBindingSet`): the network
 member contributes `--network none` whatever the config's section says —
-companion services go with it, by intent; the remote member serves a bare
-repository under the check's temporary directory, cloned on first use from
-the working directory's repository and bind mounted read-write at
-`/faber/remote`, so the box's one remote is a local path (no host-key
-policy applies to one) and its pushes land where nothing else looks; the
+companion services go with it, by intent; the remote member mounts the
+check's named volume (`faber-check-<id>-remote`) read-write at
+`/faber/remote` and, on a repository's first use, seeds it through a short
+container of the step's own image running `faber-box seed-remote <repo>`
+with a `git bundle` of the working directory's repository on its stdin —
+nothing of the host is mounted — so the box's one remote is a local path
+(no host-key policy applies to one) and its pushes land where nothing else
+looks; the
 identity member is the real IdentityBinding with every role resolved to one
 key generated for the check, in path form — neither the registry, the
 locator nor the operator's own keys are consulted, and commits are signed

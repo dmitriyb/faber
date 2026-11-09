@@ -61,4 +61,5 @@ type StepSpec struct {
 	Runtime      string // "" = platform default runtime
 	Repo         string // resolved repo input; "" = repo-less step
 	ScratchDir   string // per-attempt private dir, 0700
+	Image        string // the attempt's image tag; the check's remote seeding runs its container from it
 }

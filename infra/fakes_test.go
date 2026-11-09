@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,6 +31,8 @@ type fakeDocker struct {
 	execFn     func(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 	execStdins [][]byte // full contents of each Exec's stdin (nil when unattached)
 	runningFn  func(name string) (bool, error)
+	volumes    []string // VolumeList's answer, before the prefix check
+	removed    []string // VolumeRemove calls
 	termErr    error
 	killErr    error
 	killed     []string
@@ -137,6 +140,25 @@ func (f *fakeDocker) Kill(ctx context.Context, name string) error {
 	f.killed = append(f.killed, name)
 	f.mu.Unlock()
 	return f.killErr
+}
+
+func (f *fakeDocker) VolumeList(ctx context.Context, prefix string) ([]string, error) {
+	f.record("volume-list", prefix)
+	var out []string
+	for _, v := range f.volumes {
+		if strings.HasPrefix(v, prefix) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeDocker) VolumeRemove(ctx context.Context, name string) error {
+	f.record("volume-rm", name)
+	f.mu.Lock()
+	f.removed = append(f.removed, name)
+	f.mu.Unlock()
+	return nil
 }
 
 func (f *fakeDocker) Remove(ctx context.Context, name string) error {

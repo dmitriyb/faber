@@ -97,6 +97,16 @@ type BoxEnv struct {
 	// template declares no skills leg and the phase is a no-op.
 	SkillsLink string
 
+	// Volumes are the container mount points of the template's named
+	// volumes (FABER_VOLUMES): root-owned when docker creates one, so the
+	// preamble chowns each to the run user, non-recursively.
+	Volumes []string
+
+	// RemoteDir is where faber-box seed-remote writes a check run's bare
+	// repository (the check's volume at /faber/remote; overridable for
+	// plain-process tests).
+	RemoteDir string
+
 	// SessionsDir is the container path (under HOME) of the harness's
 	// session transcripts: shipped as sessions/<rel> frames at the end of
 	// the attempt, and the root faber-box receive writes a re-entry's
@@ -163,6 +173,7 @@ func ParseEnv(environ []string) *BoxEnv {
 		SecretsDir:       withDefault(get(contract.EnvSecretsDir), security.ContainerSecretsDir),
 		WorkspaceDir:     withDefault(get(contract.EnvWorkspaceDir), contract.ContainerWorkspace),
 		HandoffDir:       withDefault(get(contract.EnvHandoffDir), contract.ContainerHandoffDir),
+		RemoteDir:        withDefault(get(contract.EnvRemoteDir), contract.ContainerCheckRemote),
 		GitCache:         get(contract.EnvGitCache),
 		SkillsLink:       get(contract.EnvSkillsLink),
 		SessionsDir:      get(contract.EnvSessionsDir),
@@ -175,6 +186,11 @@ func ParseEnv(environ []string) *BoxEnv {
 		rawAgentOptional: get(contract.EnvAgentOptional),
 		rawCheck:         get(contract.EnvCheck),
 		rawInvoke:        get(contract.EnvInvokeProfile),
+	}
+	for _, p := range strings.Split(get(contract.EnvVolumes), ":") {
+		if p != "" {
+			env.Volumes = append(env.Volumes, p)
+		}
 	}
 	if raw := strings.TrimSpace(get(contract.EnvInputSlots)); raw != "" {
 		for _, name := range strings.Split(raw, ",") {

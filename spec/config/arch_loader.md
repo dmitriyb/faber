@@ -157,10 +157,14 @@ Structural, cross-reference, and vocabulary rules — all collected, none fatal-
   assembler's refusals: `run.env.FABER_AGENT_CLI` must name the agent CLI
   (faber defaults no vendor), template env may not claim engine- or
   security-owned names (`EngineOwnedEnv`, the shared rule), and template
-  volumes may not overlap the reserved container paths
-  (`ReservedContainerPaths` — asserted in agreement with the run-spec
-  assembler's own list by a cross-package test). A template that could not
-  launch any box fails `faber validate`, not each step at run time.
+  volumes are docker named volumes: the key must be a volume name
+  (`^[A-Za-z0-9][A-Za-z0-9_.-]*$`; a key starting with `/`, `.` or `~` is
+  refused as "host paths are not mounted; declare a named volume"), the
+  value an absolute container path with no `:` that does not overlap the
+  reserved container paths (`ReservedContainerPaths` — asserted in
+  agreement with the run-spec assembler's own list by a cross-package
+  test). A template that could not launch any box fails `faber validate`,
+  not each step at run time.
 
 Every violation is `fmt.Errorf("workflows.epic.steps[0].with.repo: <reason>")` —
 the field path is the contract, asserted by tests. Errors aggregate via

@@ -17,7 +17,8 @@ acceptance environment only.
 ## Scenarios
 
 1. **Golden argv.** A fully populated ContainerSpec (limits, every engine mount kind —
-   a template bind rw, a `/workspace` volume, a `/faber/result` and a `/tmp` tmpfs — three env keys, a `StdinSecrets`
+   a bind rw, a `/workspace` volume, a `/faber/result` and a `/tmp` tmpfs, a named volume
+   `faber-p-cache:/cache` — three env keys, a `StdinSecrets`
    payload, a representative binding fragment containing
    `--network`, a `--tmpfs /faber/agent`, `SSH_AUTH_SOCK`, proxy env, a
    `--tmpfs /run/secrets`, and `--runtime`) assembles to the golden argv
@@ -135,6 +136,12 @@ acceptance environment only.
     no exec. (Integration: `Running` is false for an absent container and
     true for a held box, in the structured-queries and hold-and-receive
     tests.)
+16. **Volume verbs.** The fake-backed `VolumeList` records `volume ls
+    --filter name=<prefix> --format {{json .Name}}` and keeps only the names
+    that start with the prefix out of what the daemon returned;
+    `VolumeRemove` records `volume rm <name>` and treats "No such volume" as
+    success. (Integration: a named volume written by one container is read
+    by the next, listed by its prefix, and gone after `VolumeRemove`.)
 
 ## Edge cases
 

@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -39,6 +41,7 @@ func fullRunSpec() ContainerSpec {
 			{Kind: KindVolume, Container: "/workspace"},
 			{Kind: KindTmpfs, Container: "/faber/result"},
 			{Kind: KindTmpfs, Container: "/tmp"},
+			{Kind: KindNamed, Name: "faber-p-cache", Container: "/cache"},
 		},
 		Env: map[string]string{
 			"FABER_STEP":   "impl",
@@ -74,6 +77,7 @@ func TestGoldenArgv(t *testing.T) {
 		"-v", "/workspace",
 		"--tmpfs", "/faber/result",
 		"--tmpfs", "/tmp",
+		"-v", "faber-p-cache:/cache",
 		"-e", "ANSWER=42",
 		"-e", "FABER_RESULT=/result/result.json",
 		"-e", "FABER_STEP=impl",
@@ -687,5 +691,44 @@ func TestParseJSONBool(t *testing.T) {
 	}
 	if _, err := parseJSONBool([]byte(`"running"`)); err == nil {
 		t.Fatal("a non-boolean must not parse")
+	}
+}
+
+// Verifies b8db21752444 (test scenario 16): the volume verbs' argv and
+// parsing, against a docker stand-in on PATH that records its arguments —
+// the list keeps only the names under the prefix out of what the daemon
+// returned, and removing an absent volume is success.
+func TestVolumeVerbs(t *testing.T) {
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\n" +
+		"echo \"$@\" >> " + calls + "\n" +
+		"case \"$1 $2\" in\n" +
+		"  'volume ls') printf '%s\\n' '\"faber-p-cache\"' '\"faber-p-models\"' '\"faber-pother-x\"' ;;\n" +
+		"  'volume rm') if [ \"$3\" = absent ]; then echo 'Error response from daemon: get absent: no such volume' >&2; exit 1; fi; echo \"$3\" ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	docker := NewDockerCLI(testLogger())
+
+	names, err := docker.VolumeList(context.Background(), "faber-p-")
+	if err != nil {
+		t.Fatalf("VolumeList: %v", err)
+	}
+	if !slices.Equal(names, []string{"faber-p-cache", "faber-p-models"}) {
+		t.Fatalf("names = %q, want the two under the prefix only", names)
+	}
+	if err := docker.VolumeRemove(context.Background(), "faber-p-cache"); err != nil {
+		t.Fatalf("VolumeRemove: %v", err)
+	}
+	if err := docker.VolumeRemove(context.Background(), "absent"); err != nil {
+		t.Fatalf("removing an absent volume must be success, got %v", err)
+	}
+	raw, _ := os.ReadFile(calls)
+	want := "volume ls --filter name=faber-p- --format {{json .Name}}\nvolume rm faber-p-cache\nvolume rm absent\n"
+	if string(raw) != want {
+		t.Fatalf("docker calls:\n%s\nwant:\n%s", raw, want)
 	}
 }

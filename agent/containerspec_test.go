@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,7 +26,7 @@ func testTemplate() *config.ResolvedTemplate {
 			"verdict": {Type: "string", Required: true, Enum: []string{"ok", "changes"}},
 		},
 		Env:     map[string]string{"TOOL_HOME": "/opt/tool"},
-		Volumes: map[string]string{"/host/cache": "/cache"},
+		Volumes: map[string]string{"cache": "/cache"},
 	}
 }
 
@@ -38,6 +39,7 @@ func validSpec() BoxSpec {
 		Image:    "faber/tpl-a:abc",
 		Inputs:   map[string]string{"alpha": "v1"},
 		AgentCLI: "agent-cli",
+		Project:  "p1",
 	}
 }
 
@@ -81,6 +83,8 @@ func TestBuildContainerSpecContract(t *testing.T) {
 			mounts = append(mounts, "tmpfs:"+m.Container)
 		case infra.KindVolume:
 			mounts = append(mounts, "vol:"+m.Container)
+		case infra.KindNamed:
+			mounts = append(mounts, "named:"+m.Name+":"+m.Container)
 		default:
 			ro := ""
 			if m.ReadOnly {
@@ -95,7 +99,7 @@ func TestBuildContainerSpecContract(t *testing.T) {
 		"tmpfs:" + contract.ContainerBundleDir,
 		"tmpfs:/tmp",
 		"tmpfs:" + contract.ContainerHome,
-		"/host/cache:/cache",
+		"named:faber-p1-cache:/cache",
 	}
 	if fmt.Sprint(mounts) != fmt.Sprint(want) {
 		t.Errorf("mounts = %v, want %v", mounts, want)
@@ -383,16 +387,61 @@ func TestBuildContainerSpecRejectsShadowingVolumes(t *testing.T) {
 	for _, container := range bad {
 		t.Run(container, func(t *testing.T) {
 			spec := validSpec()
-			spec.Template.Volumes = map[string]string{"/host/x": container}
+			spec.Template.Volumes = map[string]string{"x": container}
 			if _, err := BuildContainerSpec(spec); err == nil || !strings.Contains(err.Error(), "reserved container path") {
 				t.Fatalf("volume %q: err = %v, want reserved-path violation", container, err)
 			}
 		})
 	}
 	spec := validSpec()
-	spec.Template.Volumes = map[string]string{"/host/cache": "/cache"}
+	spec.Template.Volumes = map[string]string{"cache": "/cache"}
 	if _, err := BuildContainerSpec(spec); err != nil {
 		t.Fatalf("a non-reserved volume must pass: %v", err)
+	}
+}
+
+// Verifies 93ba0858d75f: a template's volumes are docker named volumes
+// under the project's prefix — no host path — and the box is told their
+// mount points so the preamble can chown them; a template with volumes but
+// no project to name them by is refused.
+func TestBuildContainerSpecNamedVolumes(t *testing.T) {
+	spec := validSpec()
+	spec.Template.Volumes = map[string]string{"models": "/models", "cache": "/cache"}
+	rs, err := BuildContainerSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var named []infra.Mount
+	for _, m := range rs.Mounts {
+		if m.Kind == infra.KindBind {
+			t.Fatalf("a host bind reached the spec: %+v", m)
+		}
+		if m.Kind == infra.KindNamed {
+			named = append(named, m)
+		}
+	}
+	want := []infra.Mount{
+		{Kind: infra.KindNamed, Name: "faber-p1-cache", Container: "/cache"},
+		{Kind: infra.KindNamed, Name: "faber-p1-models", Container: "/models"},
+	}
+	if !slices.Equal(named, want) {
+		t.Fatalf("named mounts = %+v, want %+v", named, want)
+	}
+	if got := rs.Env[contract.EnvVolumes]; got != "/cache:/models" {
+		t.Fatalf("%s = %q", contract.EnvVolumes, got)
+	}
+
+	spec.Project = ""
+	if _, err := BuildContainerSpec(spec); err == nil || !strings.Contains(err.Error(), "project id") {
+		t.Fatalf("volumes without a project: %v", err)
+	}
+	spec.Template.Volumes = nil
+	rs, err = BuildContainerSpec(spec)
+	if err != nil {
+		t.Fatalf("no volumes needs no project: %v", err)
+	}
+	if _, ok := rs.Env[contract.EnvVolumes]; ok {
+		t.Fatalf("%s set with no volumes", contract.EnvVolumes)
 	}
 }
 

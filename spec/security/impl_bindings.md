@@ -174,19 +174,33 @@ when the container ends.
 ```go
 const ContainerCheckRemote = "/faber/remote"
 
-func NewCheckBindingSet(identity *IdentityBinding, remoteDir, sourceRepo, keyPath string,
-    runner infra.CommandRunner, logger *slog.Logger) *BindingSet
+// Seeder is the slice of infra.ContainerRunner the check remote seeds through.
+type Seeder interface { Run(ctx context.Context, spec infra.ContainerSpec) (infra.ContainerResult, error) }
+
+func NewCheckBindingSet(identity *IdentityBinding, volume, sourceRepo, keyPath string,
+    seeder Seeder, runner infra.CommandRunner, logger *slog.Logger) *BindingSet
 // bindings: noNetworkBinding{}, &checkRemoteBinding{...}, &checkIdentityBinding{inner, key}, runtimeBinding{}
 ```
 
 - `noNetworkBinding` (name `network`): `--network none`, always.
 - `checkRemoteBinding` (name `remote`): nothing for a repo-less step; else
-  `checkRepoShape`, then `<remoteDir>/<repo>.git` cloned once under a mutex
-  (`git clone --bare --quiet <sourceRepo> <bare>` through the command
-  runner; a missing `sourceRepo` — no repository in the working directory —
-  fails the step before launch, saying so), contributing
-  `-v <remoteDir>:/faber/remote` and `-e FABER_REMOTE_URL=/faber/remote/<repo>.git`.
-  No host-key material.
+  `checkRepoShape`, then the repository seeded once per name under a mutex:
+  `git -C <sourceRepo> bundle create --quiet <tempfile> --all` through the
+  command runner into a temporary file (not the runner's stdout, which is
+  bounded for data-source commands; a repository with no commit cannot be
+  bundled and fails here; a missing `sourceRepo` — no repository in the
+  working directory — fails the step before launch, saying so), its bytes as
+  the stdin of a seed container the `Seeder` runs — `ContainerSpec{Name:
+  faber-check-seed-<repo with / as ->-<nanos>, Image: step.Image, Mounts:
+  [{KindNamed, volume, /faber/remote}], Env: {FABER_RUN_UID, FABER_RUN_GID},
+  Bindings: [--network none, --runtime=<step.Runtime> when set],
+  StdinSecrets: bundle, Entry: [/faber/bin/faber-box, seed-remote, <repo>]}`
+  — a check container like the step's own; a non-zero exit fails the step
+  naming its stderr tail; then contributing
+  `-v <volume>:/faber/remote` and `-e FABER_REMOTE_URL=/faber/remote/<repo>.git`.
+  `StepSpec.Image` (the attempt's tag, filled by the pipeline and re-entry)
+  is what the seed container runs; `StdinSecrets` here is only the runner's
+  stdin stream, no secret rides it. No host-key material.
 - `checkIdentityBinding` (name `identity`): nothing when the template
   declares no identity; else the inner binding's Prepare with
   `Identity = {Key: keyPath}` and an empty role — path form, one agent

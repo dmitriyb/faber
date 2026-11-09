@@ -19,10 +19,13 @@ user-filled phases, 10 is the container-boundary phase. Each phase either
 completes or the box fail-stops — no phase ever runs after a failed one.
 
 0. **Privileged preamble (drop to the run user).** The container starts as root
-   because the writable mounts arrive root-owned: a fresh `/workspace` volume
-   and the tmpfs writables (`/faber/result`, `/faber/bundle`, `/tmp`, `HOME`)
-   are created by the daemon owned by root. Before any other phase, `faber-box`
-   `chown`s exactly those writable mounts to `FABER_RUN_UID:FABER_RUN_GID`
+   because the writable mounts arrive root-owned: a fresh `/workspace` volume,
+   the tmpfs writables (`/faber/result`, `/faber/bundle`, `/tmp`, `HOME`) and,
+   on its first use, a template's named volume are created by the daemon
+   owned by root. Before any other phase, `faber-box` `chown`s exactly those
+   writable mounts — the named volumes' mount points as listed in
+   `FABER_VOLUMES`, non-recursively, since what an earlier run wrote inside
+   belongs to whoever wrote it — to `FABER_RUN_UID:FABER_RUN_GID`
    (the uid:gid the box runs as inside the container; nothing host-owned is
    shared with it, so the value is a container-namespace id and nothing
    more), then drops privileges —
@@ -121,8 +124,9 @@ completes or the box fail-stops — no phase ever runs after a failed one.
    *Shared object cache (the large-repo seam).* A cross-container git worktree
    is rejected: a shared `.git` is mutable state shared between untrusted
    sandboxes, which breaks the step-as-lambda isolation and git's own
-   single-writer assumption. Instead, when a read-only git object cache is bound
-   as a pre-warmed `Volumes` entry (`FABER_GIT_CACHE` points at its mount), the
+   single-writer assumption. Instead, when a read-only git object cache rides
+   in a pre-warmed named volume of the template (`run.volumes`;
+   `FABER_GIT_CACHE` points at its mount), the
    clone adds `--reference-if-able <cache>`: each box keeps its own isolated
    `.git` and working tree but borrows objects (the bulk — history) from the
    shared cache via alternates, so N parallel boxes pay N× only for the working
@@ -253,9 +257,9 @@ and exits nonzero. The handoff is shipped with everything else precisely so
 that container removal cannot lose it; the interactive recovery mode
 reconstructs the box from it.
 
-## The three other entries
+## The four other entries
 
-The same binary has three small entries, none of which runs a phase. Two
+The same binary has four small entries, none of which runs a phase. Two
 belong to the interactive recovery mode. `faber-box hold` waits for a termination
 signal and exits: it is the entry of a reconstructed box that the operator
 enters through `docker exec`, so the container exists without a shell of its
@@ -283,6 +287,17 @@ stays request–reply aligned for the host's agent server. A client sending a
 malformed length is disconnected alone; EOF on stdin ends the relay; the
 exec ends with the container. Nothing but length-checked bytes crosses it,
 so no key material enters the box through it either.
+
+`faber-box seed-remote <repo>` fills a check run's remote volume. The host
+runs it in a short container of the step's own image with the volume at
+`/faber/remote` and a `git bundle` of the working directory's repository on
+its stdin. As root it writes the bundle to a file under the volume, clones
+it bare with the image's git into a temporary directory beside it, renames
+that to `<repo>.git` — a rename onto an existing, non-empty directory
+fails, so a repository already there is left alone and two seeders can
+never interleave — chowns the tree to `FABER_RUN_UID:FABER_RUN_GID` and
+removes the bundle. It exits 0 whenever the repository exists afterwards,
+whoever made it, so a repeated seeding costs one clone and changes nothing.
 
 ## What it never does
 

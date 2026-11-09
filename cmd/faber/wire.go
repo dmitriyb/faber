@@ -94,10 +94,23 @@ func wireDeps(stdout, stderr io.Writer) (config.Deps, error) {
 		Runs:      store,
 		Executor:  &wiredExecutor{stdout: stdout, stderr: stderr, docker: docker, builder: builder, store: store, host: hc},
 		Registry:  registryController{},
+		Volumes:   volumeController{docker: docker},
 		BuildInfo: config.BuildInfo{Version: version, Commit: commit, Date: date},
 		Installer: config.EmbeddedInstaller{},
 		BoxBinary: boxBinary(hc),
 	}, nil
+}
+
+// volumeController adapts the docker adapter's two volume verbs to the
+// config CLI's VolumeController seam; the project prefix is config's.
+type volumeController struct{ docker infra.DockerClient }
+
+func (v volumeController) ListVolumes(ctx context.Context, prefix string) ([]string, error) {
+	return v.docker.VolumeList(ctx, prefix)
+}
+
+func (v volumeController) RemoveVolume(ctx context.Context, name string) error {
+	return v.docker.VolumeRemove(ctx, name)
 }
 
 // registryController adapts the security RoleRegistry to the config CLI's
@@ -171,6 +184,9 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 
 	identityBinding := security.NewIdentityBinding(security.NewAgentController(logger), logger)
 	identityBinding.Exec = w.docker
+	// A project's named volumes are faber-<project>-<name>; a check run gets
+	// its own prefix, so its hooks never touch the project's volumes.
+	project := config.ProjectID(opts.ConfigPath)
 	var bindings, reentryBindings *security.BindingSet
 	reg := security.Registry{}
 	store := w.store
@@ -179,13 +195,14 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 	// its journal out of the run store: nothing it does is a run of record.
 	var sandbox *checkSandbox
 	if opts.Check {
-		sb, err := newCheckSandbox(ctx, opts.Keep, w.stderr, logger)
+		sb, err := newCheckSandbox(ctx, w.docker, opts.Keep, w.stderr, logger)
 		if err != nil {
 			return err
 		}
 		defer sb.close()
 		sandbox = sb
-		bindings = security.NewCheckBindingSet(identityBinding, sb.remoteDir, sb.source, sb.key, infra.NewCommandRunner(logger), logger)
+		project = sb.project
+		bindings = security.NewCheckBindingSet(identityBinding, sb.volume, sb.source, sb.key, infra.NewContainerRunner(w.docker, logger), infra.NewCommandRunner(logger), logger)
 		store = failure.NewStore(filepath.Join(sb.dir, "runs"), logger)
 		services = nil
 	} else {
@@ -258,6 +275,7 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			Services:      services,
 			GitIdentities: gitIdentities,
 			Check:         opts.Check,
+			Project:       project,
 			Log:           logger,
 		},
 		Hooks:      &failure.ExecHookRunner{Log: logger},
@@ -282,6 +300,7 @@ func (w *wiredExecutor) Execute(ctx context.Context, ir *config.IR, params confi
 			Network:     network,
 			Remote:      remote,
 			Identities:  cfg.Identities,
+			Project:     project,
 		}
 	}
 	// The progress stream is the operator surface, on stderr beside (not

@@ -41,13 +41,16 @@ const (
     KindBind   MountKind = iota // -v Host:Container[:ro]  — host bind
     KindVolume                  // -v Container[:ro]       — anonymous volume, disk-backed, --rm-discarded
     KindTmpfs                   // --tmpfs Container        — RAM
+    KindNamed                   // -v Name:Container[:ro]  — docker named volume, created by the daemon on first use, kept across runs
 )
 
-// Mount is one engine mount. Host is set only for KindBind; ReadOnly applies to
-// bind and volume (a tmpfs is always writable — it is the box's own scratch).
+// Mount is one engine mount. Host is set only for KindBind, Name only for
+// KindNamed; ReadOnly applies to bind and volume (a tmpfs is always writable —
+// it is the box's own scratch).
 type Mount struct {
     Kind            MountKind
     Host, Container string
+    Name            string
     ReadOnly        bool
 }
 
@@ -97,6 +100,10 @@ func buildArgs(spec ContainerSpec) []string {
             v := m.Container
             if m.ReadOnly { v += ":ro" }
             args = append(args, "-v", v)
+        case KindNamed:
+            v := m.Name + ":" + m.Container
+            if m.ReadOnly { v += ":ro" }
+            args = append(args, "-v", v)
         default: // KindBind
             v := m.Host + ":" + m.Container
             if m.ReadOnly { v += ":ro" }
@@ -118,8 +125,10 @@ binding fragment's internal order is BindingSet's contract, preserved
 byte-for-byte. The lone `-i` flag is emitted only when `StdinSecrets` is
 non-empty and sits right after `--rm`, so its presence is a pure function of the
 spec too. The engine mounts a spec carries are the
-disk-backed `/workspace` volume and the tmpfs writables (`/faber/result`,
-`/faber/bundle`, `/tmp`, `HOME`) — no host bind at all; everything else — the agent
+disk-backed `/workspace` volume, the tmpfs writables (`/faber/result`,
+`/faber/bundle`, `/tmp`, `HOME`) and the template's named volumes (`-v
+faber-<project>-<name>:<path>`, a docker volume the daemon creates on first
+use and keeps across runs) — no host bind at all; everything else — the agent
 tmpfs (`--tmpfs /faber/agent`), the secrets tmpfs (`--tmpfs /run/secrets`), cache volume, `--network`,
 `--runtime` — arrives inside `Bindings`. The file-mode token is not a mount at
 all: it rides `StdinSecrets` on the container's stdin, and faber-box writes it
@@ -139,8 +148,8 @@ would sever the result channel or substitute the engine's mounts); the
 config Loader mirrors both refusals at validate time from the same shared
 vocabulary. `Run` itself enforces two floors: a relative bind host is
 refused (docker would read it as a NAMED VOLUME and silently detach the
-mount — absolutizing is the wiring's job; the engine itself emits no bind,
-the floor guards template volumes until they become named volumes), and any stale holder of the
+mount — absolutizing is the wiring's job; the engine emits no bind and
+template volumes are named volumes, so the floor is defense in depth), and any stale holder of the
 deterministic container name is force-removed before launch (a crashed
 process's abandoned container both blocks the name and keeps writing into
 its orphaned attempt dir).

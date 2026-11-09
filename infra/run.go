@@ -88,13 +88,16 @@ const (
 	KindBind   MountKind = iota // -v Host:Container[:ro]  — host bind
 	KindVolume                  // -v Container[:ro]       — anonymous volume, disk-backed, --rm-discarded
 	KindTmpfs                   // --tmpfs Container        — RAM
+	KindNamed                   // -v Name:Container[:ro]  — docker named volume, created by the daemon on first use, kept across runs
 )
 
-// Mount is one engine mount. Host is set only for KindBind; ReadOnly applies to
-// bind and volume (a tmpfs is always writable — the box's own scratch).
+// Mount is one engine mount. Host is set only for KindBind, Name only for
+// KindNamed; ReadOnly applies to bind and volume (a tmpfs is always writable
+// — the box's own scratch).
 type Mount struct {
 	Kind            MountKind
 	Host, Container string
+	Name            string
 	ReadOnly        bool
 }
 
@@ -316,6 +319,12 @@ func buildArgs(spec ContainerSpec) []string {
 			args = append(args, "--tmpfs", m.Container)
 		case KindVolume:
 			v := m.Container
+			if m.ReadOnly {
+				v += ":ro"
+			}
+			args = append(args, "-v", v)
+		case KindNamed:
+			v := m.Name + ":" + m.Container
 			if m.ReadOnly {
 				v += ":ro"
 			}

@@ -64,6 +64,7 @@ Two base-URL overrides (`FABER_API_BASE`/`FABER_DL_BASE`) exist solely so the fa
 
 `goreleaser release --clean` (invoked via `goreleaser/goreleaser-action`) creates the GitHub release itself from the `v*` tag and uploads the six archives, `checksums.txt`, and the six `.sig` files.
 `release.prerelease: auto` in `.goreleaser.yaml` marks a tag containing a pre-release suffix (e.g. `v0.1.1-rc.1`) as a GitHub pre-release automatically — no separate `workflow_dispatch` input to remember to set.
+The release body is `docs/release-notes/<tag>.md`: written in operator terms in the pull request that completes the release, so it is reviewed with the change it describes, and pasted by the operator when the tag's release is published (GoReleaser's generated changelog stays beneath it).
 
 ## Per-artifact checksums
 

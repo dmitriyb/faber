@@ -222,7 +222,7 @@ TemplateDef  (named-reference form)
 ├── AgentOptional bool             agent_optional: the template's prelude may skip the agent (FABER_SKIP_AGENT=1 in bundle.env); default false — the agent runs
 ├── Invoke    *InvokeDef           invoke: {profile: <name>, …inline overrides} — the agent-CLI dialect; absent ⇒ built-in default
 ├── Hooks     HookSet              {context, prelude, postlude, on_failure} — each a ref → Hooks
-├── Run       RunDef               resources, runtime, env, volumes (+ Identity, back-compat)
+├── Run       RunDef               resources, runtime, env, volumes {<name>: /container/path} — docker named volumes, faber-<project>-<name> (+ Identity, back-compat)
 ├── Inputs    map[string]ParamDef  typed slots
 └── Output    map[string]FieldDef  typed output schema (validated at the boundary)
 ```

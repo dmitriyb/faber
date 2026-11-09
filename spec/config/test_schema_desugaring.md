@@ -150,6 +150,13 @@ code; these are the module-level behaviors that must hold.)
     differs, and changes when a body step is renamed; an IR without
     expectations carries no `loops` key.
 
+15. **Named volumes.** A template `run.volumes: {cache: /cache}` validates
+    and reaches the IR unchanged. A key `/host/cache`, `./cache` or
+    `~/cache` is refused at `run.volumes.<key>` as "host paths are not
+    mounted; declare a named volume"; a key `bad name` fails the volume
+    name charset; a value `cache` (relative) or `/a:b` (a colon) is refused;
+    a value under a reserved path keeps its reserved-path refusal.
+
 ## Edge cases
 
 - Empty `steps:` — Loader error, not a desugar panic.

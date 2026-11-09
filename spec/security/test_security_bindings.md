@@ -141,6 +141,21 @@ skip otherwise.
     with no exec seam fails the attach naming it. `Assembled.Attach`
     runs every contributed attach and joins their errors, and a set with no
     attaching binding yields a nil `Attach`.
+17. **Check remote seeded once.** With a fake seeder recording specs and a
+    fake command runner answering `git bundle` with fixed bytes: the first
+    repo-bound step of `sandbox` runs one seed container — the step's
+    image, one named mount of the check volume at `/faber/remote`, the run
+    uid and gid in its env, `--network none` and the step's `--runtime=` as
+    its bindings, the bundle bytes (read from the file `git bundle create`
+    was given, removed afterwards) as its stdin, the entry
+    `/faber/bin/faber-box seed-remote sandbox` — and contributes `-v
+    <volume>:/faber/remote` and the remote URL; a second step of the same
+    repository runs no seed container; a step of `acme/widgets` runs one
+    more, the slash kept in the entry and turned into a dash in the
+    container name; a seed container exiting non-zero fails the step before
+    launch naming its stderr; a repo-bound step with no repository in the
+    working directory fails before any seed, saying so; a repo-less step
+    contributes nothing.
 
 ## Edge cases
 

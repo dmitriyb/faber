@@ -48,6 +48,7 @@ templates:
       resources: {memory: 8g, cpus: 4}
       runtime: runsc                  # optional: switch container runtime (e.g. gVisor)
       env: {FABER_AGENT_CLI: claude}  # which agent binary the box invokes (required; no vendor default)
+      volumes: {cache: /cache}        # optional: docker named volumes, faber-<project>-<name> on the daemon, kept across runs; host paths are refused
     skill: implement                  # the /<skill> prompt token
     model: claude-sonnet-5            # agent model, passed through via the profile's model flag (required; no vendor default)
     effort: high                      # agent effort level, passed through via the profile's effort flag (required)

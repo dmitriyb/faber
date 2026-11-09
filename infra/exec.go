@@ -50,6 +50,10 @@ type DockerClient interface {
 	// Remove force-removes a container by name (docker rm -f), running or
 	// stopped; an absent container is success, so eviction is idempotent.
 	Remove(ctx context.Context, name string) error
+	// VolumeList returns the named volumes whose names start with prefix.
+	VolumeList(ctx context.Context, prefix string) ([]string, error)
+	// VolumeRemove removes a named volume; an absent one is success.
+	VolumeRemove(ctx context.Context, name string) error
 }
 
 // Execer is the slice of DockerClient a companion of a running container

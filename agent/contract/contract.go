@@ -115,6 +115,22 @@ const (
 	// when set, the clone borrows objects via --reference-if-able. Empty = none.
 	EnvGitCache = "FABER_GIT_CACHE"
 
+	// EnvVolumes lists the container mount points of the template's named
+	// volumes, colon-separated: docker creates a volume root-owned on first
+	// use, so the preamble chowns each mount point to the run user. Empty =
+	// none.
+	EnvVolumes = "FABER_VOLUMES"
+
+	// EnvRemoteDir overrides the check remote's directory for faber-box
+	// seed-remote (the default is ContainerCheckRemote); plain-process tests
+	// point it at a scratch directory, as the other directory overrides do.
+	EnvRemoteDir = "FABER_REMOTE_DIR"
+
+	// ContainerCheckRemote is where a check run's remote volume is mounted:
+	// the bare repository the box's one remote names lives under it. The
+	// security module owns the mount; the seed verb writes there.
+	ContainerCheckRemote = "/faber/remote"
+
 	// EnvSkillsLink is the $HOME-relative path the skills phase symlinks to the
 	// baked skills tree (ContainerSkillsDir). Opaque agent-specific config;
 	// absent means the template declares no skills leg and the phase is a no-op.

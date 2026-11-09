@@ -75,6 +75,11 @@ type BoxSpec struct {
 	// a plain full clone.
 	GitCache string
 
+	// Project is the config.ProjectID the template's named volumes are
+	// prefixed with (faber-<project>-<name>); required when the template
+	// declares any.
+	Project string
+
 	// Sessions turns transcript capture on: the box is told the container
 	// path of the profile's session_dir (FABER_SESSIONS_DIR) and ships
 	// everything under it to the host when the step ends. Set by the pipeline
@@ -151,10 +156,13 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 	// Template volumes may never shadow an engine mount or a binding mount —
 	// docker's last-mount-wins would sever the result channel or substitute
 	// hooks, secrets, or the agent socket.
-	for _, host := range slices.Sorted(maps.Keys(tpl.Volumes)) {
-		if r := reservedMountConflict(tpl.Volumes[host]); r != "" {
-			errs = append(errs, fmt.Errorf("template volume %q -> %q: overlaps the reserved container path %q", host, tpl.Volumes[host], r))
+	for _, name := range slices.Sorted(maps.Keys(tpl.Volumes)) {
+		if r := reservedMountConflict(tpl.Volumes[name]); r != "" {
+			errs = append(errs, fmt.Errorf("template volume %q -> %q: overlaps the reserved container path %q", name, tpl.Volumes[name], r))
 		}
+	}
+	if len(tpl.Volumes) > 0 && spec.Project == "" {
+		errs = append(errs, errors.New("template volumes need a project id to be named by"))
 	}
 
 	for _, slot := range slices.Sorted(maps.Keys(spec.Inputs)) {
@@ -220,6 +228,9 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 	setIf(contract.EnvGitEmail, spec.GitEmail)
 	setIf(contract.EnvGitCache, spec.GitCache)
 	setIf(contract.EnvSkillsLink, spec.SkillsLink)
+	if paths := volumePaths(tpl); len(paths) > 0 {
+		env[contract.EnvVolumes] = strings.Join(paths, ":")
+	}
 	setIf(contract.EnvSessionsDir, sessionsContainer)
 	if tpl.AgentOptional {
 		env[contract.EnvAgentOptional] = "1"
@@ -250,8 +261,10 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 		{Kind: infra.KindTmpfs, Container: "/tmp"},
 		{Kind: infra.KindTmpfs, Container: contract.ContainerHome},
 	}
-	for _, host := range slices.Sorted(maps.Keys(tpl.Volumes)) {
-		mounts = append(mounts, infra.Mount{Host: host, Container: tpl.Volumes[host]})
+	// A template's volumes are docker named volumes under the project's
+	// prefix: no host path, the daemon creates them on first use.
+	for _, name := range slices.Sorted(maps.Keys(tpl.Volumes)) {
+		mounts = append(mounts, infra.Mount{Kind: infra.KindNamed, Name: config.VolumeName(spec.Project, name), Container: tpl.Volumes[name]})
 	}
 
 	return infra.ContainerSpec{
@@ -262,6 +275,16 @@ func BuildContainerSpec(spec BoxSpec) (infra.ContainerSpec, error) {
 		Env:       env,
 		Entry:     []string{contract.ContainerEntry},
 	}, nil
+}
+
+// volumePaths lists the template's volume mount points in name order, the
+// order the mounts are emitted in.
+func volumePaths(tpl *config.ResolvedTemplate) []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(tpl.Volumes)) {
+		out = append(out, tpl.Volumes[name])
+	}
+	return out
 }
 
 // reservedContainerPaths are the container paths owned by the box run

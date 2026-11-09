@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -206,5 +207,66 @@ cut -d' ' -f1,2 /tmp/keys`
 	}
 	if !strings.Contains(stderr.String(), "1000:1000 600") {
 		t.Fatalf("the socket is not the run user's 0600: %q", stderr.String())
+	}
+}
+
+// Verifies fb62c46ab1c1 on a real machine: the check remote binding seeds
+// its named volume through `faber-box seed-remote` in a container of the
+// step's image, from a bundle of this repository, and a box of that image
+// finds the bare repository at the remote URL with this checkout's HEAD,
+// owned by the run user.
+func TestRealinfra_CheckRemoteSeed(t *testing.T) {
+	requireBinaries(t, "git", "docker", "nix")
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	top, err := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Skipf("not in a git repository: %v", err)
+	}
+	source := strings.TrimSpace(string(top))
+	head, err := exec.CommandContext(ctx, "git", "-C", source, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	docker := infra.NewDockerCLI(logger)
+	builder := infra.NewImageBuilder(docker, infra.NewNixCLI(logger), infra.DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
+	// bash for the two-command entry (a nix image has no sh otherwise),
+	// util-linux for setpriv: the read runs as the run user, as the box's
+	// clone does — git refuses a repository owned by someone else.
+	tag, err := builder.Build(ctx, "realinfra-seed", config.BuildDef{Packages: []string{"bash", "coreutils", "git", "util-linux"}}, infra.ImageInputs{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	volume := fmt.Sprintf("faber-check-realinfra-%d-remote", time.Now().UnixNano())
+	defer docker.VolumeRemove(context.WithoutCancel(ctx), volume)
+	runner := infra.NewContainerRunner(docker, logger)
+	set := NewCheckBindingSet(NewIdentityBinding(NewAgentController(logger), logger), volume, source, "", runner, infra.NewCommandRunner(logger), logger)
+	defer set.Close(context.WithoutCancel(ctx))
+	a, err := set.Prepare(ctx, StepSpec{NodeID: "seed", Repo: "faber", Image: tag, ScratchDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	defer a.Teardown(context.WithoutCancel(ctx))
+	if !strings.Contains(strings.Join(a.Args, " "), "-v "+volume+":"+ContainerCheckRemote) {
+		t.Fatalf("fragment lacks the volume: %q", a.Args)
+	}
+
+	var stdout bytes.Buffer
+	res, err := runner.Run(ctx, infra.ContainerSpec{
+		Name:     fmt.Sprintf("faber-realinfra-seedread-%d", time.Now().UnixNano()),
+		Image:    tag,
+		Bindings: a.Args[2:], // the remote member's tokens: the volume and the URL; no network member needed here
+		Stdout:   &stdout,
+		Entry: []string{"setpriv", "--reuid=" + strconv.Itoa(os.Getuid()), "--regid=" + strconv.Itoa(os.Getgid()), "--clear-groups", "env", "HOME=/tmp",
+			"bash", "-c", "git -C /faber/remote/faber.git rev-parse HEAD && stat -c %u /faber/remote/faber.git"},
+	})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("read: exit %d err %v stderr %q stdout %q", res.ExitCode, err, res.Output, stdout.String())
+	}
+	lines := strings.Fields(stdout.String())
+	if len(lines) != 2 || lines[0] != strings.TrimSpace(string(head)) || lines[1] != strconv.Itoa(os.Getuid()) {
+		t.Fatalf("seeded repository: %q, want HEAD %s owned by %d", stdout.String(), strings.TrimSpace(string(head)), os.Getuid())
 	}
 }

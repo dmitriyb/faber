@@ -61,6 +61,9 @@ type Reentry struct {
 	Network    *config.NetworkDef
 	Remote     *config.RemoteDef
 	Identities map[string]config.IdentityDef
+
+	// Project prefixes the template's named volumes, as AgentBoxes'.
+	Project string
 }
 
 var _ failure.BoxReentry = (*Reentry)(nil)
@@ -129,6 +132,7 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		SkillsLink: skillsLink(node.Template),
 		Model:      node.Template.Model,
 		Effort:     node.Template.Effort,
+		Project:    r.Project,
 	})
 	if err != nil {
 		return err
@@ -155,6 +159,7 @@ func (r *Reentry) Reenter(ctx context.Context, t failure.InteractiveTarget) erro
 		Runtime:      node.Template.Runtime,
 		Repo:         inputs["repo"],
 		ScratchDir:   scratchDir,
+		Image:        tag,
 	})
 	if err != nil {
 		return err

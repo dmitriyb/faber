@@ -15,6 +15,8 @@ type DockerClient interface {
     Running(ctx context.Context, name string) (bool, error) // docker container inspect --format '{{json .State.Running}}'; absent = false
     Kill(ctx context.Context, name string) error
     Remove(ctx context.Context, name string) error
+    VolumeList(ctx context.Context, prefix string) ([]string, error) // docker volume ls --filter name=<prefix> --format '{{json .Name}}'; the exact prefix checked on the result
+    VolumeRemove(ctx context.Context, name string) error             // docker volume rm; an absent volume is success
 }
 
 // Execer is the slice of DockerClient an attach needs (the identity relay).
@@ -127,6 +129,11 @@ runs `docker container inspect --format '{{json .State.Running}}' <name>`
 and decodes the one JSON boolean (`parseJSONBool`); "No such container" and
 "No such object" are `false, nil`, like the other absent-object queries. `ExecWhenRunning` (run.go) polls it and then execs
 once — the attach's way of catching a container `Run` has just started.
+`VolumeList` runs `docker volume ls --filter name=<prefix> --format '{{json
+.Name}}'`, decodes one JSON string per line and keeps the names that start
+with the prefix (the daemon's filter matches a substring, the prefix is the
+contract); `VolumeRemove` runs `docker volume rm <name>` and reads "No such
+volume" as success, like the other idempotent removals.
 
 ## Fakes
 

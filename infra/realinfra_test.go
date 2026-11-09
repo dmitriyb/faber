@@ -486,3 +486,41 @@ func TestRealinfra_HoldAndReceive(t *testing.T) {
 		t.Fatalf("cat: exit %d err %v stdout %q", code, err, stdout.String())
 	}
 }
+
+// Verifies 0c82c6478856 and b8db21752444 on a real machine: a named volume
+// mounted into one container holds what the next one reads, is listed by
+// its prefix, and is gone after VolumeRemove.
+func TestRealinfra_NamedVolume(t *testing.T) {
+	requireTools(t)
+	logger := realLogger(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	docker := NewDockerCLI(logger)
+	b := NewImageBuilder(docker, NewNixCLI(logger), DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
+	tag, err := b.Build(ctx, "realinfra-min", minimalToolset(), ImageInputs{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	runner := NewContainerRunner(docker, logger)
+	prefix := fmt.Sprintf("faber-realinfra-%d-", time.Now().UnixNano())
+	volume := prefix + "cache"
+	defer docker.VolumeRemove(context.WithoutCancel(ctx), volume)
+	mount := Mount{Kind: KindNamed, Name: volume, Container: "/cache"}
+	run := func(suffix string, entry ...string) string {
+		return runStdout(t, ctx, runner, ContainerSpec{Name: prefix + suffix, Image: tag, Mounts: []Mount{mount}, Entry: entry})
+	}
+	run("write", "touch", "/cache/marker")
+	if out := run("read", "ls", "/cache"); out != "marker" {
+		t.Fatalf("the next container sees %q in the volume, want the marker", out)
+	}
+	names, err := docker.VolumeList(ctx, prefix)
+	if err != nil || len(names) != 1 || names[0] != volume {
+		t.Fatalf("VolumeList(%s) = %q, %v", prefix, names, err)
+	}
+	if err := docker.VolumeRemove(ctx, volume); err != nil {
+		t.Fatalf("VolumeRemove: %v", err)
+	}
+	if names, err := docker.VolumeList(ctx, prefix); err != nil || len(names) != 0 {
+		t.Fatalf("after removal VolumeList = %q, %v", names, err)
+	}
+}

@@ -1127,3 +1127,22 @@ func TestEnsureRunUser(t *testing.T) {
 		t.Fatalf("group with the gid present must be untouched, got %q", got)
 	}
 }
+
+// Verifies 93ba0858d75f (test scenario 26): FABER_VOLUMES names the
+// template's named volumes' mount points, and the preamble's chown set
+// carries them after the engine mounts; absent means none.
+func TestVolumesChownSet(t *testing.T) {
+	d := newTestDirs(t)
+	env := ParseEnv(baseEnv(d, map[string]string{contract.EnvVolumes: "/cache:/models"}))
+	if !slices.Equal(env.Volumes, []string{"/cache", "/models"}) {
+		t.Fatalf("Volumes = %q", env.Volumes)
+	}
+	set := chownSet(env)
+	if !slices.Equal(set[len(set)-2:], []string{"/cache", "/models"}) || set[0] != env.WorkspaceDir {
+		t.Fatalf("chown set = %q", set)
+	}
+	bare := ParseEnv(baseEnv(d, nil))
+	if len(bare.Volumes) != 0 || len(chownSet(bare)) != 5 {
+		t.Fatalf("without the variable: volumes %q, set %q", bare.Volumes, chownSet(bare))
+	}
+}

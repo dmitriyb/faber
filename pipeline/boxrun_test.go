@@ -821,3 +821,37 @@ func TestBoxRun_NoImageContentMounts(t *testing.T) {
 		})
 	}
 }
+
+// Verifies 8879dc1597d6 (run-prep seam): the attempt's image reaches the
+// bindings' step spec (the check's remote seeding runs from it) and a
+// template's volumes reach the container as named volumes under the
+// project's prefix, never as host binds.
+func TestBoxRun_ProjectVolumesAndImage(t *testing.T) {
+	containers := &fakeContainers{record: &contract.Result{Status: contract.StatusOK, Payload: map[string]any{"out": "d"}}}
+	bindings := &fakeBindings{}
+	boxes := &AgentBoxes{Containers: containers, Bindings: bindings, Project: "p1"}
+	box := boxAttempt(t)
+	box.Template.Volumes = map[string]string{"cache": "/cache"}
+	if _, err := boxes.RunAttempt(context.Background(), box); err != nil {
+		t.Fatalf("run attempt: %v", err)
+	}
+	if got := bindings.steps[0].Image; got != box.Image {
+		t.Fatalf("step spec image %q, want the attempt's %q", got, box.Image)
+	}
+	spec := containers.specs[0]
+	var named *infra.Mount
+	for i, m := range spec.Mounts {
+		if m.Kind == infra.KindBind {
+			t.Fatalf("a host bind on the spec: %+v", m)
+		}
+		if m.Kind == infra.KindNamed {
+			named = &spec.Mounts[i]
+		}
+	}
+	if named == nil || named.Name != "faber-p1-cache" || named.Container != "/cache" {
+		t.Fatalf("named volume mount = %+v", named)
+	}
+	if spec.Env[contract.EnvVolumes] != "/cache" {
+		t.Fatalf("%s = %q", contract.EnvVolumes, spec.Env[contract.EnvVolumes])
+	}
+}
