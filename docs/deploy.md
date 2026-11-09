@@ -33,6 +33,36 @@ faber validate --config examples/quickstart/orchestrator.yaml
 faber build    --config examples/quickstart/orchestrator.yaml
 ```
 
+## Host filesystem and user namespaces
+
+A box is given nothing from the host filesystem — no bind mount at all. Its
+engine inputs are image content, its results arrive over its stdout, its
+agent over a relay faber runs inside the container through `docker exec`,
+and a template's `run.volumes` are docker named volumes (see
+`docs/architecture.md`, "The host boundary"). Two consequences for the host:
+
+- **userns-remap is supported as is.** With `"userns-remap"` in the daemon's
+  configuration, a container's uid 1000 is a subordinate uid on the host
+  (`Docker Root Dir` ends in `100000.100000`, for instance). Faber does not
+  care: the run user inside the box is `FABER_RUN_UID` (your uid, by default),
+  which under remap is simply a container-namespace id, and nothing the box
+  touches is owned by the host user. No `subuid` arrangement, no ACL, no
+  world-writable directory is needed.
+- **macOS Docker Desktop needs no host knob.** The VM used to present a
+  forwarded agent socket with the wrong owner, which `agent_socket_group` in
+  `host.json` patched. The socket is gone, so is the key: a `host.json` that
+  still carries it is refused with a message saying so — delete the line.
+
+Upgrading to a release with this boundary (v0.8.0 or later): `faber upgrade`
+(both binaries move together), remove `agent_socket_group` from `host.json`
+if present, then `faber build` — the box binary is part of every image tag,
+so every image is stale until rebuilt, and the run preflight says so. A
+template with host paths under `run.volumes` fails `faber validate` with the
+fix in the message: declare a named volume, run the workflow once so docker
+creates it, read its docker name from `faber volumes`, and copy the old
+content in once (`docker run --rm -v <docker name>:/v -v /host/dir:/src
+busybox cp -a /src/. /v/`).
+
 ## State directory
 
 The state directory (default `.faber`, resolved against the working

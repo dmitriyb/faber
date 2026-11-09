@@ -56,7 +56,7 @@ OS/arch, downloads the matching `faber` archive plus the `faber-box` archive
 the same key (embedded in the script, trusted because the script was just
 verified) before installing them side by side.
 
-The script is POSIX `sh`. Set `VERSION=v0.7.0` before `sh install.sh` to
+The script is POSIX `sh`. Set `VERSION=v0.8.0` before `sh install.sh` to
 install a specific release, and `INSTALL_DIR=DIR` to choose the install
 directory (default `/usr/local/bin`).
 
@@ -127,7 +127,7 @@ overrides that guard and only that guard.
 
 ```sh
 faber upgrade                    # forward to the latest release
-faber upgrade --version v0.6.0   # a specific release, any direction
+faber upgrade --version v0.8.0   # a specific release, any direction
 faber upgrade --check            # resolve and verify the target, change nothing (also: --dry-run)
 faber upgrade --rollback         # restore the previous pair from their .bak backups
 faber upgrade --force            # proceed despite live/unfinished runs
