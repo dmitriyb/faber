@@ -262,18 +262,26 @@ func (f *fakeResolver) callCount() int {
 	return len(f.calls)
 }
 
-// fakeRunner implements infra.CommandRunner for ExecResolver tests.
+// fakeRunner implements infra.CommandRunner for ExecResolver tests and the
+// check remote's bundle: write, when set, is what a `git bundle create
+// --quiet <file> --all` call leaves in the file it was given.
 type fakeRunner struct {
 	mu    sync.Mutex
 	calls []infra.CmdSpec
 	res   infra.CmdResult
 	err   error
+	write string
 }
 
 func (f *fakeRunner) Run(_ context.Context, spec infra.CmdSpec) (infra.CmdResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, spec)
+	if f.write != "" && len(spec.Args) == 7 && spec.Args[2] == "bundle" {
+		if err := os.WriteFile(spec.Args[5], []byte(f.write), 0o600); err != nil {
+			return infra.CmdResult{}, err
+		}
+	}
 	return f.res, f.err
 }
 
@@ -390,6 +398,10 @@ func ed25519Gen(r io.Reader) (interface{}, interface{}, error) {
 }
 
 func (f *fakeDocker) Running(context.Context, string) (bool, error) { return true, nil }
+
+func (f *fakeDocker) VolumeList(context.Context, string) ([]string, error) { return nil, nil }
+
+func (f *fakeDocker) VolumeRemove(context.Context, string) error { return nil }
 
 // fakeRelayExec implements infra.Execer with the box's half of the agent
 // relay in-process: Exec serves a unix socket per container under a short

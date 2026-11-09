@@ -196,6 +196,37 @@ func isNoSuchContainer(err error) bool {
 	return isNotFound(err, "No such container")
 }
 
+// VolumeList asks the daemon for the names under prefix. The daemon's name
+// filter matches a substring, so the prefix is re-checked on the result.
+func (d *dockerCLI) VolumeList(ctx context.Context, prefix string) ([]string, error) {
+	out, err := d.cli.run(ctx, "volume", "ls", "--filter", "name="+prefix, "--format", "{{json .Name}}")
+	if err != nil {
+		return nil, fmt.Errorf("infra: docker volume ls: %w", err)
+	}
+	var names []string
+	for _, line := range bytes.Split(bytes.TrimSpace(out), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		name, perr := parseJSONString(line)
+		if perr != nil {
+			return nil, fmt.Errorf("infra: docker volume ls: parse: %w", perr)
+		}
+		if strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+func (d *dockerCLI) VolumeRemove(ctx context.Context, name string) error {
+	_, err := d.cli.run(ctx, "volume", "rm", name)
+	if err != nil && !isNotFound(err, "No such volume", "no such volume") {
+		return fmt.Errorf("infra: docker volume rm %s: %w", name, err)
+	}
+	return nil
+}
+
 // parseJSONBool decodes the single JSON boolean a pinned
 // --format '{{json .State.Running}}' emits.
 func parseJSONBool(out []byte) (bool, error) {

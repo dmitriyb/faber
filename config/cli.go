@@ -167,6 +167,15 @@ func (e *RegistryUsageError) Unwrap() error { return e.Err }
 // generic error→exit-code mapping (see cliError below).
 func (e *RegistryUsageError) ExitCode() int { return 2 }
 
+// VolumeController carries the docker volume verbs into the CLI (cmd wiring
+// over infra): `faber volumes` lists a project's named volumes by their
+// prefix and `faber volumes prune` removes them. The prefix is config's
+// (VolumePrefix); the controller knows nothing of projects.
+type VolumeController interface {
+	ListVolumes(ctx context.Context, prefix string) ([]string, error)
+	RemoveVolume(ctx context.Context, name string) error
+}
+
 // UIOptions is what the TUI needs from the CLI: the config to show, an
 // optional run to open on, the colour decision, and the terminal streams.
 type UIOptions struct {
@@ -188,14 +197,17 @@ type UIRunner interface {
 type Deps struct {
 	// UI opens the live view (tui module); nil leaves bare `faber` a usage
 	// error and `faber watch` a structured refusal.
-	UI        UIRunner
-	Prover    PackageProver
-	Builder   ImageBuilder
-	Executor  Executor
-	Journal   JournalStore
-	Audit     RunAuditor
-	Runs      RunController
-	Registry  RegistryController
+	UI       UIRunner
+	Prover   PackageProver
+	Builder  ImageBuilder
+	Executor Executor
+	Journal  JournalStore
+	Audit    RunAuditor
+	Runs     RunController
+	Registry RegistryController
+	// Volumes lists and removes a project's named docker volumes (infra
+	// through the cmd wiring); nil leaves `faber volumes` a structured error.
+	Volumes   VolumeController
 	BuildInfo BuildInfo
 	// Installer runs the embedded install.sh in upgrade mode (faber upgrade).
 	Installer Installer
@@ -234,12 +246,16 @@ commands:
   build      build template images
   run        execute a workflow: faber run <workflow> --param k=v ...
   resume     re-enter a journaled run: faber resume <run-id|name>
+  check      run a workflow's hooks in a sandbox: faber check <workflow> --param k=v ...
   watch      open the live view on this config's runs: faber watch [<run-id|name>]
              (a bare faber at a terminal opens it too)
   runs       list journaled runs (id, name, workflow, state, started; --json);
              runs pause <run-id|name> asks a live run to pause (drain in-flight
              steps, then stop, exit 4); runs prune deletes finished non-live
              run directories (--all also removes paused and incomplete ones)
+  volumes    list this project's named docker volumes (run.volumes entries as
+             faber-<project>-<name>; --json); volumes prune removes them,
+             refused while a run is live
   upgrade    forward-only update of faber and faber-box to the latest signed
              release via the embedded install.sh; refuses a latest older than
              installed (non-overridable), and refuses while live/unfinished runs
@@ -304,6 +320,7 @@ func NewRootCmd(deps Deps) *cobra.Command {
 		newResumeCmd(deps),
 		newCheckCmd(deps),
 		newRunsCmd(deps),
+		newVolumesCmd(deps),
 		newWatchCmd(deps),
 		newUpgradeCmd(deps),
 		newAddKeyCmd(deps),

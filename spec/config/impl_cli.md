@@ -201,6 +201,30 @@ re-checks the failure-module versions of the same guards plus the recorded
 image tags; the CLI guards exist to refuse before the full config pipeline
 re-runs.
 
+### runVolumesListE / runVolumesPruneE (config/cmd_volumes.go)
+
+```
+faber volumes [--config path] [--json]   list the project's named volumes: name, docker name
+faber volumes prune [--config path]      remove them; refused while a run is live
+```
+
+```go
+func ProjectID(configPath string) string          // 12 hex of sha256(identity(configPath))
+func VolumePrefix(project string) string          // "faber-" + project + "-"
+func VolumeName(project, name string) string      // VolumePrefix(project) + name
+
+type VolumeController interface {
+    ListVolumes(ctx context.Context, prefix string) ([]string, error) // docker names under the prefix
+    RemoveVolume(ctx context.Context, name string) error
+}
+```
+
+The listing strips the prefix for the template-name column; `prune` first
+asks `RunAuditor.AuditRuns()` and refuses (exit 1, naming the live run)
+when any run is live, then removes every listed volume and prints the
+names. An unwired controller is the structured "requires the infra module"
+error; `volumes` with an unknown positional is a usage error (exit 2).
+
 ### runRunsListE / runRunsPauseE / runRunsPruneE (config/cmd_runs.go)
 
 ```

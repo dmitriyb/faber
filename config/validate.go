@@ -341,8 +341,9 @@ func (v *validator) checkTemplates() {
 // refusals (agent.BuildContainerSpec) at validate altitude, so a template that
 // cannot launch any box fails `faber validate`, not each step at run time:
 // the agent CLI must be named, template env may not claim engine- or
-// security-owned variables, and template volumes may not overlap the
-// reserved container paths.
+// security-owned variables, and template volumes are docker named volumes
+// over absolute, colon-free container paths off the reserved ones — a host
+// path as a key is refused, since nothing of the host is mounted into a box.
 func (v *validator) checkRunContract(path string, t TemplateDef) {
 	if t.Run.Env["FABER_AGENT_CLI"] == "" {
 		v.addf(path+".run.env.FABER_AGENT_CLI", "required (faber defaults no agent vendor); name the agent CLI binary the box invokes")
@@ -355,16 +356,33 @@ func (v *validator) checkRunContract(path string, t TemplateDef) {
 			v.addf(path+".run.env."+key, "engine- or security-owned name (only FABER_AGENT_CLI may be set here)")
 		}
 	}
-	for _, host := range sortedKeys(t.Run.Volumes) {
-		container := t.Run.Volumes[host]
+	for _, name := range sortedKeys(t.Run.Volumes) {
+		container := t.Run.Volumes[name]
+		field := path + ".run.volumes." + name
+		switch {
+		case strings.HasPrefix(name, "/"), strings.HasPrefix(name, "."), strings.HasPrefix(name, "~"):
+			v.addf(field, "host paths are not mounted; declare a named volume (faber-<project>-<name> on the daemon)")
+		case !volumeNameRE.MatchString(name):
+			v.addf(field, "not a docker volume name (%s)", volumeNameRE)
+		}
+		switch {
+		case !strings.HasPrefix(container, "/"):
+			v.addf(field, "container path %q must be absolute", container)
+		case strings.Contains(container, ":"):
+			v.addf(field, "container path %q may not contain a colon", container)
+		}
 		for _, r := range ReservedContainerPaths {
 			if containerPathUnder(container, r) || containerPathUnder(r, container) {
-				v.addf(path+".run.volumes."+host, "container path %q overlaps the reserved path %q", container, r)
+				v.addf(field, "container path %q overlaps the reserved path %q", container, r)
 				break
 			}
 		}
 	}
 }
+
+// volumeNameRE is docker's own rule for a volume name; a key that is a
+// path fails it, but the host-path refusal above says why first.
+var volumeNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
 // containerPathUnder reports whether cleaned path a equals b or lies beneath
 // it (the run-spec assembler's overlap rule).

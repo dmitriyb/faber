@@ -32,8 +32,9 @@ func main() {
 	// The box is normally invoked with no args (env-var driven, as the
 	// container's fixed entrypoint). The exceptions are checked before
 	// anything phase-sequencer-related starts: version, the two entries of a
-	// reconstructed box the operator enters through docker exec, and the
-	// agent relay the host execs into every box.
+	// reconstructed box the operator enters through docker exec, the agent
+	// relay the host execs into every box, and the seeding of a check run's
+	// remote volume.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
@@ -50,6 +51,16 @@ func main() {
 		case "relay":
 			if err := box.Relay(ctx, box.ParseEnv(os.Environ()), os.Stdin, os.Stdout, logger); err != nil {
 				logger.Error("relay failed", "err", err)
+				os.Exit(1)
+			}
+			return
+		case "seed-remote":
+			if len(os.Args) != 3 {
+				logger.Error("seed-remote takes exactly one repository name")
+				os.Exit(2)
+			}
+			if err := box.SeedRemote(ctx, box.ParseEnv(os.Environ()), os.Args[2], os.Stdin, box.NewExecRunner(os.Stderr, os.Stderr), logger); err != nil {
+				logger.Error("seed-remote failed", "err", err)
 				os.Exit(1)
 			}
 			return

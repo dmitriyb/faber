@@ -75,10 +75,12 @@ subcommand.
 | `faber build [--config path] [--template name]` | Load -> Validate -> ImageBuilder per template | images built and tagged |
 | `faber run <workflow> [--name n] [--param k=v ...] [--config path] [--max-parallel n] [--budget u=n] [--metering path] [--sessions] [--report-json path\|-]` | validate pipeline -> executor with journal, meter, bindings | run settled with every step ok or skipped-by-condition |
 | `faber resume <run-id\|name> [--fresh] [--sessions] [--interactive <step-id>] [--shell] [--report-json path\|-]` | run-ref resolution -> journal load -> version/drift guards -> recovery mode dispatch (failure module) | as `run` |
-| `faber check <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--report-json path\|-] [--keep]` | run's validate pipeline -> executor with the check sandbox (security's check composition, `FABER_CHECK` to every box) and a journal under a temporary directory, removed afterwards unless `--keep` | every hook that ran settled its step; exit codes as `run` |
+| `faber check <workflow> [--param k=v ...] [--config path] [--max-parallel n] [--report-json path\|-] [--keep]` | run's validate pipeline -> executor with the check sandbox (security's check composition, `FABER_CHECK` to every box) and a journal under a temporary directory beside the check's named volumes (the remote and the templates' own), all removed afterwards unless `--keep` | every hook that ran settled its step; exit codes as `run` |
 | `faber runs [--json]` | RunController listing (audit scan + header reads) | the run store was enumerated and printed |
 | `faber runs pause <run-id\|name>` | run-ref resolution -> pause-marker write (live runs only) | the pause request is durably recorded |
 | `faber runs prune [--all]` | RunController prune (finished + non-live; `--all` widens to paused and incomplete) | the eligible run directories were removed |
+| `faber volumes [--config path] [--json]` | `ProjectID(config)` -> VolumeController listing under the project's prefix | this project's named volumes were enumerated and printed |
+| `faber volumes prune [--config path]` | active-runs check (RunAuditor: refuse while any run is live) -> VolumeController remove, one per volume | the project's named volumes were removed |
 | `faber upgrade [--check\|--dry-run] [--version vX.Y.Z] [--rollback] [--force]` | active-runs guard (refuse while live/unfinished unless `--force`) -> resolve faber/faber-box paths -> run the embedded install.sh in upgrade mode (`Installer` seam; forward-only latest, or the exact `--version` in any direction) | both binaries moved forward to the latest signed release (or installed at `--version`, or rolled back), or reported for `--check` |
 | `faber add-key --role <name> --fingerprint SHA256:… [--comment <c>] [--git-name <n>] [--git-email <e>] [--force]` | security.RoleRegistry load -> AddKey -> atomic save | the role points at the fingerprint with its committer identity (upsert or verified no-op) |
 | `faber list-keys` | security.RoleRegistry load -> print | the registry was read and printed |
@@ -156,6 +158,21 @@ name-or-id resolution over headers, the pause marker, the lock-guarded
 deletion — is the failure module's, behind the `RunController` seam; the
 subcommands are thin dispatch plus rendering. `resume` stays top-level: it is
 a lifecycle verb of the same rank as `run`, not run-store administration.
+The `volumes` group administers a project's named docker volumes: a
+template's `run.volumes: {<name>: /path}` is `faber-<project>-<name>` on the
+daemon, where `ProjectID(configPath)` is the first 12 hex digits of the
+SHA-256 of the config file's identity (symlinks resolved, absolute — the
+loader's own notion), so every run of one project shares its volumes and two
+projects never collide by accident. `faber volumes` lists them (template
+name and docker name; `--json` the same rows), `faber volumes prune`
+removes them and is refused while any run is live in the run store this
+working directory (or the host config's `state_dir`) points at — the store
+runs started from here are journaled in, so prune from where the project is
+run. A `--config` naming no file is an error, not an empty project. A check
+run uses its own prefix (`faber-check-<id>-`) for the remote and the
+templates' volumes, removed with its sandbox unless `--keep`.
+The docker verbs ride the `VolumeController` seam (cmd wiring over infra);
+the prefix is config's.
 `run --name <n>` stores an optional human name in the journal header
 (threaded through `RunOptions.Name`); commands taking a run reference accept
 a run id or a name, an id always winning over an equal name and an ambiguous
@@ -167,7 +184,7 @@ stdout and exit 0 — never the exit-2 usage error, and never only reachable at
 the subcommand level. `--report-json` writes the machine-readable run report
 to a path (`-` = stdout, after the human report).
 
-Flags shared by validate/build/run/resume: `--config` (default `orchestrator.yaml`), `--log-level`
+Flags shared by validate/build/run/resume/check/volumes: `--config` (default `orchestrator.yaml`), `--log-level`
 (default `info`), `--log-format` (auto/json/text). `--config` names the **root
 project file**; `Load` transitively pulls its `include:` closure and merges the
 component libraries before validation (see `arch_loader.md`). A single-file config

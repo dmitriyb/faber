@@ -134,7 +134,7 @@ startup rather than silently not enforcing.
 - `run.runtime: runsc` (per template) switches the container runtime (e.g.
   gVisor) for hardened isolation — argv-only, the image is unchanged.
 - `network.nftables: true` is the proxy-less egress mode: baked rules loaded by a root entrypoint with `NET_ADMIN`, dropping to the agent user. It is an explicit choice; a network section with neither `proxy` nor `nftables` fails validate, so a capability grant can never happen by omission.
-- Template env and volumes are screened: engine- and security-owned names (`FABER_*`, `SSH_AUTH_SOCK`, reserved mount paths) are rejected at validate or spec-build time rather than silently overridden.
+- Template env and volumes are screened: engine- and security-owned names (`FABER_*`, `SSH_AUTH_SOCK`, reserved mount paths) are rejected at validate or spec-build time rather than silently overridden. Template volumes are docker named volumes (`faber-<project>-<name>`, created on first use, listed and pruned by `faber volumes`); a host path as a volume key is refused, so a box shares no path with the host at all — which is what lets a daemon with userns-remap run it.
 
 ## Operations
 

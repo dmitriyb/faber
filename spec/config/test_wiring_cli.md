@@ -132,6 +132,17 @@ param checking.
     watch` exits 2 naming the terminal requirement; without a UI, `watch`
     is an exit-1 structured error naming the tui module.
 
+18. **The volumes group is thin dispatch.** Against an injected
+    `VolumeController` and `RunAuditor`: `faber volumes` lists the names the
+    controller returns under `ProjectID(config)`'s prefix as template name
+    and docker name (`--json` the same rows; an empty listing says so);
+    `faber volumes prune` removes each listed volume and prints it, and is
+    refused (exit 1, naming the run) when any audited run is live, removing
+    nothing; an unwired controller is the structured infra error; an
+    unknown positional is usage (exit 2). `ProjectID` is identical for a
+    path and its symlink or relative spelling and differs between two
+    files.
+
 ## Edge cases
 
 - Unknown `--param name=v` (not in params interface): rejected, listing declared

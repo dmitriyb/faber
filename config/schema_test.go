@@ -620,10 +620,55 @@ func TestValidateIdentifierGrammars(t *testing.T) {
 			"template volume over the HOME tmpfs",
 			func(c *Config) {
 				tpl := c.Templates["box"]
-				tpl.Run.Volumes = map[string]string{"/host/h": "/home/box"}
+				tpl.Run.Volumes = map[string]string{"h": "/home/box"}
 				c.Templates["box"] = tpl
 			},
 			`overlaps the reserved path "/home/box"`,
+		},
+		{
+			"template volume keyed by a host path",
+			func(c *Config) {
+				tpl := c.Templates["box"]
+				tpl.Run.Volumes = map[string]string{"/host/cache": "/cache"}
+				c.Templates["box"] = tpl
+			},
+			`run.volumes./host/cache: host paths are not mounted; declare a named volume`,
+		},
+		{
+			"template volume keyed by a relative path",
+			func(c *Config) {
+				tpl := c.Templates["box"]
+				tpl.Run.Volumes = map[string]string{"./cache": "/cache"}
+				c.Templates["box"] = tpl
+			},
+			`host paths are not mounted`,
+		},
+		{
+			"template volume with a bad name",
+			func(c *Config) {
+				tpl := c.Templates["box"]
+				tpl.Run.Volumes = map[string]string{"bad name": "/cache"}
+				c.Templates["box"] = tpl
+			},
+			`not a docker volume name`,
+		},
+		{
+			"template volume with a relative container path",
+			func(c *Config) {
+				tpl := c.Templates["box"]
+				tpl.Run.Volumes = map[string]string{"cache": "cache"}
+				c.Templates["box"] = tpl
+			},
+			`container path "cache" must be absolute`,
+		},
+		{
+			"template volume with a colon in the container path",
+			func(c *Config) {
+				tpl := c.Templates["box"]
+				tpl.Run.Volumes = map[string]string{"cache": "/a:b"}
+				c.Templates["box"] = tpl
+			},
+			`may not contain a colon`,
 		},
 		{
 			"credential service shadowing PATH",
@@ -652,7 +697,7 @@ func TestValidateIdentifierGrammars(t *testing.T) {
 			"template volume over a reserved path",
 			func(c *Config) {
 				tpl := c.Templates["box"]
-				tpl.Run.Volumes = map[string]string{"/host/x": "/faber/hooks"}
+				tpl.Run.Volumes = map[string]string{"x": "/faber/hooks"}
 				c.Templates["box"] = tpl
 			},
 			`overlaps the reserved path "/faber"`,

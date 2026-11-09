@@ -137,8 +137,9 @@ mount, sized to its content:
   fast local storage, not the slow host-bind (virtiofs) path.
 - **`/faber/bundle`, `/tmp`, and `HOME`** are small and ephemeral, so they are
   **tmpfs** (RAM) — regenerated every run, gone on exit.
-- **`/faber/result`** stays a host bind mount: it is the one writable path whose
-  content must survive the container to reach the host.
+- **`/faber/result`** is a tmpfs too: the box ships its content to the host
+  over its stdout at the end of the attempt, so nothing writable is a host
+  path.
 
 Because a freshly created volume or tmpfs is root-owned, the box cannot start as
 its non-root user and still write them. Instead the container starts as root and

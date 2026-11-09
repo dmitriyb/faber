@@ -178,7 +178,7 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 	fail := func(step string, err error) error {
 		return &boxError{Reason: contract.ReasonEnvContract, Detail: fmt.Sprintf("preamble: %s: %v", step, err)}
 	}
-	for _, dir := range []string{b.Env.WorkspaceDir, b.Env.ResultDir, b.Env.BundleDir, "/tmp", contract.ContainerHome} {
+	for _, dir := range chownSet(b.Env) {
 		if err := os.Chown(dir, b.Env.RunUID, b.Env.RunGID); err != nil {
 			return fail("chown "+dir, err)
 		}
@@ -201,6 +201,14 @@ func (b *Box) enterRunUser(ctx context.Context) error {
 	}
 	b.Log.InfoContext(ctx, "dropped to run user", "uid", b.Env.RunUID, "gid", b.Env.RunGID)
 	return nil
+}
+
+// chownSet is what the preamble gives the run user, non-recursively: the
+// engine's writable mounts and the template's named volumes' mount points
+// (a volume's contents belong to whoever wrote them in an earlier run).
+func chownSet(env *BoxEnv) []string {
+	dirs := []string{env.WorkspaceDir, env.ResultDir, env.BundleDir, "/tmp", contract.ContainerHome}
+	return append(dirs, env.Volumes...)
 }
 
 // etcDir is where the run user's passwd and group entries go; a variable so

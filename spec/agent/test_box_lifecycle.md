@@ -220,6 +220,21 @@ never the binary's own result directory.)
     present alone. (That OpenSSH is satisfied by it is the realinfra relay
     round trip's business: `ssh-add -L` as the run user in a held box after
     `receive`.)
+26. **Named volumes are chowned.** `FABER_VOLUMES=/cache:/models` parses to
+    the two mount points, an empty or absent variable to none; the
+    preamble's chown list (asserted on the pure list the preamble hands to
+    chown) carries them after the engine mounts.
+27. **seed-remote fills the volume once.** Against a scratch remote dir
+    and a real local git repository bundled with `git bundle create -
+    --all`: `SeedRemote` leaves `<repo>.git` holding the bundle's commits
+    and no bundle file behind; a second call with another bundle leaves
+    the first repository untouched and exits 0; an empty stdin, a bad repo
+    path (`../x`, `/abs`, `a//b`, `a/./b`, empty) and a clone that fails (a
+    corrupt bundle) are errors and leave no `<repo>.git`; `acme/widgets`
+    lands at `acme/widgets.git` with nothing left beside it. `installBare`
+    on its own: a clone renamed onto an occupied repository is kept out and
+    reports not-first with no error, onto a fresh target lands and reports
+    first, from a missing source errors.
 
 ## Edge cases
 

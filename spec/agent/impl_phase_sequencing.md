@@ -41,6 +41,7 @@ type BoxEnv struct {
     AgentOptional        bool              // FABER_AGENT_OPTIONAL=1; the template declares itself agent-skippable (exact "1", like TOFU)
     Invoke               config.ResolvedInvoke // FABER_INVOKE_PROFILE (concrete JSON); absent/empty ⇒ config.DefaultInvoke(); malformed or rule-breaking ⇒ env-phase violation
     SessionsDir          string            // FABER_SESSIONS_DIR; container path under HOME the box ships as sessions/<rel> at the end, "" = capture off
+    Volumes              []string          // FABER_VOLUMES; colon-separated container mount points of the template's named volumes, chowned (non-recursively) by the preamble
     Slots                []string          // FABER_INPUT_SLOTS; declared slot names, for the slot-keyed handoff
     // FABER_CONTRACT_VERSION is validated by the env phase (see the contract
     // version handshake in impl_hook_result_contracts.md)
@@ -136,7 +137,7 @@ func (b *Box) enterRunUser() error {
         return nil // already non-root, or no drop requested (gateless local)
     }
     home := "/home/box"
-    for _, d := range []string{contract.ContainerWorkspace, b.Env.ResultDir, b.Env.BundleDir, "/tmp", home} {
+    for _, d := range chownSet(b.Env) { // workspace, result, bundle, /tmp, HOME, then the template's named volumes' mount points (FABER_VOLUMES), non-recursively {
         if err := os.Chown(d, b.Env.RunUID, b.Env.RunGID); err != nil {
             return fmt.Errorf("preamble: chown %s: %w", d, err)
         }
@@ -313,13 +314,14 @@ No global state anywhere: `Box` is constructed in `main` from `os.Environ()`,
 the runner and logger are injected, and every phase is a method taking the
 context — the whole sequence unit-tests as a plain value with a fake runner.
 
-## The hold, receive and relay entries
+## The hold, receive, relay and seed-remote entries
 
 ```go
 // agent/box, dispatched by cmd/faber-box on its first argument
 func Hold(ctx context.Context) int                                              // blocks until the context is cancelled (SIGTERM, SIGINT)
 func Receive(ctx context.Context, env *BoxEnv, in io.Reader, log *slog.Logger) error
 func Relay(ctx context.Context, env *BoxEnv, in io.Reader, out io.Writer, log *slog.Logger) error
+func SeedRemote(ctx context.Context, env *BoxEnv, repo string, in io.Reader, runner CmdRunner, log *slog.Logger) error
 ```
 
 `Receive` runs `contract.ReadFrames` over its stdin with a handler that
@@ -357,6 +359,21 @@ every 50 ms (a dial, not a stat: the socket exists root-owned for an instant
 before the chown) up to `agentSocketWait` (30 s, a package variable the
 tests lower) and fails with `ReasonSigning` past it; it runs before the
 gateless check, so a gateless step with an identity waits as well.
+
+`SeedRemote` works under `env.RemoteDir` (`/faber/remote`, the check's
+volume; `FABER_REMOTE_DIR` overrides it for the tests). It accepts the
+repository paths the remote binding's clone URL accepts — slash-separated
+segments of `[A-Za-z0-9._-]`, no `.` or `..` (`checkRepoPath`, the grammar
+restated because the box cannot import the security module) — so
+`acme/widgets` lands at `<dir>/acme/widgets.git`. It creates the parent
+directories, copies `in` to `<dir>/.<repo-with-dashes>.bundle`, runs `git
+clone --bare --quiet <bundle> <tmp>` into a `MkdirTemp` directory beside the
+target, chowns the clone to `env.RunUID:env.RunGID` when running as root with
+a run uid, and `installBare` renames it into place — `ENOTEMPTY`/`EEXIST`
+means another seeder or an earlier run got there first: the temporary
+directory is removed and the outcome is success. The bundle is removed on
+every path. A missing or empty stdin, a failing clone or a rename error other
+than the two above are errors naming the step.
 
 ## Check runs
 

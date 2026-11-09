@@ -110,6 +110,10 @@ type AgentBoxes struct {
 	// composed; this field only tells the box.
 	Check bool
 
+	// Project is the config.ProjectID the templates' named volumes are
+	// prefixed with (faber-<project>-<name>).
+	Project string
+
 	Log *slog.Logger
 
 	// streamLimit lowers MaxAttemptStreamBytes for tests; 0 is the bound.
@@ -184,6 +188,7 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		GitEmail:   b.GitIdentities[box.Template.Identity].Email,
 		Sessions:   sessions,
 		Check:      b.Check,
+		Project:    b.Project,
 	})
 	if err != nil {
 		return BoxResult{}, err
@@ -205,6 +210,7 @@ func (b *AgentBoxes) RunAttempt(ctx context.Context, box BoxAttempt) (BoxResult,
 		Runtime:      box.Template.Runtime,
 		Repo:         inputs["repo"],
 		ScratchDir:   scratchDir,
+		Image:        box.Image,
 	})
 	if err != nil {
 		return BoxResult{}, err

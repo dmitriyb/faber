@@ -161,7 +161,7 @@ type RunDef struct {
     Resources ResourceDef       `yaml:"resources"`
     Runtime   string            `yaml:"runtime"`
     Env       map[string]string `yaml:"env"`     // plain box env (offline-dep knobs etc.)
-    Volumes   map[string]string `yaml:"volumes"` // named volume -> mount path (pre-warmed caches)
+    Volumes   map[string]string `yaml:"volumes"` // docker volume name -> container mount path; faber-<project>-<name> on the daemon, never a host path
 }
 
 type ResourceDef struct {

@@ -38,9 +38,15 @@ the security module's `Assembled` (verbatim argv fragment + `SecretsStdin` +
 `Attach`) and
 the engine mounts/env into one run spec before handing it to
 `infra.ContainerRunner`, attaches the attempt's two writers (`Output` for the
-human log, `Stdout` for the demuxer) and copies `Assembled.Attach` into
+human log, `Stdout` for the demuxer), copies `Assembled.Attach` into
 `ContainerSpec.Attach` (the identity relay the runner starts beside the
-container), so it is the single place that owns `ContainerSpec.Env`
+container), hands `BoxSpec.Project` (the `config.ProjectID` of the run's
+config, so a template's named volumes are `faber-<project>-<name>`; a check
+run's is its sandbox's own token, `check-<digits>`, so a check never touches
+the project's volumes, and its remote volume `faber-check-remote-<digits>`
+is a name no template volume can take) and
+`StepSpec.Image` (the attempt's tag, which the check's remote seeding runs
+its container from) along, so it is the single place that owns `ContainerSpec.Env`
 assembly and therefore enforces the credentials pairing — a non-empty
 `Assembled.SecretsStdin` is copied into `ContainerSpec.StdinSecrets` and
 `ContainerSpec.Env[contract.EnvSecretsStdin]="1"` is set in the same step, never one
