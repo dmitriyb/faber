@@ -232,8 +232,10 @@ func TestRealinfra_CheckRemoteSeed(t *testing.T) {
 
 	docker := infra.NewDockerCLI(logger)
 	builder := infra.NewImageBuilder(docker, infra.NewNixCLI(logger), infra.DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
-	// bash for the two-command entry; a nix image has no sh otherwise.
-	tag, err := builder.Build(ctx, "realinfra-seed", config.BuildDef{Packages: []string{"bash", "coreutils", "git"}}, infra.ImageInputs{})
+	// bash for the two-command entry (a nix image has no sh otherwise),
+	// util-linux for setpriv: the read runs as the run user, as the box's
+	// clone does — git refuses a repository owned by someone else.
+	tag, err := builder.Build(ctx, "realinfra-seed", config.BuildDef{Packages: []string{"bash", "coreutils", "git", "util-linux"}}, infra.ImageInputs{})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -257,7 +259,8 @@ func TestRealinfra_CheckRemoteSeed(t *testing.T) {
 		Image:    tag,
 		Bindings: a.Args[2:], // the remote member's tokens: the volume and the URL; no network member needed here
 		Stdout:   &stdout,
-		Entry:    []string{"bash", "-c", "git -C /faber/remote/faber.git rev-parse HEAD && stat -c %u /faber/remote/faber.git"},
+		Entry: []string{"setpriv", "--reuid=" + strconv.Itoa(os.Getuid()), "--regid=" + strconv.Itoa(os.Getgid()), "--clear-groups", "env", "HOME=/tmp",
+			"bash", "-c", "git -C /faber/remote/faber.git rev-parse HEAD && stat -c %u /faber/remote/faber.git"},
 	})
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("read: exit %d err %v stderr %q stdout %q", res.ExitCode, err, res.Output, stdout.String())
