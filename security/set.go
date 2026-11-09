@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -21,15 +22,38 @@ const teardownGrace = 30 * time.Second
 // the ordered docker-run argv fragment ContainerRunner splices verbatim
 // (ContainerSpec.Bindings), SecretsStdin is the framed JSON file-mode secrets
 // payload the runner streams on the container's stdin (nil = no file-mode
-// secret, no -i), and Teardown is the post-run hook that must bracket the Run
-// call — infra runs no hooks itself. Teardown is never nil, runs every
+// secret, no -i), Attach is every contributed companion as one (nil when no
+// binding contributed any; ContainerSpec.Attach), and Teardown is the
+// post-run hook that must bracket the Run call — infra runs no hooks itself. Teardown is never nil, runs every
 // registered hook in reverse setup order on a context detached from step
 // cancellation, and joins all errors; call it exactly once, after the
 // container has exited (any status, or kill-on-cancel).
 type Assembled struct {
 	Args         []string
 	SecretsStdin []byte
+	Attach       func(ctx context.Context, container string) error
 	Teardown     func(ctx context.Context) error
+}
+
+// joinAttach runs every contributed attach concurrently against the same
+// container and joins their errors; nil for none.
+func joinAttach(attaches []func(context.Context, string) error) func(context.Context, string) error {
+	if len(attaches) == 0 {
+		return nil
+	}
+	return func(ctx context.Context, container string) error {
+		errs := make([]error, len(attaches))
+		var wg sync.WaitGroup
+		for i, a := range attaches {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[i] = a(ctx, container)
+			}()
+		}
+		wg.Wait()
+		return errors.Join(errs...)
+	}
 }
 
 // encodeSecretsPayload is the sole reveal() caller: it encodes the merged
@@ -98,6 +122,7 @@ func NewBindingSetWithoutCredentials(network *NetworkBinding, remote *RemoteBind
 func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, error) {
 	var args []string
 	var undo []namedTeardown
+	var attaches []func(context.Context, string) error
 	var secrets map[string]Secret // only the credentials binding sets any
 	for _, b := range s.bindings {
 		c, err := b.Prepare(ctx, step)
@@ -114,6 +139,9 @@ func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, err
 				secrets = map[string]Secret{}
 			}
 			secrets[name] = tok
+		}
+		if c.Attach != nil {
+			attaches = append(attaches, c.Attach)
 		}
 		if c.Teardown != nil {
 			undo = append(undo, namedTeardown{name: b.Name(), fn: c.Teardown})
@@ -132,6 +160,7 @@ func (s *BindingSet) Prepare(ctx context.Context, step StepSpec) (Assembled, err
 	return Assembled{
 		Args:         args,
 		SecretsStdin: payload,
+		Attach:       joinAttach(attaches),
 		Teardown:     func(ctx context.Context) error { return s.teardownAll(ctx, undo) },
 	}, nil
 }

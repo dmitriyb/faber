@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -74,6 +75,7 @@ type fakeBindings struct {
 	mu           sync.Mutex
 	steps        []security.StepSpec
 	teardowns    int
+	attached     []string // containers the attach was started for
 	secretsStdin []byte
 }
 
@@ -84,6 +86,12 @@ func (f *fakeBindings) Prepare(ctx context.Context, step security.StepSpec) (sec
 	return security.Assembled{
 		Args:         []string{"--network=none", "-e", "HANDLE=x"},
 		SecretsStdin: f.secretsStdin,
+		Attach: func(_ context.Context, container string) error {
+			f.mu.Lock()
+			f.attached = append(f.attached, container)
+			f.mu.Unlock()
+			return nil
+		},
 		Teardown: func(context.Context) error {
 			f.mu.Lock()
 			f.teardowns++
@@ -137,6 +145,15 @@ func TestBoxRun_ComposesAndAdaptsOK(t *testing.T) {
 	spec := containers.specs[0]
 	if len(spec.Bindings) != 3 || spec.Bindings[0] != "--network=none" {
 		t.Errorf("security fragment not spliced verbatim: %v", spec.Bindings)
+	}
+	// The bindings' attach rides on the spec for the runner to start beside
+	// the container; the fake runner never starts it, so it is called here.
+	if spec.Attach == nil {
+		t.Fatal("the bindings' attach was not put on the spec")
+	}
+	spec.Attach(context.Background(), spec.Name)
+	if !slices.Equal(bindings.attached, []string{spec.Name}) {
+		t.Errorf("attach saw %q, want the container %q", bindings.attached, spec.Name)
 	}
 	if spec.Entry[0] != contract.ContainerEntry {
 		t.Errorf("entry %v, want the faber-box binary", spec.Entry)
@@ -345,6 +362,9 @@ func TestBoxRun_InteractiveReentry(t *testing.T) {
 	}
 	if spec.Env[contract.InputEnv("out")] != "v" {
 		t.Errorf("inputs not re-exported: %v", spec.Env)
+	}
+	if spec.Attach == nil {
+		t.Error("the held box carries no attach: its agent would never be served")
 	}
 	foundHandoff := false
 	for _, m := range spec.Mounts {

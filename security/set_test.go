@@ -8,18 +8,18 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 )
 
 // Verifies 41bb811a34e8 (and the composition of 6e6d0bb46819, 14a0498eb362,
 // e47a00273f03, 0c5bc0f678b7): assembling the reference implement step yields
 // the exact ordered fragment — network flags, proxy env, NO_PROXY list,
-// remote URL env with the repo param spliced, pinned host-key env, socket
-// mount + SSH_AUTH_SOCK, service handle mount, no runtime flag — byte
-// identical across repeated assembly except the socket mount's host path,
-// which is attempt-unique by design (per-spawn MkdirTemp, the sun_path cap);
-// adding runtime: runsc appends exactly --runtime=runsc and changes nothing
-// else — test scenario 1.
+// remote URL env with the repo param spliced, pinned host-key env, the
+// agent tmpfs + SSH_AUTH_SOCK, service handle mount, no runtime flag — byte
+// identical across repeated assembly (nothing in it is attempt-unique), with
+// a non-nil Attach; adding runtime: runsc appends exactly --runtime=runsc
+// and changes nothing else — test scenario 1.
 func TestGoldenFragment(t *testing.T) {
 	h := newHarness(t)
 	scratch := t.TempDir()
@@ -29,9 +29,11 @@ func TestGoldenFragment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	firstSock := contributedSocket(t, first.Args)
-	if !slices.Equal(first.Args, implementFragment(firstSock)) {
-		t.Fatalf("fragment:\nwant %q\ngot  %q", implementFragment(firstSock), first.Args)
+	if !slices.Equal(first.Args, implementFragment()) {
+		t.Fatalf("fragment:\nwant %q\ngot  %q", implementFragment(), first.Args)
+	}
+	if first.Attach == nil {
+		t.Fatal("the identity binding's attach must ride in Assembled")
 	}
 	// The file-mode token rides SecretsStdin as one JSON object, not the argv.
 	wantPayload := `{"agent-api":"` + base64.StdEncoding.EncodeToString([]byte(testToken)) + `"}`
@@ -46,12 +48,8 @@ func TestGoldenFragment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-Prepare: %v", err)
 	}
-	secondSock := contributedSocket(t, second.Args)
-	if secondSock == firstSock {
-		t.Fatal("agent socket host path must be fresh per assembly")
-	}
-	if !slices.Equal(second.Args, implementFragment(secondSock)) {
-		t.Fatalf("fragment not identical modulo the socket path:\n%q\n%q", first.Args, second.Args)
+	if !slices.Equal(second.Args, first.Args) {
+		t.Fatalf("fragment not byte-identical across assemblies:\n%q\n%q", first.Args, second.Args)
 	}
 	if err := second.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
@@ -62,7 +60,7 @@ func TestGoldenFragment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare with runtime: %v", err)
 	}
-	hardenedWant := append(implementFragment(contributedSocket(t, hardened.Args)), "--runtime=runsc")
+	hardenedWant := append(implementFragment(), "--runtime=runsc")
 	if !slices.Equal(hardened.Args, hardenedWant) {
 		t.Fatalf("runtime knob must append exactly --runtime=runsc:\ngot %q", hardened.Args)
 	}
@@ -163,16 +161,10 @@ func TestPrepareFailureUnwindsPriorBindings(t *testing.T) {
 // writes no host file, so there is nothing to shred; the (Prepare-failure)
 // case additionally asserts no container ever started — test scenario 3.
 func TestTeardownAlwaysRuns(t *testing.T) {
-	// proxySock is the attempt's contributed socket ("" when assembly failed
-	// before contributing): its directory must be gone after teardown. The
-	// role agent is run-scoped — alive after the attempt, dead after Close.
-	assertClean := func(t *testing.T, h *harness, scratch, proxySock string) {
+	// The attempt creates no host socket; the role agent is run-scoped —
+	// alive after the attempt, dead after Close, its directory gone.
+	assertClean := func(t *testing.T, h *harness, scratch string) {
 		t.Helper()
-		if proxySock != "" {
-			if _, err := os.Stat(filepath.Dir(proxySock)); !os.IsNotExist(err) {
-				t.Fatalf("proxy socket directory %s must be removed", filepath.Dir(proxySock))
-			}
-		}
 		if err := h.set.Close(context.Background()); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
@@ -204,7 +196,7 @@ func TestTeardownAlwaysRuns(t *testing.T) {
 			if err := a.Teardown(context.Background()); err != nil {
 				t.Fatalf("Teardown: %v", err)
 			}
-			assertClean(t, h, scratch, contributedSocket(t, a.Args))
+			assertClean(t, h, scratch)
 		})
 	}
 
@@ -220,7 +212,7 @@ func TestTeardownAlwaysRuns(t *testing.T) {
 		if err := a.Teardown(ctx); err != nil {
 			t.Fatalf("Teardown on cancelled ctx: %v", err)
 		}
-		assertClean(t, h, scratch, contributedSocket(t, a.Args))
+		assertClean(t, h, scratch)
 		// The detached teardown context means the agent Stop saw a live
 		// context despite the cancelled step — test edge "cancellation
 		// during teardown".
@@ -237,7 +229,7 @@ func TestTeardownAlwaysRuns(t *testing.T) {
 		h.resolver.globalErr = errBoom // credentials fail after identity spawned the agent
 		_, err := h.set.Prepare(context.Background(), implementStep(scratch))
 		errContains(t, err, "security: binding credentials")
-		assertClean(t, h, scratch, "")
+		assertClean(t, h, scratch)
 		if h.docker.runCalls != 0 {
 			t.Fatalf("no container may start after a failed assembly, got %d runs", h.docker.runCalls)
 		}
@@ -259,8 +251,39 @@ func TestEmptyBindingSetIsLegal(t *testing.T) {
 	if a.Teardown == nil {
 		t.Fatal("Teardown must never be nil")
 	}
+	if a.Attach != nil {
+		t.Fatal("no binding attached anything; Attach must be nil so the runner starts no companion")
+	}
 	if err := a.Teardown(context.Background()); err != nil {
 		t.Fatalf("empty teardown: %v", err)
+	}
+}
+
+// Verifies 41bb811a34e8 (test scenario 16): the set's Attach runs every
+// contributed attach against the container and joins their errors; none
+// contributed is nil.
+func TestAssembledAttachJoins(t *testing.T) {
+	if joinAttach(nil) != nil {
+		t.Fatal("no attaches must compose to nil")
+	}
+	var mu sync.Mutex
+	var seen []string
+	rec := func(name string, err error) func(context.Context, string) error {
+		return func(_ context.Context, container string) error {
+			mu.Lock()
+			seen = append(seen, name+":"+container)
+			mu.Unlock()
+			return err
+		}
+	}
+	attach := joinAttach([]func(context.Context, string) error{rec("a", nil), rec("b", errBoom)})
+	err := attach(context.Background(), "box-1")
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("joined error = %v, want the contributor's", err)
+	}
+	slices.Sort(seen)
+	if !slices.Equal(seen, []string{"a:box-1", "b:box-1"}) {
+		t.Fatalf("attaches seen %q", seen)
 	}
 }
 
@@ -290,12 +313,12 @@ func TestRetryReassemblesFresh(t *testing.T) {
 		}
 	}()
 
-	// One role agent serves both attempts; each attempt gets its own socket.
+	// One role agent serves both attempts; each attempt attaches its own relay.
 	if len(h.agent.starts) != 1 {
 		t.Fatalf("want one role agent across attempts, got spawns %q", h.agent.starts)
 	}
-	if a, b := contributedSocket(t, first.Args), contributedSocket(t, second.Args); a == b {
-		t.Fatalf("attempts must use distinct sockets, both %q", a)
+	if first.Attach == nil || second.Attach == nil {
+		t.Fatal("each attempt must carry an attach")
 	}
 	if h.resolver.callCount() != 2 {
 		t.Fatalf("each attempt must invoke the resolver afresh, got %d calls", h.resolver.callCount())

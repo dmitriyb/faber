@@ -14,13 +14,23 @@ package security
 // the socket.
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/dmitriyb/faber/agent/contract"
+	"github.com/dmitriyb/faber/config"
+	"github.com/dmitriyb/faber/infra"
 )
 
 func requireBinaries(t *testing.T, names ...string) {
@@ -83,5 +93,118 @@ func TestRealAgentLifecycle(t *testing.T) {
 		if fps, lerr := agents.ListKeys(ctx, sock); lerr == nil && len(fps) > 0 {
 			t.Fatalf("agent still answering after Stop: %q", fps)
 		}
+	}
+}
+
+// realBox compiles faber-box for the image's architecture, as the infra
+// suite does: the binary the builder bakes and the relay is exec'd from.
+func realBox(t *testing.T) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "faber-box")
+	cmd := exec.Command("go", "build", "-o", out, "github.com/dmitriyb/faber/cmd/faber-box")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build faber-box: %v\n%s", err, raw)
+	}
+	return out
+}
+
+// Verifies e47a00273f03 and 1b0f6b9009af on a real machine: the real
+// identity binding, attached to a real container through docker exec and
+// `faber-box relay`, gives the box's run user an agent that lists exactly
+// the role's key and signs with it — no host path shared, the socket owned
+// by the run user inside the box. The box is a held one, set up for its run
+// user by `faber-box receive` as a re-entry is (the passwd entry OpenSSH
+// needs, the chowns), so the whole mount-free path is the real one.
+func TestRealinfra_AgentRelay(t *testing.T) {
+	requireBinaries(t, "ssh-agent", "ssh-add", "ssh-keygen", "docker", "nix")
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	if out, err := exec.CommandContext(ctx, "ssh-keygen", "-t", "ed25519", "-N", "", "-C", "throwaway", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v: %s", err, out)
+	}
+	pub, err := os.ReadFile(key + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKey := strings.Join(strings.Fields(string(pub))[:2], " ")
+
+	docker := infra.NewDockerCLI(logger)
+	builder := infra.NewImageBuilder(docker, infra.NewNixCLI(logger), infra.DefaultNixpkgsPin(), t.TempDir(), realBox(t), logger)
+	// bash for the script, util-linux for setpriv: the image holds only the
+	// declared packages.
+	tag, err := builder.Build(ctx, "realinfra-relay", config.BuildDef{Packages: []string{"bash", "coreutils", "util-linux", "openssh"}}, infra.ImageInputs{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	binding := NewIdentityBinding(NewAgentController(logger), logger)
+	binding.Exec = docker
+	defer binding.Close(context.WithoutCancel(ctx))
+	c, err := binding.Prepare(ctx, StepSpec{NodeID: "relay", Identity: &config.IdentityDef{Key: key}})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	// A held box, as a re-entry starts one: the binding's fragment and the
+	// run user's ids on the argv, `faber-box hold` as the entry.
+	name := fmt.Sprintf("faber-realinfra-relay-%d", time.Now().UnixNano())
+	args := []string{"run", "--rm", "-d", "--name", name, "--tmpfs", "/tmp", "--tmpfs", "/home/box",
+		"-e", "FABER_RUN_UID=1000", "-e", "FABER_RUN_GID=1000"}
+	args = append(args, c.Args...)
+	args = append(args, tag, "/faber/bin/faber-box", "hold")
+	if code, err := docker.ContainerRun(ctx, args, nil, io.Discard, os.Stderr); err != nil || code != 0 {
+		t.Fatalf("start held box: exit %d err %v", code, err)
+	}
+	defer docker.Kill(context.WithoutCancel(ctx), name)
+	actx, stopAttach := context.WithCancel(ctx)
+	attached := make(chan error, 1)
+	go func() { attached <- c.Attach(actx, name) }()
+	defer func() {
+		stopAttach()
+		if err := <-attached; err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("attach: %v", err)
+		}
+	}()
+
+	// receive with an empty stream sets the box up for its run user: the
+	// passwd and group entry OpenSSH needs, and the chowns.
+	var stream bytes.Buffer
+	contract.NewFrameWriter(&stream).End()
+	var stderr bytes.Buffer
+	if code, err := docker.Exec(ctx, name, []string{"/faber/bin/faber-box", "receive"}, &stream, io.Discard, &stderr); err != nil || code != 0 {
+		t.Fatalf("receive: exit %d err %v stderr %q", code, err, stderr.String())
+	}
+
+	// As the run user, which the relay chowned the socket to: wait for the
+	// socket as the clone phase does, list the agent, sign a message through
+	// it and check the signature against the listed key; the key line is
+	// the stdout the test reads. The exec runs as root (no --user); setpriv
+	// drops the same way the preamble does. Exec takes an argv, so the
+	// script needs no shell quoting.
+	script := `set -e
+for i in $(seq 200); do [ -S "$SSH_AUTH_SOCK" ] && break; sleep 0.1; done
+stat -c '%u:%g %a' "$SSH_AUTH_SOCK" >&2
+ssh-add -L > /tmp/keys
+[ "$(wc -l < /tmp/keys)" = 1 ]
+echo message > /tmp/m
+ssh-keygen -Y sign -q -n faber -f /tmp/keys /tmp/m
+ssh-keygen -Y check-novalidate -n faber -s /tmp/m.sig < /tmp/m >&2
+cut -d' ' -f1,2 /tmp/keys`
+	var stdout bytes.Buffer
+	stderr.Reset()
+	code, err := docker.Exec(ctx, name, []string{"setpriv", "--reuid=1000", "--regid=1000", "--clear-groups", "env", "HOME=/home/box", "bash", "-c", script}, nil, &stdout, &stderr)
+	if err != nil || code != 0 {
+		t.Fatalf("box: exit %d err %v stderr %q stdout %q", code, err, stderr.String(), stdout.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != wantKey {
+		t.Fatalf("the box's agent lists %q, want the role key %q", got, wantKey)
+	}
+	if !strings.Contains(stderr.String(), "1000:1000 600") {
+		t.Fatalf("the socket is not the run user's 0600: %q", stderr.String())
 	}
 }

@@ -22,8 +22,9 @@ import "github.com/dmitriyb/faber/config"
 // box-binary-misconfiguration detector (a stale or foreign sequencer
 // binary), not a migration path. Version 2 is the frame channel: the box
 // ships its result directory over its stdout instead of writing into a
-// mounted one.
-const ContractVersion = 2
+// mounted one. Version 3 is the agent relay: the box's agent socket is its
+// own, served through `faber-box relay`, and no socket is mounted.
+const ContractVersion = 3
 
 // Environment variable names of the box env contract. The host side
 // (BuildContainerSpec in the agent package) emits them; the sequencer's env phase
@@ -286,7 +287,7 @@ func SlotToken(slot string) string {
 // EngineOwnedEnv reports whether an environment name belongs to the engine or
 // security env contract: the whole FABER_ namespace (the box contract, input
 // slots, and the security module's service/helper handle names) plus the
-// forwarded agent socket variable. User-supplied environment (template env,
+// agent socket variable. User-supplied environment (template env,
 // bundle sidecars) may never set these — the contract is engine-owned. The
 // rule lives in the config module (the validate-time gate) and is delegated
 // here so both altitudes share one source.

@@ -59,8 +59,8 @@ func EnvToken(name string) string {
 var RunnerOwnedEnv = map[string]bool{"PATH": true, "HOME": true, "GIT_SSH_COMMAND": true, "SSH_AUTH_SOCK": true}
 
 // EngineOwnedEnv reports whether an environment name belongs to the engine
-// or security env contract: the whole FABER_ namespace plus the forwarded
-// agent socket. The single source for validate-time checks and the box
+// or security env contract: the whole FABER_ namespace plus the agent
+// socket variable. The single source for validate-time checks and the box
 // contract's run-time gate (agent/contract delegates here).
 func EngineOwnedEnv(key string) bool {
 	return strings.HasPrefix(key, "FABER_") || key == "SSH_AUTH_SOCK"
@@ -70,7 +70,7 @@ func EngineOwnedEnv(key string) bool {
 // the security bindings own; template volumes may not touch them. The
 // run-spec assembler consumes this same list (a cross-package test asserts
 // it covers the security module's mount constants).
-var ReservedContainerPaths = []string{"/faber", "/run/secrets", "/ssh-agent", "/workspace", "/home/box", "/tmp"}
+var ReservedContainerPaths = []string{"/faber", "/run/secrets", "/workspace", "/home/box", "/tmp"}
 
 // pinCharset restricts a per-toolset nixpkgs pin's rev/sha256 to a splice-safe
 // charset. Because a pin may now be user-supplied YAML that is spliced into

@@ -60,16 +60,15 @@ func TestCheckBindingSetSandbox(t *testing.T) {
 		t.Errorf("clone call: %+v", runner.calls)
 	}
 	// identity: the real binding, loaded with the check key, not the role's fingerprint
-	sock := contributedSocket(t, a.Args)
-	if sock == "" {
-		t.Fatalf("no agent socket contributed: %q", args)
+	if !strings.Contains(args, strings.Join(identityArgs, " ")) || a.Attach == nil {
+		t.Fatalf("no agent contributed: %q (attach nil: %v)", args, a.Attach == nil)
 	}
 	keys, _ := agent.ListKeys(context.Background(), agent.starts[0])
 	if len(keys) != 1 || !strings.Contains(keys[0], "fp-check_ed25519") {
 		t.Errorf("agent keys: %v, want the check key only", keys)
 	}
 	// credentials: none; the runtime knob stays
-	if strings.Contains(args, "--tmpfs") || strings.Contains(args, "FABER_SERVICE") {
+	if strings.Contains(args, "/run/secrets") || strings.Contains(args, "FABER_SERVICE") {
 		t.Errorf("a credential reached the box: %q", args)
 	}
 	if !strings.HasSuffix(args, "--runtime=runsc") {

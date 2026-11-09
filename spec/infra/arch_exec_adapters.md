@@ -14,7 +14,7 @@ what lets every other module run against fakes.
 
 | Adapter | Verbs | Structured mode |
 |---------|-------|-----------------|
-| `DockerClient` | image-exists, load (tarball), container-run (pre-assembled argv + optional stdin reader, stdout and stderr to two writers), exec (an argv inside a running container, stdin and the two writers), exec-terminal (the same with the operator's terminal attached), network-exists, kill and remove (by name) | `docker ... --format '{{json .}}'`, `docker load` tag line parsed once |
+| `DockerClient` | image-exists, load (tarball), container-run (pre-assembled argv + optional stdin reader, stdout and stderr to two writers), exec (an argv inside a running container, stdin and the two writers), exec-terminal (the same with the operator's terminal attached), running (by name, the inspect state), network-exists, kill and remove (by name) | `docker ... --format '{{json .}}'`, `docker load` tag line parsed once |
 | `GitClient` | ls-remote (ref lookup on a URL), rev-parse | plumbing output only — fixed-format, machine-stable |
 | `NixClient` | eval (an expression, `--json`), build (an expression file, `--json` → out paths) | `nix eval --json`, `nix build --json` |
 | `CommandRunner` | run (path + args + stdin + env + dir) → stdout/stderr/exit | none — output bytes are typed by the caller |

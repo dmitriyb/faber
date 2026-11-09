@@ -3,10 +3,10 @@ package security
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"os"
 	"sync"
+
+	"github.com/dmitriyb/faber/infra"
 )
 
 // agentSocketPattern names the private per-spawn MkdirTemp directory the
@@ -60,13 +60,15 @@ type AgentHandle interface {
 }
 
 // IdentityBinding is the mechanism behind "one key per container ⇒ role
-// isolation by construction" (requirement e47a00273f03). Per step attempt it
-// spawns a fresh ssh-agent on a private socket, loads exactly one key for the
-// template's identity, forwards only the socket into the box, and destroys
-// the agent the moment the step ends. The private key never enters the
-// container — not as a file, not as env, not through the socket (an agent
-// answers signing challenges; it does not export keys). Concurrent steps
-// never share an agent, even under the same identity.
+// isolation by construction" (requirement e47a00273f03). Per role per run it
+// spawns one ssh-agent on a private host socket and loads exactly one key;
+// per step attempt it serves a signing proxy onto that agent into the box
+// through a relay the box runs on a socket of its own, over docker exec, for
+// exactly the container's lifetime. Nothing of the host filesystem is shared
+// (a mounted socket is unreachable from a box whose uid is remapped), and
+// the private key never enters the container — not as a file, not as env,
+// not through the protocol (an agent answers signing challenges; it does not
+// export keys).
 //
 // Faber never learns what a key is for: fingerprint-to-role mapping and
 // signature policy live in the user's gate service.
@@ -83,11 +85,10 @@ type IdentityBinding struct {
 	roles map[string]*roleAgent
 	queue sync.Mutex
 
-	// SocketGroup, when non-empty, adds "--group-add <SocketGroup>" to the
-	// contribution — the documented escape for platforms where the forwarded
-	// socket's group ownership blocks the box's non-root user (the macOS VM
-	// case). Empty on platforms that need nothing.
-	SocketGroup string
+	// Exec is the docker seam the attach execs the relay through (the
+	// wiring's docker client). Nil fails the attach, naming it; Prepare
+	// itself never needs it.
+	Exec infra.Execer
 
 	// Registry (role→fingerprint) and Locator (fingerprint→live key) resolve
 	// an identity that carries no explicit key path. Both are consulted only
@@ -107,13 +108,16 @@ func NewIdentityBinding(agents AgentController, logger *slog.Logger) *IdentityBi
 // Name implements Binding.
 func (b *IdentityBinding) Name() string { return "identity" }
 
-// Prepare runs the per-attempt lifecycle: spawn, load exactly one key,
-// verify, contribute the socket mount. Zero keys after load is a hard error
+// Prepare runs the per-attempt lifecycle: the role's agent (spawned, loaded
+// with exactly one key and verified on the role's first attempt), then the
+// contribution — the agent tmpfs, SSH_AUTH_SOCK, and the attach that serves
+// the signing proxy over the relay. Zero keys after load is a hard error
 // (the loader failed silently); more than one logs a loud warning naming the
 // extra fingerprints — role isolation is degraded, but a hardware-backed
 // loader may legitimately surface adjacent credentials — and proceeds. Any
 // failure after the spawn tears the agent down before returning, so a failed
-// Prepare leaks nothing.
+// Prepare leaks nothing. Nothing is created on the host per attempt, so the
+// contribution has no teardown.
 func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribution, error) {
 	if step.Identity == nil {
 		return Contribution{}, nil
@@ -133,38 +137,15 @@ func (b *IdentityBinding) Prepare(ctx context.Context, step StepSpec) (Contribut
 	if err != nil {
 		return Contribution{}, err
 	}
-	// The box's own socket: a private directory per attempt, a proxy that
-	// exposes the role's key and queues its signatures. Nothing about what
-	// the box sees — mount, env var, protocol — changed.
-	dir, sock, err := b.socketDir(ctx, step.NodeID)
-	if err != nil {
-		return Contribution{}, err
-	}
-	closeProxy, err := serveProxy(sock, &signProxy{keys: ra.keys, upstream: ra.client, queue: &b.queue})
-	if err != nil {
-		if rerr := os.RemoveAll(dir); rerr != nil {
-			b.logger.WarnContext(ctx, "remove socket dir after failed proxy listen", "node", step.NodeID, "err", rerr)
+	proxy := &signProxy{keys: ra.keys, upstream: ra.client, queue: &b.queue}
+	attach := func(ctx context.Context, container string) error {
+		if b.Exec == nil {
+			return errors.New("identity: no docker seam to attach the agent relay through")
 		}
-		return Contribution{}, err
+		return serveRelay(ctx, b.Exec, container, proxy, b.logger)
 	}
-	teardown := func(ctx context.Context) error {
-		var errs []error
-		if err := closeProxy(); err != nil {
-			errs = append(errs, fmt.Errorf("close agent proxy: %w", err))
-		}
-		if err := os.RemoveAll(dir); err != nil {
-			errs = append(errs, fmt.Errorf("remove socket dir: %w", err))
-		}
-		return errors.Join(errs...)
-	}
-
-	args := []string{
-		"-v", sock + ":" + ContainerAgentSocket,
-		"-e", EnvSSHAuthSock + "=" + ContainerAgentSocket,
-	}
-	if b.SocketGroup != "" {
-		args = append(args, "--group-add", b.SocketGroup)
-		args = append(args, "-e", EnvAgentSocketGID+"="+b.SocketGroup)
-	}
-	return Contribution{Args: args, Teardown: teardown}, nil
+	return Contribution{
+		Args:   []string{"--tmpfs", ContainerAgentDir, "-e", EnvSSHAuthSock + "=" + ContainerAgentSocket},
+		Attach: attach,
+	}, nil
 }

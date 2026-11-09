@@ -29,6 +29,7 @@ type fakeDocker struct {
 	runStdins  [][]byte // full contents of each ContainerRun's stdin (nil when unattached)
 	execFn     func(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 	execStdins [][]byte // full contents of each Exec's stdin (nil when unattached)
+	runningFn  func(name string) (bool, error)
 	termErr    error
 	killErr    error
 	killed     []string
@@ -120,6 +121,14 @@ func (f *fakeDocker) Exec(ctx context.Context, name string, argv []string, stdin
 func (f *fakeDocker) ExecTerminal(ctx context.Context, name string, argv []string, env map[string]string, user, workdir string) error {
 	f.record("exec-terminal", append([]string{name, user, workdir}, argv...)...)
 	return f.termErr
+}
+
+func (f *fakeDocker) Running(ctx context.Context, name string) (bool, error) {
+	f.record("running", name)
+	if f.runningFn != nil {
+		return f.runningFn(name)
+	}
+	return true, nil
 }
 
 func (f *fakeDocker) Kill(ctx context.Context, name string) error {

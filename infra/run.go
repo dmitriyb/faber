@@ -3,6 +3,7 @@ package infra
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -58,6 +59,13 @@ type ContainerSpec struct {
 	// box's frame channel, which the run-prep seam demultiplexes. The runner
 	// never parses or buffers it; nil discards it.
 	Stdout io.Writer
+	// Attach, when non-nil, is a host-side companion of the running
+	// container (security.Assembled.Attach: the identity relay served over
+	// docker exec). Run and Enter start it beside the container and cancel
+	// its context when the container ends; its error is logged, never the
+	// run's result — what the box did without its companion is in the box's
+	// own record.
+	Attach func(ctx context.Context, container string) error
 }
 
 // Session is what Enter runs inside a held box once the input stream is in:
@@ -158,7 +166,9 @@ func (r *ContainerRunner) Run(ctx context.Context, spec ContainerSpec) (Containe
 		r.logger.WarnContext(ctx, "evict stale container before launch", "container", spec.Name, "err", err)
 	}
 	start := time.Now()
+	stopAttach := r.startAttach(ctx, spec)
 	code, err := r.docker.ContainerRun(ctx, buildArgs(spec), stdin, stdout, sink)
+	stopAttach()
 	res := ContainerResult{ExitCode: code, Output: out.Bytes(), Started: start, Duration: time.Since(start)}
 	if ctx.Err() != nil {
 		// Killing the docker client process only detaches; stop the container
@@ -205,6 +215,9 @@ func (r *ContainerRunner) Enter(ctx context.Context, spec ContainerSpec, input i
 			r.logger.WarnContext(killCtx, "kill held box", "container", spec.Name, "err", kerr)
 		}
 	}()
+	// Deferred after the kill, so it runs first: the companion ends before
+	// the box it served.
+	defer r.startAttach(ctx, spec)()
 	// The receive's stderr is kept: a refused stream names the frame there,
 	// and the operator must see why the box was not entered.
 	tail := newTailBuffer(4 << 10)
@@ -212,6 +225,57 @@ func (r *ContainerRunner) Enter(ctx context.Context, spec ContainerSpec, input i
 		return fmt.Errorf("infra: enter %s: receive exited %d: %w (%s)", spec.Name, code, err, strings.TrimSpace(string(tail.Bytes())))
 	}
 	return r.docker.ExecTerminal(ctx, spec.Name, s.Entry, s.Env, s.User, s.Workdir)
+}
+
+// startAttach runs the spec's companion beside the container and returns
+// what ends it: cancel, then wait. A companion that ends on its own before
+// the container does is a warning with the container's name; the
+// cancellation at the end is not.
+func (r *ContainerRunner) startAttach(ctx context.Context, spec ContainerSpec) (stop func()) {
+	if spec.Attach == nil {
+		return func() {}
+	}
+	actx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// The cancellation at the end is expected and may already have
+		// happened when a quick failure returns, so the error, not the
+		// context, tells the two apart.
+		if err := spec.Attach(actx, spec.Name); err != nil && !errors.Is(err, context.Canceled) {
+			r.logger.WarnContext(ctx, "attach ended", "container", spec.Name, "err", err)
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+// runningPollInterval paces ExecWhenRunning's wait for the container.
+const runningPollInterval = 50 * time.Millisecond
+
+// ExecWhenRunning polls Running until the container is up, then execs
+// once: how a companion catches a container Run has just started, with no
+// daemon prose matched and no stdin fed to an exec that never started. The
+// context bounds the wait — the runner cancels it when the container ends.
+func ExecWhenRunning(ctx context.Context, e Execer, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	t := time.NewTicker(runningPollInterval)
+	defer t.Stop()
+	for {
+		up, err := e.Running(ctx, name)
+		if err != nil {
+			return -1, err
+		}
+		if up {
+			return e.Exec(ctx, name, argv, stdin, stdout, stderr)
+		}
+		select {
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		case <-t.C:
+		}
+	}
 }
 
 // holdEntry is the baked box binary, the entry of a held box and of the

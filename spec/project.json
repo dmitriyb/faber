@@ -53,7 +53,7 @@
       "id": "4ed3587b51f5",
       "type": "functional",
       "title": "Externally enforced security bindings",
-      "description": "Security is docker run bindings plus external companion services, never image content: a network binding (internal network with an allow-listing egress proxy as the only route out, or a baked-nftables alternative), a remote binding (gateway git URL with pinned host key), and an identity binding (ephemeral single-key ssh-agent per role, socket forwarded; one key per container).",
+      "description": "Security is docker run bindings plus external companion services, never image content: a network binding (internal network with an allow-listing egress proxy as the only route out, or a baked-nftables alternative), a remote binding (gateway git URL with pinned host key), and an identity binding (ephemeral single-key ssh-agent per role, served into the box over a relay on docker exec; one key per container).",
       "priority": 1,
       "depends_on": ["299d74b42425"]
     },
@@ -61,7 +61,7 @@
       "id": "eddb5adc5adb",
       "type": "functional",
       "title": "Credential delegation via handles",
-      "description": "No secret is ever materialized on host disk or in a container image. Brokers are forwarded as handles: an ssh-agent socket for keys, an unauthenticated local endpoint backed by an auth-injecting proxy for API tokens. The get_token(service) resolver is user-supplied (keychain/rbw/env/static). Raw-token-in-RAM (resolved host-side, streamed over the container's stdin into a container tmpfs, chmod 600, --rm; never a host file, never env) is the explicit degraded opt-out.",
+      "description": "No secret is ever materialized on host disk or in a container image. Brokers are forwarded as handles: an ssh-agent relayed into the box for keys, an unauthenticated local endpoint backed by an auth-injecting proxy for API tokens. The get_token(service) resolver is user-supplied (keychain/rbw/env/static). Raw-token-in-RAM (resolved host-side, streamed over the container's stdin into a container tmpfs, chmod 600, --rm; never a host file, never env) is the explicit degraded opt-out.",
       "priority": 1
     },
     {
@@ -230,7 +230,7 @@
       {
         "id": "a88979017e44",
         "name": "Reference workflows end-to-end",
-        "description": "The reference orchestrator.yaml (task workflow with the review/fix loop; epic workflow with generate fan-out and merge) validates, desugars to the expected IR, and runs end-to-end against companion services: box builds via Nix, clones from the gateway, signs with the forwarded role key, pushes, and the run report carries the structured results.",
+        "description": "The reference orchestrator.yaml (task workflow with the review/fix loop; epic workflow with generate fan-out and merge) validates, desugars to the expected IR, and runs end-to-end against companion services: box builds via Nix, clones from the gateway, signs with the relayed role key, pushes, and the run report carries the structured results.",
         "content": "test_reference_workflows.md",
         "modules": ["51be984560a5", "5baa87e1c166", "7fad2a9e2f92", "38eac7b92e62", "03dc0699260f", "6c710a720719", "ac15b2db7263"]
       },

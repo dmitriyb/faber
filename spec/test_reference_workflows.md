@@ -177,7 +177,7 @@ Notes on fidelity to the proven harness:
 ## Scenarios
 
 1. **Task happy path.** `faber run task --param repo=sandbox --param item=I-1`:
-   implement box clones from the gateway, signs with the forwarded implementer key,
+   implement box clones from the gateway, signs with the relayed implementer key,
    pushes; the gateway accepts and auto-opens a PR; review emits
    `{verdict: approved}` on iteration 1; fix is skipped (condition false); merge
    runs under the merger key; the run report shows ok/ok/skipped/ok and the PR is

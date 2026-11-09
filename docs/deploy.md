@@ -20,7 +20,7 @@ cross-compiled and signed; see `spec/delivery/arch_release.md`.
 
 | Component | Why | Notes |
 |---|---|---|
-| Linux host (or VM) | boxes, tmpfs secret mounts, ssh-agent sockets | the engine targets Linux; macOS works via a docker VM (see socket-group note below) |
+| Linux host (or VM) | boxes, tmpfs mounts, `docker exec` | the engine targets Linux; macOS works via a docker VM, and a daemon with userns-remap works too — the box shares no host path |
 | Docker daemon | runs the boxes | rootful or rootless; the CLI is driven with structured output modes only |
 | Nix ≥ 2.4 | builds template images | `nix-command` is passed via `--extra-experimental-features`; images come from `dockerTools.buildLayeredImage`, no Dockerfiles |
 | ssh-agent, ssh-add, ssh-keygen | ephemeral identity agents | stock OpenSSH |
@@ -97,10 +97,10 @@ upstream credential.
 
 ## Keys and credentials
 
-- **Identities**: `identities: {<role>: {key: <ref>}}` — the ref is interpreted by your resolver/tooling (file path, hardware-key handle). Per step, faber spawns an ephemeral ssh-agent, loads exactly that one key, and forwards only the socket; the private key never enters the box. On macOS docker VMs the VM presents the forwarded socket root-owned and the box's dropped user gets "Permission denied" — set `agent_socket_group` to `"0"` in `~/.config/faber/host.json` (adds `--group-add 0` to the box; group membership, not root powers). Leave it unset on Linux, where the socket keeps your uid.
+- **Identities**: `identities: {<role>: {key: <ref>}}` — the ref is interpreted by your resolver/tooling (file path, hardware-key handle). Per role, faber spawns an ephemeral ssh-agent and loads exactly that one key; each box reaches it through a relay faber runs inside the box over `docker exec`, on a socket the box owns — nothing is mounted from the host, so it works the same on Linux, macOS Docker Desktop and a daemon with userns-remap. The private key never enters the box. (`agent_socket_group` in `host.json` is retired; a file still naming it is refused with a message saying so.)
 - **Host key pinning**: commit your gateway's public host key and reference it as `remote.host_key_file`. `tofu: true` (accept-new) is for sandboxes only; configuring neither aborts the run — there is no silent fallback.
 - **API credentials**: prefer `mode: proxy` (auth injected outside the box) or `mode: helper`; `mode: file` is the explicit degraded path — the resolver's token is written to a tmpfs-backed read-only mount and shredded after the step, but it *is* readable inside that box. The resolver (`credentials.resolver`) is any executable: `get_token(service)` on argv, token on stdout, invoked host-side only. Wire it to `pass`, `rbw`, your keychain, or your secrets manager.
-- **Commit identity**: register it with the role — `faber add-key --role <r> --fingerprint … --git-email <addr>`; signing keys always come from the forwarded agent. The email is **required** for gated steps — the box aborts the signing phase rather than fall back to a synthetic address, because a made-up email signs fine yet can never verify on a forge that ties signatures to a registered account email (e.g. GitHub's Verified badge). Use an address verified on the account that owns the role's key. Nothing is read from the process environment.
+- **Commit identity**: register it with the role — `faber add-key --role <r> --fingerprint … --git-email <addr>`; signing keys always come from the relayed agent. The email is **required** for gated steps — the box aborts the signing phase rather than fall back to a synthetic address, because a made-up email signs fine yet can never verify on a forge that ties signatures to a registered account email (e.g. GitHub's Verified badge). Use an address verified on the account that owns the role's key. Nothing is read from the process environment.
 
 ## Budgets and metering
 

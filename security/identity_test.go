@@ -15,31 +15,24 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 )
 
-func identityBinding(agent *fakeAgent, logBuf *bytes.Buffer) *IdentityBinding {
+// identityBinding wires a binding to the fake agent and a fresh fake relay
+// exec (returned, so tests can attach through it).
+func identityBinding(t *testing.T, agent *fakeAgent, logBuf *bytes.Buffer) (*IdentityBinding, *fakeRelayExec) {
+	t.Helper()
 	var logger *slog.Logger
 	if logBuf != nil {
 		logger = slog.New(slog.NewTextHandler(logBuf, nil))
 	} else {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return NewIdentityBinding(agent, logger)
+	b := NewIdentityBinding(agent, logger)
+	relay := newFakeRelayExec(t)
+	b.Exec = relay
+	return b, relay
 }
 
-// contributedSocket extracts the agent socket's host path from a fragment's
-// mount arg (the "-v <sock>:/ssh-agent" pair).
-func contributedSocket(t *testing.T, args []string) string {
-	t.Helper()
-	for i, a := range args {
-		if a == "-v" && i+1 < len(args) && strings.HasSuffix(args[i+1], ":"+ContainerAgentSocket) {
-			return strings.TrimSuffix(args[i+1], ":"+ContainerAgentSocket)
-		}
-	}
-	t.Fatalf("no socket mount in args %q", args)
-	return ""
-}
-
-// proxyKeyComments dials the contributed (proxy) socket the way a box's ssh
-// would and lists what it exposes, by key comment.
+// proxyKeyComments dials the relay's socket the way a box's ssh would and
+// lists what the attached proxy exposes, by key comment.
 func proxyKeyComments(t *testing.T, sock string) []string {
 	t.Helper()
 	conn, err := net.Dial("unix", sock)
@@ -58,35 +51,28 @@ func proxyKeyComments(t *testing.T, sock string) []string {
 	return out
 }
 
-// Verifies e47a00273f03: after Prepare the step's agent holds exactly one
-// fingerprint — the step's own identity, not any other configured one — and
-// only the socket is forwarded (mount + SSH_AUTH_SOCK, nothing else) — test
-// scenario 2.
+// Verifies e47a00273f03: after Prepare and the attach the box's agent
+// socket answers with exactly one key — the step's own identity, not any
+// other configured one — and the contribution is the agent tmpfs, the env
+// var and the attach, nothing else: no mount, no teardown — test scenario 2.
 func TestIdentityOneKeyPerBox(t *testing.T) {
 	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
-	scratch := t.TempDir()
-	c, err := b.Prepare(context.Background(), implementStep(scratch))
+	b, relay := identityBinding(t, agent, nil)
+	c, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	sock := contributedSocket(t, c.Args)
-	want := []string{"-v", sock + ":/ssh-agent", "-e", "SSH_AUTH_SOCK=/ssh-agent"}
-	if !slices.Equal(c.Args, want) {
-		t.Fatalf("args:\nwant %q\ngot  %q", want, c.Args)
+	if !slices.Equal(c.Args, identityArgs) {
+		t.Fatalf("args:\nwant %q\ngot  %q", identityArgs, c.Args)
 	}
-	if strings.HasPrefix(sock, scratch) {
-		t.Fatalf("socket %q must not live under the scratch dir (sun_path cap)", sock)
+	if c.Teardown != nil {
+		t.Fatal("nothing is created on the host per attempt; the contribution must carry no teardown")
 	}
+	sock, stop := attachRelay(t, relay, c.Attach, "box-1")
 	if got := proxyKeyComments(t, sock); len(got) != 1 || got[0] != "implementer" {
 		t.Fatalf("the box's agent must expose exactly the implementer key, got %q", got)
 	}
-	if err := c.Teardown(context.Background()); err != nil {
-		t.Fatalf("Teardown: %v", err)
-	}
-	if _, serr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(serr) {
-		t.Fatal("teardown must remove the socket directory")
-	}
+	stop()
 	if err := b.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -96,11 +82,11 @@ func TestIdentityOneKeyPerBox(t *testing.T) {
 }
 
 // Verifies e47a00273f03: two steps prepared concurrently under different
-// identities get distinct sockets, each agent seeing only its own key — no
+// identities attach to distinct relays, each seeing only its own key — no
 // step ever shares an agent — test scenario 2. Run under -race.
 func TestIdentityConcurrentStepsGetDisjointAgents(t *testing.T) {
 	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
+	b, relay := identityBinding(t, agent, nil)
 	steps := []StepSpec{implementStep(t.TempDir()), mergeStep(t.TempDir())}
 	contribs := make([]Contribution, len(steps))
 	var wg sync.WaitGroup
@@ -120,8 +106,10 @@ func TestIdentityConcurrentStepsGetDisjointAgents(t *testing.T) {
 	if t.Failed() {
 		t.FailNow()
 	}
-	sockA := contributedSocket(t, contribs[0].Args)
-	sockB := contributedSocket(t, contribs[1].Args)
+	sockA, stopA := attachRelay(t, relay, contribs[0].Attach, "box-a")
+	defer stopA()
+	sockB, stopB := attachRelay(t, relay, contribs[1].Attach, "box-b")
+	defer stopB()
 	if sockA == sockB {
 		t.Fatal("concurrent steps must get distinct sockets")
 	}
@@ -130,11 +118,6 @@ func TestIdentityConcurrentStepsGetDisjointAgents(t *testing.T) {
 	}
 	if got := proxyKeyComments(t, sockB); len(got) != 1 || got[0] != "merger" {
 		t.Fatalf("merge box sees %q", got)
-	}
-	for i := range contribs {
-		if err := contribs[i].Teardown(context.Background()); err != nil {
-			t.Fatalf("Teardown %d: %v", i, err)
-		}
 	}
 	// Two roles, two run-scoped agents: alive until the run closes them.
 	if live := agent.liveAgents(); len(live) != 2 {
@@ -153,9 +136,8 @@ func TestIdentityConcurrentStepsGetDisjointAgents(t *testing.T) {
 func TestIdentityZeroKeysFailsAndCleansUp(t *testing.T) {
 	agent := newFakeAgent()
 	agent.listFn = func(string) ([]string, error) { return nil, nil }
-	b := identityBinding(agent, nil)
-	scratch := t.TempDir()
-	_, err := b.Prepare(context.Background(), implementStep(scratch))
+	b, _ := identityBinding(t, agent, nil)
+	_, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
 	errContains(t, err, "no key")
 	if live := agent.liveAgents(); len(live) != 0 {
 		t.Fatalf("failed Prepare leaked an agent: %q", live)
@@ -178,17 +160,13 @@ func TestIdentityMultipleKeysWarnsWithFingerprints(t *testing.T) {
 		return []string{"256 SHA256:fp-one (ED25519)", "256 SHA256:fp-two (ED25519)"}, nil
 	}
 	var logBuf bytes.Buffer
-	b := identityBinding(agent, &logBuf)
-	c, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
-	if err != nil {
+	b, _ := identityBinding(t, agent, &logBuf)
+	if _, err := b.Prepare(context.Background(), implementStep(t.TempDir())); err != nil {
 		t.Fatalf("Prepare must not abort on >1 key: %v", err)
 	}
 	log := logBuf.String()
 	if !strings.Contains(log, "level=WARN") || !strings.Contains(log, "fp-one") || !strings.Contains(log, "fp-two") {
 		t.Fatalf("want a warning naming both fingerprints, got %q", log)
-	}
-	if err := c.Teardown(context.Background()); err != nil {
-		t.Fatalf("Teardown: %v", err)
 	}
 }
 
@@ -197,9 +175,8 @@ func TestIdentityMultipleKeysWarnsWithFingerprints(t *testing.T) {
 func TestIdentityKeyLoadFailureStopsAgent(t *testing.T) {
 	agent := newFakeAgent()
 	agent.addErr = errBoom
-	b := identityBinding(agent, nil)
-	scratch := t.TempDir()
-	_, err := b.Prepare(context.Background(), implementStep(scratch))
+	b, _ := identityBinding(t, agent, nil)
+	_, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
 	errContains(t, err, "load identity key")
 	if live := agent.liveAgents(); len(live) != 0 {
 		t.Fatalf("failed Prepare leaked an agent: %q", live)
@@ -209,95 +186,60 @@ func TestIdentityKeyLoadFailureStopsAgent(t *testing.T) {
 	}
 }
 
-// Verifies e47a00273f03: teardown kills the agent and removes the socket
-// directory, and the platform group-membership flag is emitted when
-// configured (the macOS VM socket-ownership case).
-func TestIdentityTeardownAndSocketGroup(t *testing.T) {
+// Verifies e47a00273f03 (test scenario 16): the attach waits for the
+// container through the running query and then execs the relay exactly
+// once, with a stdin attached; cancelling it ends the attach; an exec that
+// fails while the container runs surfaces its exit; one that ends with the
+// container gone is no failure; a binding with no exec seam fails the
+// attach naming it.
+func TestIdentityAttachLifecycle(t *testing.T) {
 	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
-	b.SocketGroup = "101"
-	scratch := t.TempDir()
-	c, err := b.Prepare(context.Background(), implementStep(scratch))
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	if i := slices.Index(c.Args, "--group-add"); i < 0 || c.Args[i+1] != "101" {
-		t.Fatalf("want --group-add 101 in args, got %q", c.Args)
-	}
-	sock := contributedSocket(t, c.Args)
-	if err := c.Teardown(context.Background()); err != nil {
-		t.Fatalf("Teardown: %v", err)
-	}
-	if _, serr := os.Stat(filepath.Dir(sock)); !os.IsNotExist(serr) {
-		t.Fatal("teardown must remove the socket directory")
-	}
-	if err := b.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if live := agent.liveAgents(); len(live) != 0 {
-		t.Fatalf("agent still live after Close: %q", live)
-	}
-}
-
-// hasFlagPair reports whether args contains the two consecutive tokens flag,
-// value at some position i, i+1.
-func hasFlagPair(args []string, flag, value string) bool {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] == flag && args[i+1] == value {
-			return true
-		}
-	}
-	return false
-}
-
-// Verifies the agent-socket-group setgroups fix: a non-empty SocketGroup
-// emits both the docker-level "--group-add <g>" grant and the box-contract
-// "-e FABER_AGENT_SOCKET_GID=<g>" pair the preamble needs to keep that group
-// across its setgroups drop; an empty SocketGroup emits neither.
-func TestIdentityAgentSocketGIDEnv(t *testing.T) {
-	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
-	b.SocketGroup = "101"
+	b, relay := identityBinding(t, agent, nil)
+	relay.notRunning = 2
 	c, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if !hasFlagPair(c.Args, "--group-add", "101") {
-		t.Fatalf("want --group-add 101 in args, got %q", c.Args)
+	defer b.Close(context.Background())
+	_, stop := attachRelay(t, relay, c.Attach, "box-1")
+	stop()
+	relay.mu.Lock()
+	polls, execs, stdinNil := relay.polls, relay.execs, relay.stdinNil
+	relay.mu.Unlock()
+	if polls < 3 {
+		t.Fatalf("the attach must poll until the container runs, got %d polls", polls)
 	}
-	if !hasFlagPair(c.Args, "-e", EnvAgentSocketGID+"=101") {
-		t.Fatalf("want -e %s=101 in args, got %q", EnvAgentSocketGID, c.Args)
-	}
-	if err := c.Teardown(context.Background()); err != nil {
-		t.Fatalf("Teardown: %v", err)
+	if len(execs) != 1 || !slices.Equal(execs[0], []string{"/faber/bin/faber-box", "relay"}) || stdinNil {
+		t.Fatalf("execs = %q (stdin nil: %v), want one relay exec with stdin", execs, stdinNil)
 	}
 
-	agent2 := newFakeAgent()
-	b2 := identityBinding(agent2, nil)
-	c2, err := b2.Prepare(context.Background(), implementStep(t.TempDir()))
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
+	failing := newFakeRelayExec(t)
+	failing.execCode, failing.execStderr = 126, "exec: relay: permission denied"
+	b.Exec = failing
+	err = c.Attach(context.Background(), "box-2")
+	errContains(t, err, "exited 126")
+
+	// The relay dying with its container is every run's ordinary end, not
+	// a failure of the attach.
+	gone := newFakeRelayExec(t)
+	gone.execCode, gone.goneAfter = 137, true
+	b.Exec = gone
+	if err := c.Attach(context.Background(), "box-gone"); err != nil {
+		t.Fatalf("a relay killed with its container must not fail the attach: %v", err)
 	}
-	if slices.Contains(c2.Args, "--group-add") {
-		t.Fatalf("empty SocketGroup must not emit --group-add, got %q", c2.Args)
-	}
-	for _, a := range c2.Args {
-		if strings.HasPrefix(a, EnvAgentSocketGID+"=") {
-			t.Fatalf("empty SocketGroup must not emit %s, got %q", EnvAgentSocketGID, c2.Args)
-		}
-	}
-	if err := c2.Teardown(context.Background()); err != nil {
-		t.Fatalf("Teardown: %v", err)
-	}
+
+	b.Exec = nil
+	err = c.Attach(context.Background(), "box-3")
+	errContains(t, err, "no docker seam")
 }
 
 // Verifies e47a00273f03: a template with no identity contributes nothing —
-// no agent is ever spawned.
+// no agent is ever spawned, no attach.
 func TestIdentityAbsentContributesNothing(t *testing.T) {
 	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
+	b, _ := identityBinding(t, agent, nil)
 	c, err := b.Prepare(context.Background(), StepSpec{Identity: nil, ScratchDir: t.TempDir()})
-	if err != nil || len(c.Args) != 0 || c.Teardown != nil {
+	if err != nil || len(c.Args) != 0 || c.Teardown != nil || c.Attach != nil {
 		t.Fatalf("want empty contribution, got %q err %v", c.Args, err)
 	}
 	if len(agent.starts) != 0 {
@@ -305,31 +247,28 @@ func TestIdentityAbsentContributesNothing(t *testing.T) {
 	}
 }
 
-// Verifies e47a00273f03 (sun_path regression): the socket path is short and
-// independent of the scratch dir's depth — a deep-but-legal project layout
-// must not push it past the ~104–108 byte Unix socket path cap that made
-// ssh-agent fail with "unix_listener: path too long".
+// Verifies e47a00273f03 (sun_path regression): the role agent's socket path
+// is short and independent of the scratch dir's depth — a deep-but-legal
+// project layout must not push it past the ~104–108 byte Unix socket path
+// cap that made ssh-agent fail with "unix_listener: path too long".
 func TestIdentitySocketPathShortEvenWithDeepScratch(t *testing.T) {
 	t.Setenv("TMPDIR", "") // measure the code, not an ambient deep TMPDIR override
 	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
+	b, _ := identityBinding(t, agent, nil)
 	deep := filepath.Join(t.TempDir(), strings.Repeat("deep-scratch-segment/", 8), "attempt-1", "scratch")
 	if err := os.MkdirAll(deep, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	c, err := b.Prepare(context.Background(), implementStep(deep))
-	if err != nil {
+	if _, err := b.Prepare(context.Background(), implementStep(deep)); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	sock := contributedSocket(t, c.Args)
+	defer b.Close(context.Background())
+	sock := agent.starts[0]
 	if len(sock) > 100 {
 		t.Fatalf("socket path %q is %d bytes — over the sun_path headroom", sock, len(sock))
 	}
 	if strings.HasPrefix(sock, deep) {
 		t.Fatalf("socket %q must not derive from the scratch dir", sock)
-	}
-	if err := c.Teardown(context.Background()); err != nil {
-		t.Fatalf("Teardown: %v", err)
 	}
 }
 
@@ -346,7 +285,7 @@ func TestIdentityDeepTMPDIRFailsClosed(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	t.Setenv("TMPDIR", deep)
 	agent := newFakeAgent()
-	b := identityBinding(agent, nil)
+	b, _ := identityBinding(t, agent, nil)
 	_, err := b.Prepare(context.Background(), implementStep(t.TempDir()))
 	errContains(t, err, "TMPDIR")
 	if len(agent.starts) != 0 {
@@ -370,7 +309,7 @@ func TestIdentityDeepTMPDIRFailsClosed(t *testing.T) {
 func TestIdentityFailureTeardownDetachedFromCancel(t *testing.T) {
 	agent := newFakeAgent()
 	agent.addErr = errBoom // fail after the agent is spawned
-	b := identityBinding(agent, nil)
+	b, _ := identityBinding(t, agent, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the step is already cancelled when the failure path runs
 	_, err := b.Prepare(ctx, implementStep(t.TempDir()))

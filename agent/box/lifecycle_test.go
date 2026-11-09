@@ -3,7 +3,7 @@
 // binary as a plain process, no docker: scratch directories stand in for the
 // mounts and the env contract is set directly. A stub agent CLI records its
 // argv and environment; a local bare git repository stands in for the
-// gateway; a throwaway ssh-agent provides the forwarded identity.
+// gateway; a throwaway ssh-agent on SSH_AUTH_SOCK stands in for the relayed identity.
 package box_test
 
 import (
@@ -514,10 +514,10 @@ func TestLifecycle_HookLessTemplate(t *testing.T) {
 
 // Scenario 5. Verifies 93ba0858d75f (email requirement per proposal
 // 2026-08-03-gated-committer-email): signing config is derived from the
-// forwarded agent — the clone's git config matches ssh-add -L — two loaded
+// box's agent — the clone's git config matches ssh-add -L — two loaded
 // keys abort at the signing phase naming the count, and a missing
 // registered committer email aborts at the signing phase naming the add-key remedy.
-func TestLifecycle_SigningDerivedFromForwardedAgent(t *testing.T) {
+func TestLifecycle_SigningDerivedFromTheAgent(t *testing.T) {
 	t.Run("one key configures the clone", func(t *testing.T) {
 		f := newFixture(t)
 		f.gateway()

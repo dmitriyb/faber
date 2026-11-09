@@ -22,7 +22,9 @@ never the binary's own result directory.)
 - A local bare git repository standing in for the gateway (path remote, so no
   ssh transport); host-key scenarios use a fake `ssh://` URL and never reach
   the network — the policy decision precedes any connection.
-- A throwaway `ssh-agent` loaded with one ephemeral ed25519 key.
+- A throwaway `ssh-agent` loaded with one ephemeral ed25519 key, pointed
+  at by `SSH_AUTH_SOCK` directly: the lifecycle runs the sequencer against a
+  socket that already exists, as the relay provides in a real box.
 
 ## Scenarios
 
@@ -43,7 +45,7 @@ never the binary's own result directory.)
    with reason `bundle-missing`; the agent never starts.
 4. **Hook-less template.** No hooks declared: a synthesized `CONTEXT.md`
    enumerating the typed inputs reaches the agent; the run completes.
-5. **Signing derived from the forwarded agent.** After the run, the clone's
+5. **Signing derived from the agent.** After the run, the clone's
    git config shows `gpg.format ssh`, `commit.gpgsign true`, and
    `user.signingkey key::<pub>` matching `ssh-add -L` of the fixture agent.
    With *two* keys loaded, the box aborts at the signing phase naming the
@@ -191,6 +193,33 @@ never the binary's own result directory.)
     from HOME down to the sessions directory, since a held box ran no
     preamble — is asserted in the realinfra hold-and-receive test, where the
     receive runs as root.)
+23. **The relay pumps one exchange at a time.** `Relay` on a scratch socket
+    (non-root: no chown, no drop) against a strict in-process host over real
+    pipes — a gate in front of `ServeAgent` over a keyring that, after
+    reading each request off the relay's stdout, peeks for bytes already
+    waiting before it has replied — serves four concurrent
+    `agent.NewClient`s, each signing its own distinct data ten times: every
+    signature verifies against the data its client sent, and the gate never
+    finds a second request waiting (with the relay's exchange mutex removed
+    it does, and the test fails). A further client that writes a 4-byte length above the bound is
+    disconnected while the others keep working; closing the host's side
+    ends the relay with no error. With a client connected and idle, closing
+    the host's side still ends the relay promptly and the idle client reads
+    EOF.
+24. **The clone waits for the relay.** With `SSH_AUTH_SOCK` naming a socket
+    that starts accepting a moment after the box starts, the clone phase
+    proceeds once it does (the fake runner records the clone after the
+    listener's creation); with a path that never accepts and the bound
+    lowered, the phase fails with reason `signing` naming the relay, before
+    any git command runs — on a gateless step too. Without `SSH_AUTH_SOCK`
+    nothing is waited for.
+25. **The run user exists.** `ensureRunUser` against a scratch `etc`
+    creates `passwd` and `group` with the run user's entries (home
+    `/home/box`), appends nothing on a second call, appends after an image's
+    own entries on a line of their own, and leaves a uid or gid already
+    present alone. (That OpenSSH is satisfied by it is the realinfra relay
+    round trip's business: `ssh-add -L` as the run user in a held box after
+    `receive`.)
 
 ## Edge cases
 

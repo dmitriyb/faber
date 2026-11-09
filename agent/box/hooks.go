@@ -82,7 +82,7 @@ func (b *Box) runPreludeHook(ctx context.Context) error {
 	}
 	// Sidecar values are merged into the agent's environment last, so a
 	// reserved name would silently override the engine contract (result dir,
-	// forwarded socket, ssh policy, PATH). Reject them here — the agent never
+	// agent socket, ssh policy, PATH). Reject them here — the agent never
 	// starts on a malformed bundle.
 	for _, key := range slices.Sorted(maps.Keys(bundle.Env)) {
 		if reservedSidecarKey(key) {

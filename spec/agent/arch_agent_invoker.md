@@ -93,7 +93,7 @@ result file is the only machine-readable channel out of this phase.
 The agent runs unrestricted *inside* because the sealed environment is the
 restriction: a pinned, root-owned, immutable toolset; an internal network
 whose only egress is the user's allow-listing proxy; a single-role key behind
-a forwarded socket; the gateway as the only reachable remote; no secret
+a relayed agent; the gateway as the only reachable remote; no secret
 material, only handles. A second in-container permission gate would be a
 control enforced *by* the untrusted thing it is meant to control — exactly
 what the untrusted-box principle forbids relying on. In-box policy files are

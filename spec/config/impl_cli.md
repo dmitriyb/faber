@@ -331,7 +331,7 @@ nothing but flag wiring and exit-code mapping.
 
 ```
 HostConfigPath() -> $XDG_CONFIG_HOME/faber/host.json | ~/.config/faber/host.json
-LoadHostConfig(path) (HostConfig, error)   // {box_bin, agent_socket_group, state_dir}
+LoadHostConfig(path) (HostConfig, error)   // {box_bin, state_dir}; agent_socket_group refused as retired, by name
 HostConfig.Describe(path) string           // one log line naming the effective values
 ```
 
@@ -339,8 +339,8 @@ Load order in the decode: byte-exact key check over the raw object FIRST
 (Go's case-insensitive field matching would otherwise accept `"BOX_BIN"`),
 then `DisallowUnknownFields` decode, then a trailing-content check, then
 `box_bin` absolute-path validation. Missing file returns the zero config and
-nil error. The cmd wiring (`wireDeps`) threads the result to `stateDir`,
-`boxBinary`, and `IdentityBinding.SocketGroup`, and returns the load error to
+nil error. The cmd wiring (`wireDeps`) threads the result to `stateDir` and
+`boxBinary`, and returns the load error to
 `main` for the single-exit-path mapping (exit 1).
 
 ## Logging (config/logging.go)

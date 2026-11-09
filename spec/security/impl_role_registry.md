@@ -204,7 +204,7 @@ clearer message. The pipeline that builds `StepSpec` (boxrun/reentry) sets
 `IdentityRole` from the template's resolved identity name, alongside the
 existing `Identity` lookup.
 
-Nothing about the ephemeral agent, the socket mount, the teardown, or the
+Nothing about the ephemeral agent, the relay, the teardown, or the
 "private key never enters the box" invariant changes: resolution only
 decides *what path or handle* `AddKey` loads, and it runs host-side before
 the agent is even asked to hold a key.

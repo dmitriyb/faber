@@ -62,7 +62,6 @@ start (debug level).
 | Field | Purpose |
 |---|---|
 | `box_bin` | Absolute path of the `faber-box` binary that `faber build` bakes into every image (default: next to the `faber` executable) |
-| `agent_socket_group` | Extra group (`--group-add`) so the box's non-root user can reach the forwarded agent socket; needed on macOS docker VMs (typically `"0"`), leave unset on Linux. Use a numeric gid — a group name must exist inside the box image |
 | `state_dir` | Journals + image manifest directory (default `.faber`) |
 
 `FABER_*` names (plus `SSH_AUTH_SOCK` and reserved mount paths) remain engine-

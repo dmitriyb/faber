@@ -5,9 +5,9 @@
 The single assembly point for the security surface of one step: it takes
 the per-step contributions of NetworkBinding, RemoteBinding,
 IdentityBinding, and CredentialBroker, adds the isolation-runtime knob, and
-hands infra's ContainerRunner three things — an ordered docker-run argv
-fragment, the pre-run setup that already happened, and the post-run
-teardown that must happen. ContainerRunner is the only place a `docker run`
+hands infra's ContainerRunner four things — an ordered docker-run argv
+fragment, the pre-run setup that already happened, the attach to run beside
+the container while it lives, and the post-run teardown that must happen. ContainerRunner is the only place a `docker run`
 argv is ever constructed, and it consumes the BindingSet's fragment
 verbatim: security decides *what* the flags are; infra decides only where
 they sit around image, mounts, and command.
@@ -20,13 +20,26 @@ same resolved step always yields the same argv fragment byte-for-byte —
 golden-testable, diffable in logs, and stable under map iteration. Setup
 hooks run in that same order (network preflight, host-key read, agent
 spawn + key load, resolver calls / secrets-payload encode); teardown hooks
-run in exact reverse (kill the agent, nothing for credentials, remote, or
-network) and run *always* — after the container exits, after a setup
-failure partway through (unwinding only what was set up), and on context
-cancellation. File mode leaves no host-side residue to undo — its tokens
-live only in the container tmpfs and die with the container — so its
-teardown is a no-op. Teardown errors are collected and surfaced together,
-never short-circuited: a failed hook must not skip killing the agent.
+run in exact reverse and run *always* — after the container exits, after a
+setup failure partway through (unwinding only what was set up), and on
+context cancellation. No production binding leaves per-attempt host state
+behind today: the identity binding's relay ends with the container and its
+role agents are run-scoped (stopped by `Close`), and file mode's tokens live
+only in the container tmpfs and die with it — the guarantee holds for
+whatever a binding contributes. Teardown errors are collected and surfaced
+together, never short-circuited.
+
+## The attach
+
+A binding whose mechanism lives beside the running container contributes an
+`Attach(ctx, container)`; the set runs the contributed attaches concurrently
+as one `Assembled.Attach`, joining their errors, and infra starts it with
+the container and cancels it when the container ends. Today the identity
+binding is the one contributor: it serves the signing proxy over `docker
+exec` into the box's relay, so the box reaches its agent through no shared
+host path. An attach failure is logged by the runner and never decides the
+step; the box records the consequence itself (no agent at its signing
+phase).
 
 ## The runtime knob
 

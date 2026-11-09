@@ -13,7 +13,8 @@
 //   - RemoteBinding — the pinned gateway: the box's only git remote URL and
 //     the host-key policy material (pinned fail-closed, or sandbox TOFU).
 //   - IdentityBinding — an ephemeral single-key ssh-agent per step, with only
-//     the socket forwarded and guaranteed teardown on every exit path.
+//     served into the box through its relay over docker exec, and the role
+//     agents stopped when the run closes.
 //   - CredentialBroker — credential handles, never contents: proxy endpoints,
 //     helper config passthrough, and the degraded opt-in raw-token file mode
 //     (streamed over the container's stdin into a container tmpfs, 0600, dies

@@ -34,7 +34,7 @@ type BoxEnv struct {
     Attempt              int
     OutputSchema         config.OutputSchema // decoded from FABER_OUTPUT_SCHEMA
     RunUID, RunGID       int               // FABER_RUN_UID/GID; the preamble drops to these; 0/0 = no drop
-    AgentSocketGID       int               // FABER_AGENT_SOCKET_GID; supplementary group the preamble KEEPS across the drop so the forwarded-agent socket stays reachable; -1 = none (unset/blank)
+    AgentSocket          string            // SSH_AUTH_SOCK; the box's agent socket the relay serves, waited for before the clone; "" = no identity
     GitCache             string            // FABER_GIT_CACHE; ro object cache for clone --reference-if-able, empty = none
     SkillsLink           string            // FABER_SKILLS_LINK; $HOME-relative path to symlink at /faber/skills, empty = no skills leg
     SecretsStdin         bool              // FABER_SECRETS_STDIN=1; file-mode tokens arrive on stdin for phase 3 to materialize
@@ -149,24 +149,9 @@ func (b *Box) enterRunUser() error {
             return fmt.Errorf("preamble: chown %s: %w", contract.ContainerSecretsDir, err)
         }
     }
+    if err := ensureRunUser(etcDir, b.Env.RunUID, b.Env.RunGID); err != nil { return err } // passwd + group entry: OpenSSH looks the uid up first
     b.setEnv("HOME", home) // b.Environ only — never os.Setenv (no-global-state policy)
-    // Supplementary set = the run group, PLUS the forwarded-agent socket group
-    // when one was granted. The identity binding's `--group-add
-    // <agent_socket_group>` (macOS VM case, where the forwarded socket is
-    // root-owned) admits the still-root box to that group, but Setgroups
-    // REPLACES the supplementary set — so dropping to `[]int{RunGID}` alone
-    // strips the very group the docker flag granted, and the dropped box can no
-    // longer open the agent socket (ssh-add: Permission denied -> no key
-    // offered -> clone Permission denied (publickey)). Re-add it here so the
-    // grant survives the drop; -1 (unset) or equal-to-RunGID contributes nothing.
-    groups := []int{b.Env.RunGID}
-    if g := b.Env.AgentSocketGID; g >= 0 && g != b.Env.RunGID {
-        groups = append(groups, g)
-    }
-    if err := syscall.Setgroups(groups); err != nil { return err }
-    if err := syscall.Setgid(b.Env.RunGID); err != nil { return err }
-    if err := syscall.Setuid(b.Env.RunUID); err != nil { return err } // all-thread since Go 1.16
-    return nil
+    return dropTo(b.Env.RunUID, b.Env.RunGID) // setgroups {gid}, setgid, setuid (all-thread since Go 1.16); shared with the relay
 }
 ```
 
@@ -328,12 +313,13 @@ No global state anywhere: `Box` is constructed in `main` from `os.Environ()`,
 the runner and logger are injected, and every phase is a method taking the
 context — the whole sequence unit-tests as a plain value with a fake runner.
 
-## The hold and receive entries
+## The hold, receive and relay entries
 
 ```go
 // agent/box, dispatched by cmd/faber-box on its first argument
 func Hold(ctx context.Context) int                                              // blocks until the context is cancelled (SIGTERM, SIGINT)
 func Receive(ctx context.Context, env *BoxEnv, in io.Reader, log *slog.Logger) error
+func Relay(ctx context.Context, env *BoxEnv, in io.Reader, out io.Writer, log *slog.Logger) error
 ```
 
 `Receive` runs `contract.ReadFrames` over its stdin with a handler that
@@ -342,12 +328,35 @@ the usual plain-process override) and `sessions/` at `env.SessionsDir`
 (refusing `sessions/` when it is unset, and any other first segment), each
 tree behind an `os.Root` opened on first use so no frame can resolve outside
 it, writes each file through a temporary name, applies the frame's mtime,
-recreates links, and then — as root — chowns both trees to
+recreates links, and then — as root — gives the run user its passwd and
+group entry (`ensureRunUser`, as the preamble does) and chowns both trees to
 `env.RunUID:env.RunGID` plus what the preamble would have chowned and a held
 box lacks: the workspace, `/tmp`, `HOME`, and the components between `HOME`
 and the sessions directory (`holdChownPaths`), so the operator's exec, which
-drops to that user, owns what it finds and can write beside it. Foreign
+drops to that user, owns what it finds, can write beside it, and can use
+ssh. Foreign
 bytes on its stdin are a stream error: nothing but faber feeds it.
+
+`Relay` listens on `env.AgentSocket` (`SSH_AUTH_SOCK`; refused when empty),
+creating its directory, chmods the socket 0600 and — as root with a run uid
+set — chowns the socket and then its directory to `env.RunUID:env.RunGID`
+(the socket first: once the run user owns the directory it could replace
+the socket with a link before root's chown) and calls `dropTo` before
+accepting. One goroutine owns `in`: it loops `readAgentMessage(in)` (4-byte
+big-endian length, `1..maxAgentMessage` = 256 KiB, then the body) onto a
+replies channel, and its first error — the host's stream ending — is
+recorded and ends the relay at once, not at the next exchange. Each accepted
+connection is served by a goroutine that loops `readAgentMessage(conn)`
+(a bad length closes that connection alone) and, under one mutex for the
+whole relay, writes the message to `out` and takes the next reply off the
+channel for it. When the listener closes — the host's stream ending, or the
+context — every live connection is closed too, so a client mid-conversation
+is cut off rather than holding the relay open; an EOF from the host is an
+orderly end. The clone phase's `waitAgentSocket` dials `env.AgentSocket`
+every 50 ms (a dial, not a stat: the socket exists root-owned for an instant
+before the chown) up to `agentSocketWait` (30 s, a package variable the
+tests lower) and fails with `ReasonSigning` past it; it runs before the
+gateless check, so a gateless step with an identity waits as well.
 
 ## Check runs
 

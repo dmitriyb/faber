@@ -99,7 +99,7 @@ Resolution reads only public material (fingerprints, `.pub` files, agent
 listings). It never reads a private key into faber's memory: for a file key
 it hands `ssh-add` the path; for a hardware key it hands over a token
 handle. The private key still never enters the box (the unchanged
-invariant) — the box only ever sees the forwarded agent socket.
+invariant) — the box only ever sees its agent socket, served by the relay.
 
 The `~/.ssh/*.pub → private counterpart` hop is a naming convention, not a
 cryptographic check, so after the located key is actually loaded the binding

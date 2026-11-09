@@ -57,8 +57,8 @@ Mirroring the proven harness's run shape, the assembled argv never contains:
   the tmpfs writables (result, bundle, tmp, home; the entry binary, the hook
   scripts and the skills tree are image content under `/faber`, baked by the
   image builder, never mounts), and whatever the binding fragment declares
-  (agent socket, the `/run/secrets` tmpfs, cache volume); no engine mount is a
-  host bind;
+  (the `/faber/agent` and `/run/secrets` tmpfs, cache volume); no engine
+  mount is a host bind;
 - `--privileged`, `--user`, host networking, or host PID/IPC namespaces (the
   box runs as root only until its entry program drops to the run user);
 - a secret in `-e` form — engine env carries step-contract values only
@@ -95,6 +95,20 @@ The return value is mechanical: exit code, captured output, timing. Deciding
 what an exit code *means* — reading `result.json`, fabricating the fallback
 record, classifying failure — belongs to the agent and failure modules.
 
+## The attach
+
+A spec may carry an `Attach(ctx, container)`: a host-side companion the
+caller wants running beside the container (the security module's identity
+relay, served over `docker exec`). `Run` starts it in its own goroutine
+beside `docker run` and cancels its context once the run returns; `Enter`
+starts it after the held box is up and cancels it before the kill. The
+attach finds out when the container is running through the adapter's
+structured `Running` query (`ExecWhenRunning` polls it and then execs once),
+never by matching daemon prose or by feeding stdin to an exec that did not
+start. Its error is logged with the container's name and never becomes the
+run's result: what the box did without its companion is in the box's own
+record.
+
 ## Entering a reconstructed box
 
 Interactive recovery needs the operator's terminal inside a box that first
@@ -103,7 +117,8 @@ the frame channel, and a single `docker run -it` cannot take a stream first
 and a terminal after. `Enter` is therefore a choreography of four verbs, all
 of them infra's: start the reconstructed box detached with the entry
 `faber-box hold` (`docker run -d --rm …`, the same argv assembly with `-d`
-after `--rm`); feed the caller's frame stream to `docker exec -i <name>
+after `--rm`); start the spec's attach, when it has one; feed the caller's
+frame stream to `docker exec -i <name>
 faber-box receive`; attach the operator's terminal with `docker exec -it -u
 <uid>:<gid> [-e …] -w <dir> <name> <entry>`; kill the container by name when
 the terminal exits (`--rm` removes it). Nothing is mounted from the host, and

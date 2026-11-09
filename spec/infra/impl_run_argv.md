@@ -21,6 +21,7 @@ type ContainerSpec struct {
     Entry     []string          // in-container entry argv
     Stdout    io.Writer         // the container's stdout: the box's frame stream, passed through untouched; nil discards
     Output    io.Writer         // the container's stderr plus docker's own messages, tee'd in full: the attempt's output.log
+    Attach    func(ctx context.Context, container string) error // run beside the container (security.Assembled.Attach), cancelled when it ends; nil = none
 }
 
 // Session is what Enter runs inside a held box once the input stream is in.
@@ -118,8 +119,8 @@ byte-for-byte. The lone `-i` flag is emitted only when `StdinSecrets` is
 non-empty and sits right after `--rm`, so its presence is a pure function of the
 spec too. The engine mounts a spec carries are the
 disk-backed `/workspace` volume and the tmpfs writables (`/faber/result`,
-`/faber/bundle`, `/tmp`, `HOME`) — no host bind at all; everything else — agent socket,
-the secrets tmpfs (`--tmpfs /run/secrets`), cache volume, `--network`,
+`/faber/bundle`, `/tmp`, `HOME`) — no host bind at all; everything else — the agent
+tmpfs (`--tmpfs /faber/agent`), the secrets tmpfs (`--tmpfs /run/secrets`), cache volume, `--network`,
 `--runtime` — arrives inside `Bindings`. The file-mode token is not a mount at
 all: it rides `StdinSecrets` on the container's stdin, and faber-box writes it
 into that tmpfs.
@@ -133,7 +134,7 @@ Two guard layers protect the spec before any argv exists. The run-spec
 assembler (agent.BuildContainerSpec) refuses template env claiming engine- or
 security-owned names (only `FABER_AGENT_CLI` may be set) and template volumes
 overlapping the reserved container paths (`/faber`, `/run/secrets`,
-`/ssh-agent`, `/workspace`, `/home/box`, `/tmp` — docker's last-mount-wins
+`/workspace`, `/home/box`, `/tmp` — docker's last-mount-wins
 would sever the result channel or substitute the engine's mounts); the
 config Loader mirrors both refusals at validate time from the same shared
 vocabulary. `Run` itself enforces two floors: a relative bind host is
@@ -197,9 +198,17 @@ Points of discipline:
   two writers; a merged writer would file frames as output and lose the
   record.
 - **Always returns.** Success, failure, or kill, `Run` returns to its caller,
-  which is what guarantees BindingSet teardown hooks (agent shutdown; file-mode
-  secrets need none — they die with the container tmpfs) run after every
+  which is what guarantees BindingSet teardown hooks run after every
   attempt.
+- **The attach is bracketed by the run.** With `spec.Attach` set, `Run`
+  derives a context, starts `spec.Attach(actx, spec.Name)` in a goroutine
+  before `docker run`, and after the run returns cancels that context and
+  waits for the goroutine; an attach error that is not the cancellation is
+  logged at warn with the container. `ExecWhenRunning(ctx, e Execer, name,
+  argv, stdin, stdout, stderr)` is what an attach calls: it polls
+  `e.Running(ctx, name)` every 50 ms until true (or returns the context's
+  error), then calls `e.Exec` once. `Execer` is the two-verb slice of
+  `DockerClient` (`Running`, `Exec`).
 
 ## Enter
 
@@ -209,6 +218,8 @@ func (r *ContainerRunner) Enter(ctx context.Context, spec ContainerSpec, input i
     spec.Entry = []string{contract.ContainerEntry, "hold"}
     if _, err := r.docker.ContainerRun(ctx, detachArgs(spec), nil, io.Discard, stderr); err != nil { return err }
     defer r.docker.Kill(killCtx, spec.Name)                   // --rm removes it; always runs
+    stop := r.startAttach(ctx, spec)                          // the companion exec, when the spec has one
+    defer stop()                                              // cancelled and awaited before the kill
     if code, err := r.docker.Exec(ctx, spec.Name, []string{contract.ContainerEntry, "receive"}, input, io.Discard, stderr); err != nil || code != 0 {
         return fmt.Errorf("infra: enter %s: receive exited %d: %w", spec.Name, code, err)
     }

@@ -9,6 +9,7 @@ import (
 	"github.com/dmitriyb/faber/agent/contract"
 	"github.com/dmitriyb/faber/config"
 	"github.com/dmitriyb/faber/infra"
+	"github.com/dmitriyb/faber/security"
 )
 
 func testTemplate() *config.ResolvedTemplate {
@@ -365,7 +366,7 @@ func TestBuildContainerSpecRejectsReservedTemplateEnv(t *testing.T) {
 
 // Verifies 93ba0858d75f: template volumes may not shadow (or be shadowed
 // through) the engine and binding mounts — last-mount-wins would sever the
-// result channel or substitute hooks, secrets, or the forwarded socket.
+// result channel or substitute hooks, secrets, or the agent socket.
 func TestBuildContainerSpecRejectsShadowingVolumes(t *testing.T) {
 	bad := []string{
 		"/faber/result",
@@ -374,7 +375,7 @@ func TestBuildContainerSpecRejectsShadowingVolumes(t *testing.T) {
 		"/faber/bin",
 		"/run/secrets",
 		"/run/secrets/service-token",
-		"/ssh-agent",
+		"/faber/agent/agent.sock",
 		"/workspace",
 		"/workspace/repo-a",
 		"/",
@@ -457,5 +458,14 @@ func TestBuildContainerSpecCheck(t *testing.T) {
 	}
 	if got := rs.Env[contract.EnvCheck]; got != "1" {
 		t.Errorf("env[%s] = %q, want 1", contract.EnvCheck, got)
+	}
+}
+
+// The security module restates the box entry path for the relay exec (it
+// cannot import the agent module); the two constants must never drift, or
+// the attach would exec a path that does not exist.
+func TestSecurityRestatesTheBoxEntry(t *testing.T) {
+	if security.ContainerEntry != contract.ContainerEntry {
+		t.Fatalf("security.ContainerEntry = %q, contract.ContainerEntry = %q", security.ContainerEntry, contract.ContainerEntry)
 	}
 }

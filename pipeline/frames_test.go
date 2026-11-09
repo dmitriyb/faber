@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func attemptPath(box BoxAttempt, parts ...string) string {
 
 // okRecord is a shipped ok record.
 func okRecord(w *contract.FrameWriter) {
-	rec := []byte(`{"status":"ok","contract":2,"payload":{"out":"d"},"attempt":1}`)
+	rec := []byte(`{"status":"ok","contract":` + strconv.Itoa(contract.ContractVersion) + `,"payload":{"out":"d"},"attempt":1}`)
 	w.Frame(contract.FrameFile, "result/"+contract.ResultFile, time.Time{}, bytes.NewReader(rec), int64(len(rec)))
 }
 

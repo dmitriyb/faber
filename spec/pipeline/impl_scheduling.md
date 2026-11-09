@@ -34,10 +34,13 @@ All graph mutation happens on the loop goroutine; workers communicate only via
 queue are single-threaded by construction, and `go test -race` stays quiet.
 
 The `steps` closure is the host-side `infra.ContainerSpec` assembly seam: it bridges
-the security module's `Assembled` (verbatim argv fragment + `SecretsStdin`) and
+the security module's `Assembled` (verbatim argv fragment + `SecretsStdin` +
+`Attach`) and
 the engine mounts/env into one run spec before handing it to
 `infra.ContainerRunner`, attaches the attempt's two writers (`Output` for the
-human log, `Stdout` for the demuxer), so it is the single place that owns `ContainerSpec.Env`
+human log, `Stdout` for the demuxer) and copies `Assembled.Attach` into
+`ContainerSpec.Attach` (the identity relay the runner starts beside the
+container), so it is the single place that owns `ContainerSpec.Env`
 assembly and therefore enforces the credentials pairing — a non-empty
 `Assembled.SecretsStdin` is copied into `ContainerSpec.StdinSecrets` and
 `ContainerSpec.Env[contract.EnvSecretsStdin]="1"` is set in the same step, never one
@@ -169,7 +172,8 @@ that directory as `sessions/<rel>`. The stream is what the operator's box
 receives: the archived record stays untouched on the host while the
 ephemeral session diverges freely inside the container. The spec carries a
 `--tmpfs /faber/handoff` beside the engine tmpfs, `FABER_SESSIONS_DIR` when
-a session rides along, and the entry `faber-box hold`; the session is
+a session rides along, the bindings' `Attach` (the held box gets its agent
+the same way a sequenced one does), and the entry `faber-box hold`; the session is
 `{Entry: resume_argv | shell, Env: {HOME: /home/box}, User: <uid>:<gid> from
 the spec's FABER_RUN_UID/GID, Workdir: /workspace}` — `HOME` pinned because
 the exec, not the sequencer, is the operator's entry, and no preamble exports

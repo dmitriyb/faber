@@ -19,7 +19,7 @@ acceptance environment only.
 1. **Golden argv.** A fully populated ContainerSpec (limits, every engine mount kind —
    a template bind rw, a `/workspace` volume, a `/faber/result` and a `/tmp` tmpfs — three env keys, a `StdinSecrets`
    payload, a representative binding fragment containing
-   `--network`, an agent-socket `-v`, `SSH_AUTH_SOCK`, proxy env, a
+   `--network`, a `--tmpfs /faber/agent`, `SSH_AUTH_SOCK`, proxy env, a
    `--tmpfs /run/secrets`, and `--runtime`) assembles to the golden argv
    byte-for-byte: fixed section order, `-i` immediately after `--rm` (because
    `StdinSecrets` is set), a bind as `-v Host:Container[:ro]`, a volume as bare
@@ -122,6 +122,19 @@ acceptance environment only.
     stream over `docker exec` into its handoff tmpfs and its session dir
     under HOME, and a second exec finds every file, HOME, the path down to
     the session dir, /workspace and /tmp owned by the run user.)
+15. **Attach lifecycle.** `Run` with `ContainerSpec.Attach` set calls it
+    with the container's name while the container runs (the fake run
+    blocks until the attach has been observed) and cancels the attach's
+    context once the run returns, waiting for it; an attach error is logged,
+    never returned, and a spec without one never starts a goroutine. `Enter`
+    starts it after the held box is up and before the receive, and cancels
+    it before the kill. `parseJSONBool` decodes the inspect state's boolean
+    and refuses anything else; `ExecWhenRunning` against a fake that reports
+    not-running for its first polls calls `Exec` exactly once, after a true
+    `Running`, and a context that ends while polling returns its error with
+    no exec. (Integration: `Running` is false for an absent container and
+    true for a held box, in the structured-queries and hold-and-receive
+    tests.)
 
 ## Edge cases
 

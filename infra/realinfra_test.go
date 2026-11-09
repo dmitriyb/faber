@@ -355,6 +355,10 @@ func TestRealinfra_DockerStructuredQueries(t *testing.T) {
 	if err != nil || !netExists {
 		t.Fatalf("bridge network: exists=%v err=%v", netExists, err)
 	}
+	running, err := docker.Running(ctx, "faber-definitely-absent-container")
+	if err != nil || running {
+		t.Fatalf("absent container: running=%v err=%v", running, err)
+	}
 }
 
 // Verifies 0acac696dcf1 on a real machine: an image built with a prelude
@@ -452,6 +456,9 @@ func TestRealinfra_HoldAndReceive(t *testing.T) {
 		t.Fatalf("start held box: exit %d err %v", code, err)
 	}
 	defer docker.Kill(context.WithoutCancel(ctx), name)
+	if running, err := docker.Running(ctx, name); err != nil || !running {
+		t.Fatalf("held box: running=%v err=%v", running, err)
+	}
 
 	var stream bytes.Buffer
 	w := contract.NewFrameWriter(&stream)

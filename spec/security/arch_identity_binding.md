@@ -5,9 +5,10 @@
 The mechanism behind "one key per container ⇒ role isolation by
 construction". Each template declares an `identity`; per run, the first
 step of that identity makes faber spawn one ssh-agent on a private socket
-and load exactly one key for it; every step of that identity then receives
-its own private socket, served by faber's agent-protocol proxy onto that
-agent, forwarded into the box as the only credential channel. The same key
+and load exactly one key for it; every step of that identity then gets an
+agent socket of its own inside the box, served by faber's agent-protocol
+proxy onto that agent through a relay the box itself runs — the only
+credential channel, and no host path at all. The same key
 signs commits and authenticates SSH, so one fingerprint is one role — and
 the user's gate maps fingerprint to role server-side. Faber guarantees the
 "one key" half; enforcement of what that key may do is the gate's.
@@ -61,36 +62,37 @@ Two scopes: the role agent lives for the run, the proxy for the attempt.
    well-formed agent holds is what boxes will see; if a loader surfaced
    extra credentials, only the pinned fingerprint's key is exposed, so the
    degraded case narrows rather than widens.
-4. **Proxy (per attempt).** A second private temp directory and socket,
-   same `sun_path` guard, on which faber serves the agent protocol itself
-   (`x/crypto/ssh/agent`'s `ServeAgent`): `List` answers the role's key,
-   `Sign`/`SignWithFlags` forward to the role agent's client under the sign
-   queue, `Add`/`Remove`/`RemoveAll`/`Lock`/`Unlock` are refused and
-   extensions are unsupported — a box can sign as its role and do nothing
-   else to the agent. The socket is 0600 like ssh-agent's own. No key
-   material crosses faber: the protocol carries challenges and signatures.
-5. **Contribute.** `-v <sock>:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent`. On
-   platforms where the forwarded socket's group ownership blocks the box's
-   non-root user (the macOS VM case), the binding adds `--group-add
-   <SocketGroup>` **and passes the same gid to the box as `-e
-   FABER_AGENT_SOCKET_GID=<SocketGroup>`**; the wiring fills the field from the
-   host config file's `agent_socket_group` (see the explicit-host-inputs
-   proposal — an explicit per-machine file, never process environment), and
-   empty means neither is emitted. The env var is load-bearing, not redundant
-   with `--group-add`: docker admits the still-root box to the group, but the
-   box's privileged preamble later calls `setgroups`, which *replaces* the
-   supplementary set — so the preamble must be told which group to keep, or the
-   drop strips the grant and the box can no longer open the forwarded socket
-   (see the phase-sequencer preamble). `SocketGroup` is therefore a numeric gid,
-   so the box can hand it to `setgroups` directly. Optionally, when the identity declares a public
-   key file, `-e` with the public key line — otherwise the box's prelude
-   derives the signing key by listing the forwarded agent (`ssh-add -L`).
-6. **Teardown (per attempt).** Close the proxy listener and remove its
-   directory. This runs on every exit path — success, step failure, setup
-   failure of a later binding, context cancellation — via the BindingSet's
-   reverse-order teardown guarantee. A spawn that fails before a proxy
-   exists (load, verify, connect) stops the just-spawned agent on the same
-   detached context.
+4. **Proxy (per attempt).** Faber's own agent-protocol server
+   (`x/crypto/ssh/agent`'s `ServeAgent`, which serves any `io.ReadWriter`):
+   `List` answers the role's key, `Sign`/`SignWithFlags` forward to the role
+   agent's client under the sign queue, `Add`/`Remove`/`RemoveAll`/`Lock`/
+   `Unlock` are refused and extensions are unsupported — a box can sign as
+   its role and do nothing else to the agent. No key material crosses faber:
+   the protocol carries challenges and signatures. The proxy is served on no
+   host socket: a host path shared into the box is unreachable from a box
+   whose uid is remapped, and no group grant would make it reachable, so the
+   socket the box opens is the box's own (next step).
+5. **Contribute.** `--tmpfs /faber/agent -e
+   SSH_AUTH_SOCK=/faber/agent/agent.sock`, byte-stable across attempts, plus
+   the **attach**: `Attach(ctx, container)` waits until the container is
+   running (the exec adapter's structured running query, never daemon
+   prose), runs `docker exec -i <container> /faber/bin/faber-box relay` with
+   a pipe each way, and serves the proxy on that pair until the exec ends or
+   the context is cancelled. Inside the box the relay listens on the socket,
+   chowns it to the run user, drops to that user, and forwards one agent
+   message at a time — the request out on its stdout, the reply in on its
+   stdin — so the pair stays the request–reply stream `ServeAgent` expects
+   (the phase sequencer owns the relay). The container runner starts the
+   attach beside `docker run` and cancels it when the container ends; a relay
+   that never comes up fails the box's own signing phase, never the attach's
+   caller. Optionally, when the identity declares a public key file, `-e`
+   with the public key line — otherwise the box's signing phase derives the
+   signing key by listing its agent (`ssh-add -L`).
+6. **Teardown (per attempt).** Nothing: the relay ends with the container
+   (the attach's context is cancelled when the run returns, and the exec dies
+   with the container in any case) and no host file was created. A spawn
+   that fails before the role agent is verified (load, verify, connect)
+   stops the just-spawned agent on a detached context.
 7. **Close (per run).** The cmd wiring calls `BindingSet.Close` once the
    run returns; the identity binding stops every role agent and removes
    its directory. A leaked agent is a leaked credential handle, so both
@@ -127,9 +129,11 @@ not export keys). Faber never verifies what a key is *for*: its registry
 maps a role *name* to a fingerprint (which key), never a fingerprint to a
 server-side role or permission (what that key may do), and it does no
 signature checking — that reverse table and that policy belong to the gate.
-And a box's agent never outlives its step: the proxy is scoped to one
-container's lifetime, so a step's signing window is exactly as durable as
-the step; the role agent behind it outlives the step but is reachable only
-through faber's proxies, never shared, and dies with the run.
+And a box's agent never outlives its step: the proxy is served for one
+container's lifetime over an exec into that container, so a step's signing
+window is exactly as durable as the step; the role agent behind it outlives
+the step but is reachable only through faber's proxies, never shared, and
+dies with the run. Nothing of the host filesystem is shared for any of it,
+which is what lets the same binding work under a user-namespace remap.
 
 Requirements implemented: Identity binding role keys, Serialized signing.

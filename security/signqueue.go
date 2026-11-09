@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/dmitriyb/faber/infra"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -30,11 +35,11 @@ type roleAgent struct {
 // a keyring the box can grow, shrink, or lock.
 var errAgentReadOnly = errors.New("agent: refused — the box's agent is read-only")
 
-// signProxy is the per-attempt agent a box talks to. List answers the
-// role's key; Sign forwards to the role agent through the sign queue — one
-// process-wide mutex, so a hardware token never sees two requests at once;
-// everything that mutates is refused. The box cannot tell it from a real
-// agent: the protocol, the socket, and the env var are unchanged.
+// signProxy is the per-attempt agent a box talks to, served over the relay.
+// List answers the role's key; Sign forwards to the role agent through the
+// sign queue — one process-wide mutex, so a hardware token never sees two
+// requests at once; everything that mutates is refused. The box cannot tell
+// it from a real agent: the protocol and the env var are those of one.
 type signProxy struct {
 	keys     []*agent.Key
 	upstream agent.ExtendedAgent
@@ -86,40 +91,77 @@ func (p *signProxy) holds(key ssh.PublicKey) bool {
 	return false
 }
 
-// serveProxy listens on sock and serves the proxy to every connection
-// until closed. The socket is 0600 like ssh-agent's own, so the forwarded
-// path keeps the permissions the box already copes with.
-func serveProxy(sock string, p *signProxy) (closeFn func() error, err error) {
-	ln, err := net.Listen("unix", sock)
+// serveRelay serves the proxy into container over `faber-box relay`: it
+// waits for the container to run, execs the relay with a pipe each way and
+// runs the agent server on the pair until the exec ends or ctx is
+// cancelled. The relay's stdin is an os.Pipe — an *os.File, which os/exec
+// hands to the process directly, so the exec's wait never blocks on a
+// copier that has nothing left to copy (the host only ever writes replies);
+// its stdout is an io.Pipe the server reads, closed here once the exec is
+// over so the server returns. The relay's stderr goes to the log.
+func serveRelay(ctx context.Context, exec infra.Execer, container string, p *signProxy, logger *slog.Logger) error {
+	toRelay, hostOut, err := os.Pipe()
 	if err != nil {
-		return nil, fmt.Errorf("listen agent socket: %w", err)
+		return fmt.Errorf("agent relay pipe: %w", err)
 	}
-	if err := os.Chmod(sock, 0o600); err != nil {
-		ln.Close()
-		return nil, fmt.Errorf("agent socket mode: %w", err)
-	}
-	var wg sync.WaitGroup
-	wg.Add(1)
+	defer toRelay.Close()
+	defer hostOut.Close()
+	fromRelay, relayOut := io.Pipe()
+	served := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return // closed
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer conn.Close()
-				_ = agent.ServeAgent(p, conn)
-			}()
-		}
+		served <- agent.ServeAgent(p, struct {
+			io.Reader
+			io.Writer
+		}{fromRelay, hostOut})
 	}()
-	return func() error {
-		err := ln.Close()
-		wg.Wait()
-		return err
-	}, nil
+	code, xerr := infra.ExecWhenRunning(ctx, exec, container, []string{ContainerEntry, "relay"}, toRelay, relayOut, slogWriter(logger, container))
+	relayOut.Close()
+	hostOut.Close()
+	serr := <-served
+	if xerr != nil || code != 0 {
+		// The relay dies with its container (killed with the pid namespace,
+		// or never exec'd into a box that already exited): the ordinary end
+		// of every run, not a failure of the attach.
+		if containerGone(ctx, exec, container) {
+			return nil
+		}
+		if xerr != nil {
+			return fmt.Errorf("agent relay into %s: %w", container, xerr)
+		}
+		return fmt.Errorf("agent relay into %s exited %d", container, code)
+	}
+	if serr != nil && !errors.Is(serr, io.EOF) && !errors.Is(serr, io.ErrClosedPipe) {
+		return fmt.Errorf("agent relay into %s: serve: %w", container, serr)
+	}
+	return nil
+}
+
+// containerGone reports whether the container is no longer running, on a
+// context of its own: the attach's may already be cancelled.
+func containerGone(ctx context.Context, exec infra.Execer, container string) bool {
+	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	up, err := exec.Running(qctx, container)
+	return err == nil && !up
+}
+
+// slogWriter turns a container's relay stderr into debug lines.
+func slogWriter(logger *slog.Logger, container string) io.Writer {
+	return &lineLogger{logger: logger, container: container}
+}
+
+type lineLogger struct {
+	logger    *slog.Logger
+	container string
+}
+
+func (l *lineLogger) Write(p []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
+		if line != "" {
+			l.logger.Debug("agent relay", "container", l.container, "line", line)
+		}
+	}
+	return len(p), nil
 }
 
 // roleAgentFor returns the live agent for key, spawning and verifying it on
